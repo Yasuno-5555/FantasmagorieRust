@@ -1,0 +1,318 @@
+warning: unused import: `crate::core::Vec2`
+ --> src\view\animation.rs:4:5
+  |
+4 | use crate::core::Vec2;
+  |     ^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Vec2`
+ --> src\widgets\knob.rs:2:27
+  |
+2 | use crate::core::{ColorF, Vec2};
+  |                           ^^^^
+
+warning: unused import: `ViewType`
+ --> src\widgets\knob.rs:3:39
+  |
+3 | use crate::view::header::{ViewHeader, ViewType};
+  |                                       ^^^^^^^^
+
+warning: unused import: `crate::widgets::UIContext`
+ --> src\widgets\knob.rs:4:5
+  |
+4 | use crate::widgets::UIContext; // Needed? UIContext returns the builder
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::cell::Cell`
+ --> src\widgets\knob.rs:5:5
+  |
+5 | use std::cell::Cell;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `Vec2`
+ --> src\widgets\fader.rs:2:27
+  |
+2 | use crate::core::{ColorF, Vec2};
+  |                           ^^^^
+
+warning: unused import: `ViewType`
+ --> src\widgets\fader.rs:3:39
+  |
+3 | use crate::view::header::{ViewHeader, ViewType};
+  |                                       ^^^^^^^^
+
+warning: unused import: `std::cell::Cell`
+ --> src\widgets\fader.rs:4:5
+  |
+4 | use std::cell::Cell;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused imports: `ColorF` and `Vec2`
+ --> src\widgets\dragger.rs:2:19
+  |
+2 | use crate::core::{ColorF, Vec2};
+  |                   ^^^^^^  ^^^^
+
+warning: unused import: `ViewType`
+ --> src\widgets\dragger.rs:3:39
+  |
+3 | use crate::view::header::{ViewHeader, ViewType};
+  |                                       ^^^^^^^^
+
+warning: unused import: `std::cell::Cell`
+ --> src\widgets\dragger.rs:4:5
+  |
+4 | use std::cell::Cell;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `Vec2`
+ --> src\widgets\plot.rs:2:27
+  |
+2 | use crate::core::{ColorF, Vec2};
+  |                           ^^^^
+
+warning: unused import: `ViewType`
+ --> src\widgets\plot.rs:3:39
+  |
+3 | use crate::view::header::{ViewHeader, ViewType};
+  |                                       ^^^^^^^^
+
+warning: unused import: `std::cell::Cell`
+ --> src\widgets\plot.rs:4:5
+  |
+4 | use std::cell::Cell;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `Duration`
+  --> src\devtools\profiler.rs:10:17
+   |
+10 | use std::time::{Duration, Instant};
+   |                 ^^^^^^^^
+
+warning: unused variable: `desc`
+   --> src\core\undo.rs:243:17
+    |
+243 |             let desc = cmd.description().to_string();
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_desc`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `desc`
+   --> src\core\undo.rs:255:17
+    |
+255 |             let desc = cmd.description().to_string();
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_desc`
+
+warning: unused variable: `id`
+  --> src\widgets\mod.rs:22:21
+   |
+22 |     pub fn id(self, id: impl Into<ID>) -> Self {
+   |                     ^^ help: if this is intentional, prefix it with an underscore: `_id`
+
+warning: variable does not need to be mutable
+  --> src\text\markdown.rs:40:9
+   |
+40 |     let mut flush = |spans: &mut Vec<TextSpan>, in_bold: bool, in_itali...
+   |         ----^^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `remainder`
+  --> src\text\markdown.rs:89:17
+   |
+89 |             let remainder = &input[i..]; // Note: byte indexing vs char...
+   |                 ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_remainder`
+
+warning: unused variable: `rect_loc`
+   --> src\backend\opengl.rs:340:13
+    |
+340 |         let rect_loc = gl.get_uniform_location(program, "u_rect");
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rect_loc`
+
+warning: unused variable: `radii_loc`
+   --> src\backend\opengl.rs:341:13
+    |
+341 |         let radii_loc = gl.get_uniform_location(program, "u_radii");
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_radii_loc`
+
+warning: unused variable: `border_width_loc`
+   --> src\backend\opengl.rs:342:13
+    |
+342 |         let border_width_loc = gl.get_uniform_location(program, "u_bor...
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_border_width_loc`
+
+warning: unused variable: `border_color_loc`
+   --> src\backend\opengl.rs:343:13
+    |
+343 |         let border_color_loc = gl.get_uniform_location(program, "u_bor...
+    |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_border_color_loc`
+
+warning: unused variable: `elevation_loc`
+   --> src\backend\opengl.rs:344:13
+    |
+344 |         let elevation_loc = gl.get_uniform_location(program, "u_elevat...
+    |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_elevation_loc`
+
+warning: unused variable: `glow_strength_loc`
+   --> src\backend\opengl.rs:345:13
+    |
+345 |         let glow_strength_loc = gl.get_uniform_location(program, "u_gl...
+    |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_glow_strength_loc`
+
+warning: unused variable: `glow_color_loc`
+   --> src\backend\opengl.rs:346:13
+    |
+346 |         let glow_color_loc = gl.get_uniform_location(program, "u_glow_...
+    |             ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_glow_color_loc`
+
+warning: unused variable: `is_squircle_loc`
+   --> src\backend\opengl.rs:347:13
+    |
+347 |         let is_squircle_loc = gl.get_uniform_location(program, "u_is_s...
+    |             ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_squircle_loc`
+
+warning: unused variable: `offset_loc`
+   --> src\backend\opengl.rs:348:13
+    |
+348 |         let offset_loc = gl.get_uniform_location(program, "u_offset");
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_offset_loc`
+
+warning: unused variable: `scale_loc`
+   --> src\backend\opengl.rs:349:13
+    |
+349 |         let scale_loc = gl.get_uniform_location(program, "u_scale");
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_scale_loc`
+
+warning: unused variable: `passes`
+   --> src\backend\opengl.rs:660:21
+    |
+660 |                 let passes = (*sigma as i32).clamp(1, 8);
+    |                     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_passes`
+
+warning: unused variable: `uv_scale`
+   --> src\backend\opengl.rs:661:21
+    |
+661 |                 let uv_scale = Vec2::new(1.0 / w as f32, 1.0 / h as f32);
+    |                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_uv_scale`
+
+warning: struct `HSV` is never constructed
+  --> src\core\types.rs:97:12
+   |
+97 | pub struct HSV {
+   |            ^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated items `from_rgb` and `to_rgb` are never used
+   --> src\core\types.rs:105:12
+    |
+104 | impl HSV {
+    | -------- associated items in this implementation
+105 |     pub fn from_rgb(c: ColorF) -> Self {
+    |            ^^^^^^^^
+...
+125 |     pub fn to_rgb(self) -> ColorF {
+    |            ^^^^^^
+
+warning: struct `IDStack` is never constructed
+  --> src\core\id.rs:76:12
+   |
+76 | pub struct IDStack {
+   |            ^^^^^^^
+
+warning: multiple associated items are never used
+   --> src\core\id.rs:82:12
+    |
+ 81 | impl IDStack {
+    | ------------ associated items in this implementation
+ 82 |     pub fn new() -> Self {
+    |            ^^^
+...
+ 86 |     pub fn push(&mut self, id: ID) {
+    |            ^^^^
+...
+ 91 |     pub fn push_str(&mut self, s: &str) {
+    |            ^^^^^^^^
+...
+ 95 |     pub fn push_index(&mut self, idx: usize) {
+    |            ^^^^^^^^^^
+...
+ 99 |     pub fn pop(&mut self) {
+    |            ^^^
+...
+105 |     pub fn current(&self) -> ID {
+    |            ^^^^^^^
+...
+109 |     pub fn get(&self, local: ID) -> ID {
+    |            ^^^
+
+warning: fields `panel_x`, `panel_y`, `panel_width`, `panel_height`, and `highlight_on_hover` are never read
+   --> src\devtools\inspector.rs:152:5
+    |
+142 | pub struct Inspector {
+    |            --------- fields in this struct
+...
+152 |     panel_x: f32,
+    |     ^^^^^^^
+153 |     panel_y: f32,
+    |     ^^^^^^^
+154 |     panel_width: f32,
+    |     ^^^^^^^^^^^
+155 |     panel_height: f32,
+    |     ^^^^^^^^^^^^
+...
+163 |     highlight_on_hover: bool,
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: associated functions `quad_vertices` and `quad_vertices_uv` are never used
+   --> src\backend\wgpu.rs:269:8
+    |
+ 73 | impl WgpuBackend {
+    | ---------------- associated functions in this implementation
+...
+269 |     fn quad_vertices(pos: Vec2, size: Vec2, color: ColorF) -> [Vertex;...
+    |        ^^^^^^^^^^^^^
+...
+273 |     fn quad_vertices_uv(pos: Vec2, size: Vec2, uv: [f32; 4], color: Co...
+    |        ^^^^^^^^^^^^^^^^
+
+warning: `fantasmagorie` (lib) generated 38 warnings (run `cargo fix --lib -p fantasmagorie` to apply 32 suggestions)
+    Checking fantasmagorie v0.1.0 (E:\Projects\FantasmagorieRust)
+warning: unnecessary `unsafe` block
+  --> examples\theme_demo.rs:21:19
+   |
+21 |     let surface = unsafe { instance.create_surface(window.clone()) }.unwrap();
+   |                   ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+error[E0596]: cannot borrow `arena` as mutable, as it is not declared as mutable
+  --> examples\theme_demo.rs:80:21
+   |
+80 |                     arena.reset();
+   |                     ^^^^^ cannot borrow as mutable
+   |
+help: consider changing this to be mutable
+   |
+31 |     let mut arena = FrameArena::new();
+   |         +++
+
+error[E0382]: use of moved value: `theme`
+   --> examples\theme_demo.rs:107:84
+    |
+ 84 |                     let theme = match theme_idx {
+    |                         ----- move occurs because `theme` has type `fanta_rust::core::Theme`, which does not implement the `Copy` trait
+...
+ 90 |                     ctx.theme = theme;
+    |                                 ----- value moved here
+...
+107 |                         ctx.text("Press SPACE to Switch Theme").font_size(14.0).fg(theme.text.with_alpha(0.5)).build();
+    |                                                                                    ^^^^^^^^^^ value used here after move
+
+Some errors have detailed explanations: E0382, E0596.
+For more information about an error, try `rustc --explain E0382`.
+warning: `fantasmagorie` (example "theme_demo") generated 1 warning
+error: could not compile `fantasmagorie` (example "theme_demo") due to 2 previous errors; 1 warning emitted

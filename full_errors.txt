@@ -1,0 +1,67 @@
+--- STDOUT ---
+
+--- STDERR ---
+src\view\animation.rs:4:5: warning: unused import: `crate::core::Vec2`
+src\widgets\knob.rs:2:27: warning: unused import: `Vec2`
+src\widgets\knob.rs:3:39: warning: unused import: `ViewType`
+src\widgets\knob.rs:4:5: warning: unused import: `crate::widgets::UIContext`
+src\widgets\knob.rs:5:5: warning: unused import: `std::cell::Cell`
+src\widgets\fader.rs:2:27: warning: unused import: `Vec2`
+src\widgets\fader.rs:3:39: warning: unused import: `ViewType`
+src\widgets\fader.rs:4:5: warning: unused import: `std::cell::Cell`
+src\widgets\dragger.rs:2:19: warning: unused imports: `ColorF` and `Vec2`
+src\widgets\dragger.rs:3:39: warning: unused import: `ViewType`
+src\widgets\dragger.rs:4:5: warning: unused import: `std::cell::Cell`
+src\widgets\plot.rs:2:27: warning: unused import: `Vec2`
+src\widgets\plot.rs:3:39: warning: unused import: `ViewType`
+src\widgets\plot.rs:4:5: warning: unused import: `std::cell::Cell`
+src\devtools\profiler.rs:10:17: warning: unused import: `Duration`
+src\core\undo.rs:243:17: warning: unused variable: `desc`: help: if this is intentional, prefix it with an underscore: `_desc`
+src\core\undo.rs:255:17: warning: unused variable: `desc`: help: if this is intentional, prefix it with an underscore: `_desc`
+src\widgets\mod.rs:22:21: warning: unused variable: `id`: help: if this is intentional, prefix it with an underscore: `_id`
+src\text\markdown.rs:40:9: warning: variable does not need to be mutable
+src\text\markdown.rs:89:17: warning: unused variable: `remainder`: help: if this is intentional, prefix it with an underscore: `_remainder`
+src\backend\opengl.rs:350:13: warning: unused variable: `rect_loc`: help: if this is intentional, prefix it with an underscore: `_rect_loc`
+src\backend\opengl.rs:351:13: warning: unused variable: `radii_loc`: help: if this is intentional, prefix it with an underscore: `_radii_loc`
+src\backend\opengl.rs:352:13: warning: unused variable: `border_width_loc`: help: if this is intentional, prefix it with an underscore: `_border_width_loc`
+src\backend\opengl.rs:353:13: warning: unused variable: `border_color_loc`: help: if this is intentional, prefix it with an underscore: `_border_color_loc`
+src\backend\opengl.rs:354:13: warning: unused variable: `elevation_loc`: help: if this is intentional, prefix it with an underscore: `_elevation_loc`
+src\backend\opengl.rs:355:13: warning: unused variable: `glow_strength_loc`: help: if this is intentional, prefix it with an underscore: `_glow_strength_loc`
+src\backend\opengl.rs:356:13: warning: unused variable: `glow_color_loc`: help: if this is intentional, prefix it with an underscore: `_glow_color_loc`
+src\backend\opengl.rs:357:13: warning: unused variable: `is_squircle_loc`: help: if this is intentional, prefix it with an underscore: `_is_squircle_loc`
+src\backend\opengl.rs:358:13: warning: unused variable: `offset_loc`: help: if this is intentional, prefix it with an underscore: `_offset_loc`
+src\backend\opengl.rs:359:13: warning: unused variable: `scale_loc`: help: if this is intentional, prefix it with an underscore: `_scale_loc`
+src\backend\opengl.rs:887:13: warning: unreachable pattern: no value can reach this
+src\backend\opengl.rs:670:21: warning: unused variable: `passes`: help: if this is intentional, prefix it with an underscore: `_passes`
+src\backend\opengl.rs:671:21: warning: unused variable: `uv_scale`: help: if this is intentional, prefix it with an underscore: `_uv_scale`
+src\core\types.rs:97:12: warning: struct `HSV` is never constructed
+src\core\types.rs:105:12: warning: associated items `from_rgb` and `to_rgb` are never used
+src\core\id.rs:76:12: warning: struct `IDStack` is never constructed
+src\core\id.rs:82:12: warning: multiple associated items are never used
+src\devtools\inspector.rs:152:5: warning: fields `panel_x`, `panel_y`, `panel_width`, `panel_height`, and `highlight_on_hover` are never read
+warning: `fantasmagorie` (lib) generated 38 warnings (run `cargo fix --lib -p fantasmagorie` to apply 32 suggestions)
+    Checking fantasmagorie v0.1.0 (E:\Projects\FantasmagorieRust)
+error[E0433]: failed to resolve: use of undeclared type `Key`
+   --> examples\theme_demo.rs:145:28
+    |
+145 |                     if let Key::Named(NamedKey::Space) = event.logical_key {
+    |                            ^^^ use of undeclared type `Key`
+    |
+help: consider importing this enum
+    |
+  3 + use winit::keyboard::Key;
+    |
+
+error[E0433]: failed to resolve: use of undeclared type `NamedKey`
+   --> examples\theme_demo.rs:145:39
+    |
+145 |                     if let Key::Named(NamedKey::Space) = event.logical_key {
+    |                                       ^^^^^^^^ use of undeclared type `NamedKey`
+    |
+help: consider importing this enum
+    |
+  3 + use winit::keyboard::NamedKey;
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `fantasmagorie` (example "theme_demo") due to 2 previous errors
