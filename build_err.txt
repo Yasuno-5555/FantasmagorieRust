@@ -1,0 +1,56 @@
+    Checking fantasmagorie v0.1.0 (E:\Projects\FantasmagorieRust\crates\fantasmagorie)
+error[E0432]: unresolved import `crate::core::context`
+ --> crates\fantasmagorie\src\widgets\traits.rs:1:18
+  |
+1 | use crate::core::context::UIContext;
+  |                  ^^^^^^^ could not find `context` in `core`
+
+error[E0432]: unresolved import `crate::core::context`
+ --> crates\fantasmagorie\src\widgets\window.rs:1:18
+  |
+1 | use crate::core::context::UIContext;
+  |                  ^^^^^^^ could not find `context` in `core`
+
+error[E0432]: unresolved import `crate::core::context`
+ --> crates\fantasmagorie\src\widgets\button.rs:1:18
+  |
+1 | use crate::core::context::UIContext;
+  |                  ^^^^^^^ could not find `context` in `core`
+
+error[E0432]: unresolved import `crate::core::context`
+ --> crates\fantasmagorie\src\widgets\label.rs:1:18
+  |
+1 | use crate::core::context::UIContext;
+  |                  ^^^^^^^ could not find `context` in `core`
+
+error[E0432]: unresolved import `crate::core::context`
+ --> crates\fantasmagorie\src\widgets\slider.rs:1:18
+  |
+1 | use crate::core::context::UIContext;
+  |                  ^^^^^^^ could not find `context` in `core`
+
+warning: unused import: `bitflags::bitflags`
+ --> crates\fantasmagorie\src\core\types.rs:1:5
+  |
+1 | use bitflags::bitflags;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `super::core::types::Color`
+ --> crates\fantasmagorie\src\widgets\mod.rs:1:5
+  |
+1 | use super::core::types::Color;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `store`
+  --> crates\fantasmagorie\src\render\renderer.rs:25:50
+   |
+25 |     pub fn render(&mut self, gl: &glow::Context, store: &NodeStore, screen_width: f32, screen_height: f32) {
+   |                                                  ^^^^^ help: if this is intentional, prefix it with an underscore: `_store`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+For more information about this error, try `rustc --explain E0432`.
+warning: `fantasmagorie` (lib) generated 3 warnings
+error: could not compile `fantasmagorie` (lib) due to 5 previous errors; 3 warnings emitted

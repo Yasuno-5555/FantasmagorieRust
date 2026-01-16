@@ -1,0 +1,74 @@
+﻿cargo :     Checking f
+antasmagorie v0.1.0 (E
+:\Projects\Fantasmagor
+ieRust\crates\fantasma
+gorie)
+発生場所 行:1 文字:1
++ cargo check --messag
+e-format=short 2>&1 | 
+Out-File -Encoding utf
+8 err ...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (    Checki   
+ ng fa...\fantasma    
+gorie):String) []    ,
+ RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+crates\fantasmagorie\s
+rc\widgets\traits.rs:1
+:18: error[E0432]: unr
+esolved import `crate:
+:core::context`: could
+ not find `context` in
+ `core`
+crates\fantasmagorie\s
+rc\widgets\window.rs:1
+:18: error[E0432]: unr
+esolved import `crate:
+:core::context`: could
+ not find `context` in
+ `core`
+crates\fantasmagorie\s
+rc\widgets\button.rs:1
+:18: error[E0432]: unr
+esolved import `crate:
+:core::context`: could
+ not find `context` in
+ `core`
+crates\fantasmagorie\s
+rc\widgets\label.rs:1:
+18: error[E0432]: unre
+solved import `crate::
+core::context`: could 
+not find `context` in 
+`core`
+crates\fantasmagorie\s
+rc\widgets\slider.rs:1
+:18: error[E0432]: unr
+esolved import `crate:
+:core::context`: could
+ not find `context` in
+ `core`
+crates\fantasmagorie\s
+rc\core\types.rs:1:5: 
+warning: unused import
+: `bitflags::bitflags`
+crates\fantasmagorie\s
+rc\widgets\mod.rs:1:5:
+ warning: unused impor
+t: `super::core::types
+::Color`
+warning: `fantasmagori
+e` (lib) generated 2 w
+arnings
+error: could not compi
+le `fantasmagorie` (li
+b) due to 5 previous e
+rrors; 2 warnings emit
+ted
