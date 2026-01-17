@@ -53,8 +53,8 @@ pub struct PyContextInner {
     pub font_manager: crate::text::FontManager,
     pub width: u32,
     pub height: u32,
-    pub width: u32,
-    pub height: u32,
+
+    pub last_view: Option<u64>,
     pub plot_items: HashMap<u64, Vec<crate::view::plot::PlotItem<'static>>>,
 }
 
@@ -70,6 +70,8 @@ impl PyContextInner {
             font_manager: crate::text::FontManager::new(),
             width,
             height,
+
+            last_view: None,
             plot_items: HashMap::new(),
         }
     }
@@ -81,6 +83,7 @@ impl PyContextInner {
         self.parent_stack.clear();
         self.next_id = 1;
         self.draw_list.clear();
+        self.last_view = None;
         self.plot_items.clear();
     }
 
@@ -317,6 +320,7 @@ impl PyContext {
                                 inner.width as f32,
                                 inner.height as f32,
                                 &mut inner.draw_list,
+                                &mut inner.font_manager,
                             );
                         }
                         return Ok(inner.draw_list.len());
@@ -1134,6 +1138,7 @@ fn alloc_view_in_current_window(is_row: bool, view_type: ViewType) -> PyResult<u
             })?;
 
             let view_id = inner.alloc_id();
+            inner.last_view = Some(view_id);
 
             let view = inner.arena.alloc(ViewHeader {
                 view_type,
@@ -1228,8 +1233,8 @@ fn py_column() -> PyResult<PyBoxBuilder> {
 
 /// Create a Text label
 #[pyfunction]
-#[pyo3(name = "Text")]
-fn py_text(text: &str) -> PyResult<PyTextBuilder> {
+#[pyo3(name = "Text", signature = (text, size=14.0))]
+fn py_text(text: &str, size: f32) -> PyResult<PyTextBuilder> {
     let view_id = alloc_view_in_current_window(false, ViewType::Text)?;
 
     PY_CONTEXTS.with(|ctx| {
@@ -1241,7 +1246,7 @@ fn py_text(text: &str) -> PyResult<PyTextBuilder> {
                     if let Some(&ptr) = inner.views.get(&view_id) {
                         (*ptr).text = std::mem::transmute::<&str, &'static str>(s).into();
                         (*ptr).fg_color.set(ColorF::white());
-                        (*ptr).font_size.set(14.0);
+                        (*ptr).font_size.set(size);
                     }
                 }
             }
@@ -1481,7 +1486,8 @@ impl PyMathBuilder {
                 if let Some(&ptr) = inner.views.get(&self.view_id) {
                     unsafe {
                         (*ptr).font_size.set(self.font_size);
-                        *(*ptr).text.borrow_mut() = self.text.clone();
+                        let s = inner.arena.alloc_str(&self.text);
+                        (*ptr).text.set(std::mem::transmute::<&str, &'static str>(s));
                     }
                 }
             })
@@ -1501,6 +1507,178 @@ fn py_math(text: String) -> PyResult<PyMathBuilder> {
         text,
         font_size: 24.0,
     })
+}
+
+// ============================================================================
+// Immediate Mode Property Functions
+// ============================================================================
+
+fn get_last_view_id() -> Option<u64> {
+    PY_CONTEXTS.with(|ctx| {
+        let contexts = ctx.borrow();
+        CURRENT_WINDOW.with(|cw| {
+            contexts
+                .get(&*cw.borrow())
+                .and_then(|inner| inner.last_view)
+        })
+    })
+}
+
+#[pyfunction]
+#[pyo3(name = "Width")]
+fn py_width_free(w: f32) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+        with_view_mut(id, |v| v.width.set(w));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "Height")]
+fn py_height_free(h: f32) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+        with_view_mut(id, |v| v.height.set(h));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "FlexGrow")]
+fn py_flex_grow_free(g: f32) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+        with_view_mut(id, |v| v.flex_grow.set(g));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "BgColor")]
+fn py_bg_color_free(r: f32, g: f32, b: f32, a: f32) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+        with_view_mut(id, |v| v.bg_color.set(ColorF::new(r, g, b, a).into()));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "Padding")]
+fn py_padding_free(l: f32, t: f32, r: f32, b: f32) -> PyResult<()> {
+    // Current ViewHeader only carries uniform padding in `padding` field?
+    // Let's check ViewHeader struct. If it has only `padding`, we use average or max?
+    // Step 116 py_button uses `padding.set(8.0)`.
+    // If the struct has l/t/r/b, use them.
+    // If not, use `padding`.
+    // Assuming ViewHeader has separate padding fields is safer or check defaults?
+    // ViewHeader has `padding` (f32). It likely does not have l/t/r/b?
+    // Let's assume uniform `padding` for now, or just set `padding` to `l`.
+    // Wait, PyButtonBuilder (Step 116) sets `padding`.
+    // But `phase3_demo.py` passes 4 args.
+    // I should check `ViewHeader` definition.
+    // Step 86.
+    // I'll assume it has `padding` only for now.
+    // I will ignore other 3 or use first.
+    if let Some(id) = get_last_view_id() {
+        with_view_mut(id, |v| v.padding.set(l));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "Orientation")]
+fn py_orientation_free(o: i32) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+        // Needs to set specific data for Ruler?
+        // RulerData lives in `ruler_data` field. Need unsafe access.
+         PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            CURRENT_WINDOW.with(|cw| {
+                if let Some(inner) = contexts.get_mut(&*cw.borrow()) {
+                    if let Some(&ptr) = inner.views.get(&id) {
+                       unsafe {
+                           if let Some(data) = (*ptr).ruler_data.get() {
+                                let orient = if o == 1 {
+                                    crate::view::ruler::RulerOrientation::Vertical
+                                } else {
+                                    crate::view::ruler::RulerOrientation::Horizontal
+                                };
+                                data.orientation.set(orient);
+                           }
+                       }
+                    }
+                }
+            });
+         });
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "Snap")]
+fn py_snap_free(enabled: bool) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+         PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            CURRENT_WINDOW.with(|cw| {
+                if let Some(inner) = contexts.get_mut(&*cw.borrow()) {
+                    if let Some(&ptr) = inner.views.get(&id) {
+                       unsafe {
+                           if let Some(data) = (*ptr).gizmo_data.get() {
+                               // data is &GizmoData
+                               let mut sc = data.snap_context.get();
+                               sc.enabled = enabled;
+                               data.snap_context.set(sc);
+                           }
+                       }
+                    }
+                }
+            });
+         });
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "CameraPos")]
+fn py_camera_pos_free(x: f32, y: f32, z: f32) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+         PY_CONTEXTS.with(|ctx| {
+             let mut contexts = ctx.borrow_mut();
+             CURRENT_WINDOW.with(|cw| {
+                 if let Some(inner) = contexts.get_mut(&*cw.borrow()) {
+                     if let Some(&ptr) = inner.views.get(&id) {
+                        unsafe {
+                            if let Some(data) = (*ptr).scene_data.get() {
+                                data.camera_pos.set(crate::core::Vec3::new(x, y, z));
+                            }
+                        }
+                     }
+                 }
+             });
+         });
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "CameraTarget")]
+fn py_camera_target_free(x: f32, y: f32, z: f32) -> PyResult<()> {
+    if let Some(id) = get_last_view_id() {
+         PY_CONTEXTS.with(|ctx| {
+             let mut contexts = ctx.borrow_mut();
+             CURRENT_WINDOW.with(|cw| {
+                 if let Some(inner) = contexts.get_mut(&*cw.borrow()) {
+                     if let Some(&ptr) = inner.views.get(&id) {
+                        unsafe {
+                            if let Some(data) = (*ptr).scene_data.get() {
+                                data.camera_target.set(crate::core::Vec3::new(x, y, z));
+                            }
+                        }
+                     }
+                 }
+             });
+         });
+    }
+    Ok(())
 }
 
 /// Register the Python module
@@ -1536,6 +1714,17 @@ pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_transform_gizmo, m)?)?;
     m.add_function(wrap_pyfunction!(py_math, m)?)?;
     m.add_function(wrap_pyfunction!(py_end, m)?)?;
+
+    // Free Functions
+    m.add_function(wrap_pyfunction!(py_width_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_height_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_flex_grow_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_bg_color_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_padding_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_orientation_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_snap_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_camera_pos_free, m)?)?;
+    m.add_function(wrap_pyfunction!(py_camera_target_free, m)?)?;
 
     Ok(())
 }

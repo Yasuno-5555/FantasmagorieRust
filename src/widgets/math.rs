@@ -54,7 +54,8 @@ impl<'b, 'a> MathBuilder<'b, 'a> {
 
         // Hack: temporarily store math source in a special way or I need to update ViewHeader again.
         // I'll add `text: RefCell<String>` to ViewHeader.
-        *view.text.borrow_mut() = self.text.to_string();
+        let text_alloc = self.ui.arena.alloc_str(self.text);
+        view.text.set(text_alloc);
 
         self.ui.push_child(view);
         view

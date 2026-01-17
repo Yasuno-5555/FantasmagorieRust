@@ -103,7 +103,7 @@ class DemoApp:
 
 app = DemoApp()
 
-def frame():
+def frame(w, h):
     app.build()
 
 fanta.run(frame)

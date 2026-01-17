@@ -199,7 +199,22 @@ void main() {
         float lod = u_border_width;
         
         vec4 bg = textureLod(u_texture, v_uv, lod) * color_linear;
-        final_color = vec4(bg.rgb, bg.a * alpha);
+        // Linearize background sample? 
+        // u_texture (backdrop) is from framebuffer. 
+        // If we write linear to FB, then backdrop is linear.
+        // We will output linear. So backdrop is linear. No pow needed.
+        
+        // 3. Cinematic Glass: Noise + Saturation
+        // Noise (Dithering)
+        float noise = (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+        bg.rgb += noise * 4.0; 
+
+        // Saturation Boost (Luma based)
+        float luma = dot(bg.rgb, vec3(0.299, 0.587, 0.114));
+        bg.rgb = mix(vec3(luma), bg.rgb, 1.2);
+
+        final_color = bg;
+        final_color.a *= alpha;
     }
     else if (u_mode == 5) {
         // Image with 3D LUT
@@ -233,23 +248,6 @@ void main() {
         
         tex_lin = mix(tex_lin, graded, u_lut_intensity);
         final_color = vec4(tex_lin, tex_col.a * alpha);
-    }
-        // Linearize background sample? 
-        // u_texture (backdrop) is from framebuffer. 
-        // If we write linear to FB, then backdrop is linear.
-        // We will output linear. So backdrop is linear. No pow needed.
-        
-        // 3. Cinematic Glass: Noise + Saturation
-        // Noise (Dithering)
-        float noise = (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
-        bg.rgb += noise * 4.0; 
-
-        // Saturation Boost (Luma based)
-        float luma = dot(bg.rgb, vec3(0.299, 0.587, 0.114));
-        bg.rgb = mix(vec3(luma), bg.rgb, 1.2);
-
-        final_color = bg;
-        final_color.a *= alpha;
     }
     else if (u_mode == 6) {
         // Arc Rendering
@@ -318,6 +316,28 @@ void main() {
         else col = mix(c1, c2, (t - 0.5) * 2.0);
 
         final_color = vec4(col, 1.0);
+        final_color = vec4(col, 1.0);
+    }
+    else if (u_mode == 9) {
+        // Aurora Background
+        float t = u_elevation * 0.5;
+        vec2 uv = gl_FragCoord.xy / u_rect.zw;
+        
+        vec3 col1 = vec3(0.1, 0.1, 0.12); // Dark base
+        vec3 col2 = vec3(0.2, 0.1, 0.3);  // Purple
+        vec3 col3 = vec3(0.1, 0.3, 0.4);  // Teal
+        
+        float n1 = sin(uv.x * 2.0 + t) * 0.5 + 0.5;
+        float n2 = cos(uv.y * 3.0 + t * 1.3) * 0.5 + 0.5;
+        
+        vec3 bg = mix(col1, col2, n1);
+        bg = mix(bg, col3, n2 * 0.5);
+        
+        // Add some noise/dither
+        float noise = (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+        bg += noise * 0.05;
+        
+        final_color = vec4(bg, 1.0);
     }
 
     // 1. Output Gamma Correction (Linear -> sRGB)
@@ -423,16 +443,7 @@ impl OpenGLBackend {
         let mode_loc = gl
             .get_uniform_location(program, "u_mode")
             .ok_or("u_mode not found")?;
-        let rect_loc = gl.get_uniform_location(program, "u_rect");
-        let radii_loc = gl.get_uniform_location(program, "u_radii");
-        let border_width_loc = gl.get_uniform_location(program, "u_border_width");
-        let border_color_loc = gl.get_uniform_location(program, "u_border_color");
-        let elevation_loc = gl.get_uniform_location(program, "u_elevation");
-        let glow_strength_loc = gl.get_uniform_location(program, "u_glow_strength");
-        let glow_color_loc = gl.get_uniform_location(program, "u_glow_color");
-        let is_squircle_loc = gl.get_uniform_location(program, "u_is_squircle");
-        let offset_loc = gl.get_uniform_location(program, "u_offset");
-        let scale_loc = gl.get_uniform_location(program, "u_scale");
+
         let lut_loc = gl.get_uniform_location(program, "u_lut");
         let lut_intensity_loc = gl.get_uniform_location(program, "u_lut_intensity");
         let texture_loc = gl
@@ -669,6 +680,8 @@ impl super::Backend for OpenGLBackend {
     /// Render a DrawList
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         unsafe {
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error at START of render (Previous Frame?)"); }
+
             // Check texture update
             crate::text::FONT_MANAGER.with(|fm| {
                 let mut fm = fm.borrow_mut();
@@ -688,44 +701,68 @@ impl super::Backend for OpenGLBackend {
                         Some(&fm.atlas.texture_data),
                     );
                     fm.texture_dirty = false;
+                    if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after texture update"); }
                 }
             });
 
             self.gl.viewport(0, 0, width as i32, height as i32);
-            self.gl.clear_color(0.08, 0.08, 0.1, 1.0);
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after viewport"); }
 
-            // Manual Linear Workflow: Disable Hardware SRGB
-            // We do manual tone mapping in shader for bloom control
-            self.gl.disable(glow::FRAMEBUFFER_SRGB);
-
+            self.gl.clear_color(0.1, 0.1, 0.1, 1.0); // Dark Gray
             self.gl.clear(glow::COLOR_BUFFER_BIT);
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after clear"); }
 
             // Enable Blending for Text and Transparent shapes
             self.gl.enable(glow::BLEND);
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after enable blend"); }
+
             self.gl
                 .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after blend func"); }
 
             self.gl.use_program(Some(self.program));
-            self.gl.bind_vertex_array(Some(self.vao));
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after use_program"); }
 
+            self.gl.bind_vertex_array(Some(self.vao));
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after bind_vao"); }
+            
             // Bind font texture to unit 0
             self.gl.active_texture(glow::TEXTURE0);
             self.gl
                 .bind_texture(glow::TEXTURE_2D, Some(self.font_texture));
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after bind_texture"); }
 
             // Setup projection matrix (orthographic, top-left origin)
             let projection = Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0);
             self.gl
                 .uniform_matrix_4_f32_slice(Some(&self.projection_loc), false, &projection);
+            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after projection"); }
 
             // Init transform
-            self.gl.uniform_2_f32(self.offset_loc.as_ref(), 0.0, 0.0);
-            self.gl.uniform_1_f32(self.scale_loc.as_ref(), 1.0);
+            if let Some(loc) = self.offset_loc.as_ref() {
+                 self.gl.uniform_2_f32(Some(loc), 0.0, 0.0);
+                 if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after u_offset"); }
+            } else {
+                println!("⚠️ u_offset loc is None");
+            }
 
-            // Draw Mesh Gradient Background (Aurora)
-            // Mode 5. Reuse u_elevation for time. u_rect for Window Size.
+            if let Some(loc) = self.scale_loc.as_ref() {
+                self.gl.uniform_1_f32(Some(loc), 1.0);
+                let err = self.gl.get_error();
+                if err != glow::NO_ERROR { println!("❌ Error after u_scale: {}", err); }
+            } else {
+                println!("⚠️ u_scale loc is None");
+            }
+
+            let err = self.gl.get_error();
+            if err != glow::NO_ERROR {
+                println!("❌ OpenGL Error before draw (residue): {}", err);
+            }
+
+            // Draw Background (Mode 9 Aurora)
             let time = self.start_time.elapsed().as_secs_f32();
-            self.gl.uniform_1_i32(Some(&self.mode_loc), 5);
+            self.gl.uniform_1_i32(Some(&self.mode_loc), 9);
             self.gl.uniform_1_f32(self.elevation_loc.as_ref(), time);
             self.gl.uniform_4_f32(
                 self.rect_loc.as_ref(),
@@ -734,7 +771,7 @@ impl super::Backend for OpenGLBackend {
                 width as f32,
                 height as f32,
             );
-
+            
             let bg_quad = Self::quad_vertices(
                 Vec2::new(0.0, 0.0),
                 Vec2::new(width as f32, height as f32),

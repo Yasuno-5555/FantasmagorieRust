@@ -95,7 +95,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             render_slider(view, dl);
         }
         ViewType::Scroll => {
-            render_scroll(view, dl, depth);
+            render_scroll(view, dl, depth, fm);
             return; // Scroll handles its own children
         }
         ViewType::TextInput => {
@@ -829,7 +829,7 @@ fn render_splitter(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render scroll container
-fn render_scroll(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
+fn render_scroll(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let content_size = view.content_size.get();
 
@@ -865,7 +865,7 @@ fn render_scroll(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
 
     // Render children
     for child in view.children() {
-        render_view_recursive(child, dl, depth + 1);
+        render_view_recursive(child, dl, depth + 1, fm);
     }
 
     dl.pop_transform();
@@ -1282,7 +1282,7 @@ fn render_value_dragger(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render infinite canvas with grid
-fn render_canvas(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
+fn render_canvas(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
 
     // Register for hit testing
@@ -1359,7 +1359,7 @@ fn render_canvas(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
 
     // 4. Render Nodes & Sub-widgets
     for child in view.children() {
-        render_view_recursive(child, dl, depth + 1);
+        render_view_recursive(child, dl, depth + 1, fm);
     }
 
     dl.pop_transform();
@@ -1390,7 +1390,7 @@ fn render_canvas(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
 }
 
 /// Render draggable node
-fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32) {
+fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, _fm: &mut FontManager) {
     let rect = view.computed_rect.get();
 
     // Register for hit testing
@@ -1501,7 +1501,7 @@ fn render_wire(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render context menu popup
-fn render_context_menu(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
+fn render_context_menu(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
 
     // Register for hit testing
@@ -1543,7 +1543,7 @@ fn render_context_menu(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
 
     // 4. Render children (menu items)
     for child in view.children() {
-        render_view_recursive(child, dl, depth + 1);
+        render_view_recursive(child, dl, depth + 1, fm);
     }
 
     // 5. Close on click outside
@@ -1604,7 +1604,7 @@ fn render_menu_item(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render collapsible container with spring-animated height
-fn render_collapsible(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
+fn render_collapsible(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let header_h = view.min.get().max(24.0);
     let is_expanded = view.is_expanded.get();
@@ -1722,7 +1722,7 @@ fn render_collapsible(view: &ViewHeader, dl: &mut DrawList, depth: i32) {
         dl.push_clip(content_pos, content_size);
 
         for child in view.children() {
-            render_view_recursive(child, dl, depth + 1);
+            render_view_recursive(child, dl, depth + 1, fm);
         }
 
         dl.pop_clip();
@@ -2160,7 +2160,7 @@ fn render_transform_gizmo(view: &ViewHeader, dl: &mut DrawList) {
 
 fn render_math(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
-    let text_ref = view.text.borrow();
+    let text_ref = view.text.get();
     if text_ref.is_empty() {
         return;
     }
@@ -2202,7 +2202,7 @@ fn render_math_node(
         }
         MathNode::Row(nodes) => {
             let mut cursor = pos;
-            let mut max_h = 0.0;
+            let mut max_h = 0.0f32;
             let mut total_w = 0.0;
             for n in nodes {
                 let s = render_math_node(n, fm, cursor, size, color, dl);

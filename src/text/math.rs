@@ -191,7 +191,7 @@ pub fn measure(node: &MathNode, fm: &mut FontManager, base_size: f32) -> Vec2 {
         }
         MathNode::Row(nodes) => {
             let mut w = 0.0;
-            let mut h = 0.0;
+            let mut h: f32 = 0.0;
             for n in nodes {
                 let s = measure(n, fm, base_size);
                 w += s.x;

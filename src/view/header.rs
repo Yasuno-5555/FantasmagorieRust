@@ -150,7 +150,7 @@ pub struct ViewHeader<'a> {
     pub max: Cell<f32>,
 
     // --- Text Content ---
-    pub text: std::cell::RefCell<String>,
+
 
     // --- Bezier ---
     pub points: Cell<[Vec2; 4]>,
@@ -251,7 +251,7 @@ impl<'a> Default for ViewHeader<'a> {
             points: Cell::new([Vec2::ZERO; 4]),
             thickness: Cell::new(1.0),
 
-            text: std::cell::RefCell::new(String::new()),
+
 
             // Image
             texture_id: Cell::new(None),

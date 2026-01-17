@@ -86,13 +86,13 @@ fn end_frame(width: u32, height: u32) -> DrawList {
 
 /// Run the windowed application with Python callback
 #[pyfunction]
-#[pyo3(name = "run_window")]
+#[pyo3(name = "run_window", signature = (callback, width=1280, height=720, title="Fantasmagorie".to_string()))]
 pub fn py_run_window(
     py: Python,
+    callback: PyObject,
     width: u32,
     height: u32,
     title: String,
-    callback: PyObject,
 ) -> PyResult<()> {
     // Release the GIL while creating window (allows Python threads)
     py.allow_threads(|| run_window_impl(width, height, &title, callback))
@@ -109,7 +109,9 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
         .with_inner_size(LogicalSize::new(width, height));
 
     // Glutin config template
-    let template = ConfigTemplateBuilder::new().with_alpha_size(8);
+    // Standard opaque window
+    let template = ConfigTemplateBuilder::new()
+        .with_transparency(false);
 
     let display_builder = DisplayBuilder::new().with_window_builder(Some(window_builder));
 
@@ -373,7 +375,15 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
                     */
 
                     // 5. SWAP BUFFERS
-                    let _ = surface.swap_buffers(&gl_context);
+                    if let Err(e) = surface.swap_buffers(&gl_context) {
+                        println!("❌ Swap Buffers Failed: {}", e);
+                    }
+                    
+                    // Check GL Error
+                    /*
+                    let err = unsafe { backend.get_error() }; // Need to expose get_error or just use gl context if I can access it. 
+                    // Backend owns gl. I need to add get_error to Backend trait or just print it inside render.
+                    */
 
                     // Debug output every 60 frames
                     if frame_count % 60 == 0 {
