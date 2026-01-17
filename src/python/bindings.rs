@@ -1091,6 +1091,7 @@ pub fn register(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_set_locale, m)?)?;
     m.add_function(wrap_pyfunction!(py_add_translation, m)?)?;
     m.add_function(wrap_pyfunction!(py_mount, m)?)?;
+    m.add_function(wrap_pyfunction!(py_capture_frame, m)?)?;
     m.add_function(wrap_pyfunction!(py_end, m)?)?;
     
     // Builders
@@ -1762,6 +1763,13 @@ impl PyPathDrawBuilder {
         with_view_mut(self.view_id, |v| v.set_property_float(&property, val));
         Ok(self.clone())
     }
+}
+
+/// Capture current frame as image
+#[pyfunction]
+#[pyo3(name = "capture_frame")]
+pub fn py_capture_frame(path: String) {
+    crate::view::interaction::request_screenshot(&path);
 }
 
 /// Start drawing a Path

@@ -71,9 +71,6 @@ def render(width, height):
     
     # Image (Placeholder path)
     fanta.Image("assets/logo.png").size(100, 100)
-
-    fanta.End() # End Root
-
     
     # Splitter Demo
     if not hasattr(render, "split_ratio"):
@@ -111,8 +108,6 @@ def render(width, height):
     fanta.Box().size(50, 50).bg(cp.get_color())
     fanta.Text(f"H:{h:.2f} S:{s:.2f} V:{v:.2f}").font_size(14)
 
-
-    fanta.End() # End Root
 
     with fanta.Column().padding(20).gap(20):
         # Icon demo (using characters that might map to icons in some fonts)
@@ -203,3 +198,34 @@ Horizontal rules? maybe.
     if fanta.Button(f"Switch to JP").clicked(): render.lang = "jp"
     if fanta.Button(f"Switch to FR").clicked(): render.lang = "fr"
     if fanta.Button(f"Switch to EN").clicked(): render.lang = "en"
+
+    # --- IME & Screenshot & Icons --- (Phase 15)
+    fanta.Box().height(40)
+    fanta.Text("IME / Screenshot / Icon Fallback").font_size(24).color(fanta.Color.white())
+    
+    # 1. Screenshot Button
+    if fanta.Button("📷 Capture Screenshot (screenshot.png)").clicked():
+        fanta.capture_frame("screenshot.png")
+        # In actual engine, this sets a flag and the next frame is saved.
+
+    fanta.Box().height(10)
+
+    # 2. Icon Font Demo (Fallback)
+    with fanta.Row().gap(20).padding(10).bg(fanta.Color(0,0,0,0.3)).radius(10):
+        # These icons should work via Segoe MDL2 fallback on Windows
+        fanta.Text("\ue713").font_size(32).color(fanta.Color(0.4, 0.7, 1.0, 1.0)) # Settings
+        fanta.Text("\ue767").font_size(32).color(fanta.Color(1.0, 0.4, 0.4, 1.0)) # Volume
+        fanta.Text("\ue706").font_size(32).color(fanta.Color(0.4, 1.0, 0.4, 1.0)) # Cloud
+        fanta.Text("Mixed: Text & \ue713").font_size(20)
+
+    fanta.Box().height(10)
+
+    # 3. IME Support (TextInput)
+    fanta.Text("IME Input Test (Try entering Japanese/Chinese):").font_size(16)
+    if not hasattr(render, "ime_text"):
+        render.ime_text = "日本語入力をお試しください"
+    
+    ti = fanta.TextInput(render.ime_text).width(500).height(40).font_size(24).radius(8).bg(fanta.Color(0.15, 0.15, 0.2, 1.0))
+    render.ime_text = ti.get_value()
+
+    fanta.End() # End Root

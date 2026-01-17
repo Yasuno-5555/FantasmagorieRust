@@ -520,18 +520,26 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList) {
         if is_focused {
             interaction::set_focused_text_input(Some(view.id.get()));
             
+            let original_len = combined_text.len();
             if !ime_preedit.is_empty() {
                 combined_text.push_str(&ime_preedit);
             }
             
-            // Simple caret at end of combined text
-            let text_size = fm.measure_text(&combined_text, view.font_size.get());
-            let caret_x = text_pos.x + text_size.x + 2.0;
+            // Handle Caret Positioning
+            let ime_range = interaction::get_ime_cursor_range();
+            let caret_pos_in_stream = if let Some((start, _end)) = ime_range {
+                // start is byte offset within preedit string
+                original_len + start
+            } else {
+                combined_text.len()
+            };
+
+            // Measure up to caret to find its X position
+            let text_up_to_caret = &combined_text[..caret_pos_in_stream];
+            let size_up_to_caret = fm.measure_text(text_up_to_caret, view.font_size.get());
+            let caret_x = text_pos.x + size_up_to_caret.x;
 
             // Update OS IME Window Position (Screen Coordinates)
-            // Note: We need window position offset if we want absolute screen coords.
-            // For now, we assume window is at 0,0 locally, but winit SetImeCursorArea expects window-relative? 
-            // Yes, winit expects physical position relative to top-left of content area.
             interaction::set_ime_cursor_area(Vec2::new(caret_x, text_pos.y + view.font_size.get())); // Bottom of caret
 
             // Draw Caret

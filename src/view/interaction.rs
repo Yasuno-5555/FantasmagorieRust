@@ -61,6 +61,13 @@ struct InteractionContext {
     popup_screen_size: Vec2,
     // Screenshot state
     screenshot_requested: Option<String>,
+
+    // IME State
+    ime_enabled: bool,
+    ime_preedit: String,
+    ime_cursor_range: Option<(usize, usize)>,
+    ime_cursor_area: Vec2,
+    focused_text_input: Option<ID>,
 }
 
 impl Default for InteractionContext {
@@ -98,6 +105,11 @@ impl Default for InteractionContext {
             popup_screen_size: Vec2::new(1920.0, 1080.0),
             
             screenshot_requested: None,
+            ime_enabled: false,
+            ime_preedit: String::new(),
+            ime_cursor_range: None,
+            ime_cursor_area: Vec2::ZERO,
+            focused_text_input: None,
         }
     }
 }
@@ -523,4 +535,52 @@ pub fn is_right_clicked() -> bool {
         let ctx = ctx.borrow();
         ctx.right_mouse_down && !ctx.mouse_was_down
     })
+}
+
+// ============ IME Functions ============
+
+pub fn set_ime_enabled(enabled: bool) {
+    CTX.with(|ctx| {
+        ctx.borrow_mut().ime_enabled = enabled;
+    });
+}
+
+pub fn is_ime_enabled() -> bool {
+    CTX.with(|ctx| ctx.borrow().ime_enabled)
+}
+
+pub fn set_ime_preedit(text: String, range: Option<(usize, usize)>) {
+    CTX.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        ctx.ime_preedit = text;
+        ctx.ime_cursor_range = range;
+    });
+}
+
+pub fn get_ime_preedit() -> String {
+    CTX.with(|ctx| ctx.borrow().ime_preedit.clone())
+}
+
+pub fn get_ime_cursor_range() -> Option<(usize, usize)> {
+    CTX.with(|ctx| ctx.borrow().ime_cursor_range)
+}
+
+pub fn set_ime_cursor_area(pos: Vec2) {
+    CTX.with(|ctx| {
+        ctx.borrow_mut().ime_cursor_area = pos;
+    });
+}
+
+pub fn get_ime_cursor_area() -> Vec2 {
+    CTX.with(|ctx| ctx.borrow().ime_cursor_area)
+}
+
+pub fn set_focused_text_input(id: Option<ID>) {
+    CTX.with(|ctx| {
+        ctx.borrow_mut().focused_text_input = id;
+    });
+}
+
+pub fn get_focused_text_input() -> Option<ID> {
+    CTX.with(|ctx| ctx.borrow().focused_text_input)
 }

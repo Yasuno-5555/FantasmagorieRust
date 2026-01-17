@@ -91,17 +91,34 @@ impl FontManager {
         if self.fonts.is_empty() {
              return Vec2::ZERO; 
         }
-        let font = &self.fonts[0];
-        let mut width = 0.0;
         
+        let mut width = 0.0f32;
+
         for c in text.chars() {
-             let metrics = font.metrics(c, size);
-             width += metrics.advance_width;
+            // Find font that has this glyph
+            let mut found = false;
+            for font in &self.fonts {
+                if font.lookup_glyph_index(c) != 0 || c.is_whitespace() {
+                    let metrics = font.metrics(c, size);
+                    width += metrics.advance_width;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                // Fallback to first font's advance for missing glyph
+                let metrics = self.fonts[0].metrics(c, size);
+                width += metrics.advance_width;
+            }
         }
         
-        let line_height = match font.horizontal_line_metrics(size) {
-            Some(m) => m.new_line_size,
-            None => size * 1.2,
+        let line_height = if !self.fonts.is_empty() {
+            match self.fonts[0].horizontal_line_metrics(size) {
+                Some(m) => m.new_line_size,
+                None => size * 1.2,
+            }
+        } else {
+            size * 1.2
         };
 
         Vec2::new(width, line_height)
@@ -110,6 +127,7 @@ impl FontManager {
     /// Get vertical metrics (ascent, descent, line_gap)
     pub fn vertical_metrics(&self, size: f32) -> Option<(f32, f32, f32)> {
         if self.fonts.is_empty() { return None; }
+        // Use first font as reference for vertical metrics
         self.fonts[0].horizontal_line_metrics(size).map(|m| (m.ascent, m.descent, m.line_gap))
     }
 
@@ -117,18 +135,34 @@ impl FontManager {
     pub fn get_glyph(&mut self, font_idx: usize, c: char, size: f32) -> Option<GlyphInfo> {
         let px_size = size as u32;
         
+        // 1. Try preferred font
         if let Some(info) = self.atlas.get(font_idx, c, px_size) {
             return Some(*info);
         }
 
-        // Rasterize
-        if font_idx >= self.fonts.len() { return None; }
-        
-        let (metrics, bitmap) = self.fonts[font_idx].rasterize(c, size);
-        
-        if let Some(info) = self.atlas.pack_glyph(font_idx, c, px_size, metrics, &bitmap) {
-            self.texture_dirty = true;
-            return Some(info);
+        if font_idx < self.fonts.len() && (self.fonts[font_idx].lookup_glyph_index(c) != 0 || c.is_whitespace()) {
+            let (metrics, bitmap) = self.fonts[font_idx].rasterize(c, size);
+            if let Some(info) = self.atlas.pack_glyph(font_idx, c, px_size, metrics, &bitmap) {
+                self.texture_dirty = true;
+                return Some(info);
+            }
+        }
+
+        // 2. Fallback: try all other fonts
+        for (idx, font) in self.fonts.iter().enumerate() {
+            if idx == font_idx { continue; }
+            
+            if let Some(info) = self.atlas.get(idx, c, px_size) {
+                return Some(*info);
+            }
+
+            if font.lookup_glyph_index(c) != 0 || c.is_whitespace() {
+                let (metrics, bitmap) = font.rasterize(c, size);
+                if let Some(info) = self.atlas.pack_glyph(idx, c, px_size, metrics, &bitmap) {
+                    self.texture_dirty = true;
+                    return Some(info);
+                }
+            }
         }
         
         None
