@@ -147,7 +147,10 @@ impl FocusManager {
             self.next_index += 1;
             i
         });
-        self.focusables.push(FocusableNode { id, tab_index: index });
+        self.focusables.push(FocusableNode {
+            id,
+            tab_index: index,
+        });
     }
 
     /// Clear all registered focusables (call at frame start)
@@ -206,7 +209,11 @@ impl FocusManager {
         if let Some(current) = self.current_focus {
             for (i, node) in self.focusables.iter().enumerate() {
                 if node.id == current {
-                    let prev = if i == 0 { self.focusables.len() - 1 } else { i - 1 };
+                    let prev = if i == 0 {
+                        self.focusables.len() - 1
+                    } else {
+                        i - 1
+                    };
                     self.current_focus = Some(self.focusables[prev].id);
                     return;
                 }
@@ -277,17 +284,17 @@ impl Default for AccessibleStore {
 #[cfg(windows)]
 pub fn is_high_contrast_mode() -> bool {
     use std::mem::size_of;
-    
+
     #[repr(C)]
     struct HighContrastW {
         cb_size: u32,
         dw_flags: u32,
         lpsz_default_scheme: *mut u16,
     }
-    
+
     const HCF_HIGHCONTRASTON: u32 = 0x00000001;
     const SPI_GETHIGHCONTRAST: u32 = 0x0042;
-    
+
     extern "system" {
         fn SystemParametersInfoW(
             uiAction: u32,
@@ -296,20 +303,21 @@ pub fn is_high_contrast_mode() -> bool {
             fWinIni: u32,
         ) -> i32;
     }
-    
+
     unsafe {
         let mut hc = HighContrastW {
             cb_size: size_of::<HighContrastW>() as u32,
             dw_flags: 0,
             lpsz_default_scheme: std::ptr::null_mut(),
         };
-        
+
         if SystemParametersInfoW(
             SPI_GETHIGHCONTRAST,
             size_of::<HighContrastW>() as u32,
             &mut hc as *mut _ as *mut std::ffi::c_void,
             0,
-        ) != 0 {
+        ) != 0
+        {
             return (hc.dw_flags & HCF_HIGHCONTRASTON) != 0;
         }
     }
@@ -319,13 +327,17 @@ pub fn is_high_contrast_mode() -> bool {
 #[cfg(not(windows))]
 pub fn is_high_contrast_mode() -> bool {
     // Check environment variable on other platforms
-    std::env::var("HIGH_CONTRAST").map(|v| v == "1").unwrap_or(false)
+    std::env::var("HIGH_CONTRAST")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 /// Reduced motion preference (respects system settings)
 pub fn prefers_reduced_motion() -> bool {
     // Check environment variable
-    std::env::var("REDUCED_MOTION").map(|v| v == "1").unwrap_or(false)
+    std::env::var("REDUCED_MOTION")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -335,7 +347,7 @@ mod tests {
     #[test]
     fn test_focus_manager() {
         let mut fm = FocusManager::new();
-        
+
         fm.register(1, Some(0));
         fm.register(2, Some(1));
         fm.register(3, Some(2));

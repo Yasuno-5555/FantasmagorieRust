@@ -1,13 +1,12 @@
-
-use std::collections::HashMap;
 use crate::core::{Rectangle, Vec2};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug)]
 pub struct GlyphInfo {
-    pub uv: Rectangle,      // UV coordinates in atlas
-    pub size: Vec2,         // Pixel size of glyph
-    pub bearing: Vec2,      // Offset from pen position
-    pub advance: f32,       // Advance width
+    pub uv: Rectangle, // UV coordinates in atlas
+    pub size: Vec2,    // Pixel size of glyph
+    pub bearing: Vec2, // Offset from pen position
+    pub advance: f32,  // Advance width
 }
 
 pub struct FontAtlas {
@@ -15,7 +14,7 @@ pub struct FontAtlas {
     pub width: u32,
     pub height: u32,
     pub glyphs: HashMap<(usize, char, u32), GlyphInfo>, // (font_idx, char, px_size) -> Info
-    
+
     // Packing state
     current_x: u32,
     current_y: u32,
@@ -36,10 +35,17 @@ impl FontAtlas {
     }
 
     /// Add a glyph to the atlas
-    pub fn pack_glyph(&mut self, font_idx: usize, c: char, px_size: u32, metrics: fontdue::Metrics, bitmap: &[u8]) -> Option<GlyphInfo> {
+    pub fn pack_glyph(
+        &mut self,
+        font_idx: usize,
+        c: char,
+        px_size: u32,
+        metrics: fontdue::Metrics,
+        bitmap: &[u8],
+    ) -> Option<GlyphInfo> {
         let w = metrics.width as u32;
         let h = metrics.height as u32;
-        
+
         // Add 1px padding
         let padding = 1;
         let pack_w = w + padding * 2;
@@ -65,7 +71,7 @@ impl FontAtlas {
                 let dest_x = self.current_x + padding + x;
                 let dest_y = self.current_y + padding + y;
                 let dest_idx = (dest_y * self.width + dest_x) as usize;
-                
+
                 if src_idx < bitmap.len() && dest_idx < self.texture_data.len() {
                     self.texture_data[dest_idx] = bitmap[src_idx];
                 }

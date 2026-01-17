@@ -103,7 +103,12 @@ pub struct SafeAreaInsets {
 
 impl SafeAreaInsets {
     pub fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
-        Self { top, right, bottom, left }
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
     }
 
     /// Get horizontal insets total
@@ -121,25 +126,25 @@ impl SafeAreaInsets {
 pub trait MobilePlatform {
     /// Show the soft keyboard
     fn show_keyboard(&self, hint: ImeHint, action: ImeAction, position: ImePosition);
-    
+
     /// Hide the soft keyboard
     fn hide_keyboard(&self);
-    
+
     /// Check if keyboard is visible
     fn is_keyboard_visible(&self) -> bool;
-    
+
     /// Get the current keyboard height
     fn keyboard_height(&self) -> f32;
-    
+
     /// Trigger haptic feedback
     fn haptic(&self, haptic_type: HapticType);
-    
+
     /// Get safe area insets
     fn safe_area_insets(&self) -> SafeAreaInsets;
-    
+
     /// Get device scale factor (for retina displays)
     fn scale_factor(&self) -> f32;
-    
+
     /// Check if running on a touch device
     fn is_touch_device(&self) -> bool;
 }
@@ -229,7 +234,10 @@ pub enum Orientation {
 
 impl Orientation {
     pub fn is_portrait(&self) -> bool {
-        matches!(self, Orientation::Portrait | Orientation::PortraitUpsideDown)
+        matches!(
+            self,
+            Orientation::Portrait | Orientation::PortraitUpsideDown
+        )
     }
 
     pub fn is_landscape(&self) -> bool {

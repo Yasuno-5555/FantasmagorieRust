@@ -82,7 +82,10 @@ pub struct LayoutBounds {
 impl LayoutBounds {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
-            x, y, width, height,
+            x,
+            y,
+            width,
+            height,
             ..Default::default()
         }
     }
@@ -130,7 +133,13 @@ impl PropertyValue {
             PropertyValue::Int(i) => i.to_string(),
             PropertyValue::Float(f) => format!("{:.2}", f),
             PropertyValue::Bool(b) => b.to_string(),
-            PropertyValue::Color { r, g, b, a } => format!("rgba({:.0}, {:.0}, {:.0}, {:.2})", r*255.0, g*255.0, b*255.0, a),
+            PropertyValue::Color { r, g, b, a } => format!(
+                "rgba({:.0}, {:.0}, {:.0}, {:.2})",
+                r * 255.0,
+                g * 255.0,
+                b * 255.0,
+                a
+            ),
             PropertyValue::Vec2 { x, y } => format!("({:.1}, {:.1})", x, y),
             PropertyValue::Enum { value, .. } => value.clone(),
             PropertyValue::Array(arr) => format!("[{} items]", arr.len()),
@@ -211,9 +220,9 @@ impl Inspector {
     pub fn register(&mut self, info: WidgetInfo) {
         let id = info.id.clone();
         let parent_id = info.parent_id.clone();
-        
+
         self.widgets.insert(id.clone(), info);
-        
+
         if parent_id.is_none() {
             self.roots.push(id);
         } else if let Some(parent) = parent_id {
@@ -247,7 +256,10 @@ impl Inspector {
         let mut current = self.widgets.get(id).and_then(|w| w.parent_id.clone());
         while let Some(parent_id) = current {
             self.expanded.insert(parent_id.clone(), true);
-            current = self.widgets.get(&parent_id).and_then(|w| w.parent_id.clone());
+            current = self
+                .widgets
+                .get(&parent_id)
+                .and_then(|w| w.parent_id.clone());
         }
     }
 
@@ -282,24 +294,29 @@ impl Inspector {
         if self.search_filter.is_empty() {
             return true;
         }
-        info.display_name.to_lowercase().contains(&self.search_filter) ||
-        info.widget_type.to_lowercase().contains(&self.search_filter) ||
-        info.id.to_lowercase().contains(&self.search_filter)
+        info.display_name
+            .to_lowercase()
+            .contains(&self.search_filter)
+            || info
+                .widget_type
+                .to_lowercase()
+                .contains(&self.search_filter)
+            || info.id.to_lowercase().contains(&self.search_filter)
     }
 
     /// Get filtered widgets for display
     pub fn get_visible_widgets(&self) -> Vec<&WidgetInfo> {
-        self.widgets.values()
-            .filter(|w| {
-                (!self.show_only_visible || w.visible) && self.matches_filter(w)
-            })
+        self.widgets
+            .values()
+            .filter(|w| (!self.show_only_visible || w.visible) && self.matches_filter(w))
             .collect()
     }
 
     /// Find widget at position (for hover highlighting)
     pub fn widget_at(&self, x: f32, y: f32) -> Option<&WidgetInfo> {
         // Find deepest widget containing point
-        self.widgets.values()
+        self.widgets
+            .values()
             .filter(|w| w.visible)
             .filter(|w| {
                 let b = &w.bounds;
@@ -309,7 +326,9 @@ impl Inspector {
                 // Prefer deeper (smaller area) widgets
                 let area_a = a.bounds.width * a.bounds.height;
                 let area_b = b.bounds.width * b.bounds.height;
-                area_b.partial_cmp(&area_a).unwrap_or(std::cmp::Ordering::Equal)
+                area_b
+                    .partial_cmp(&area_a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
     }
 
@@ -375,7 +394,7 @@ mod tests {
     #[test]
     fn test_inspector_basics() {
         let mut inspector = Inspector::new();
-        
+
         let mut root = WidgetInfo::new("root", "Column");
         root.bounds = LayoutBounds::new(0.0, 0.0, 100.0, 100.0);
         inspector.register(root);
@@ -392,7 +411,12 @@ mod tests {
 
     #[test]
     fn test_property_values() {
-        let color = PropertyValue::Color { r: 1.0, g: 0.5, b: 0.0, a: 1.0 };
+        let color = PropertyValue::Color {
+            r: 1.0,
+            g: 0.5,
+            b: 0.0,
+            a: 1.0,
+        };
         assert_eq!(color.type_name(), "Color");
         assert!(color.as_string().contains("rgba"));
     }

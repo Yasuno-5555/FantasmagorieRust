@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+*.so
+*.dll
+*.dylib
+
+# Logs and temporary files
+*.log
+*.txt
+!CMakeLists.txt
+!LICENSE.txt
+*errors.txt
+build_log*.txt
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Temporary scripts
+check_errors.py
+full_check.py

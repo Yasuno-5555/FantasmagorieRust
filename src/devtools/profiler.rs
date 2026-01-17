@@ -158,7 +158,7 @@ impl Profiler {
         }
         if let Some(start) = self.frame_start.take() {
             self.current.total_ms = start.elapsed().as_secs_f32() * 1000.0;
-            
+
             // Add to history
             if self.history.len() >= self.config.history_size {
                 self.history.pop_front();
@@ -269,7 +269,11 @@ impl Profiler {
         let max = times.iter().copied().fold(0.0f32, f32::max);
         let avg = times.iter().sum::<f32>() / times.len() as f32;
 
-        FrameStats { min_ms: min, max_ms: max, avg_ms: avg }
+        FrameStats {
+            min_ms: min,
+            max_ms: max,
+            avg_ms: avg,
+        }
     }
 
     /// Get frame time history for graph
@@ -320,7 +324,8 @@ impl Profiler {
                 layout_pct: last.layout_ms / total * 100.0,
                 render_pct: last.render_ms / total * 100.0,
                 input_pct: last.input_ms / total * 100.0,
-                other_pct: 100.0 - (last.layout_ms + last.render_ms + last.input_ms) / total * 100.0,
+                other_pct: 100.0
+                    - (last.layout_ms + last.render_ms + last.input_ms) / total * 100.0,
             }
         } else {
             FrameBreakdown::default()
@@ -374,7 +379,7 @@ mod tests {
     #[test]
     fn test_profiler_basics() {
         let mut profiler = Profiler::new();
-        
+
         profiler.begin_frame();
         std::thread::sleep(Duration::from_millis(1));
         profiler.end_frame();
@@ -386,7 +391,7 @@ mod tests {
     #[test]
     fn test_frame_stats() {
         let mut profiler = Profiler::new();
-        
+
         for _ in 0..10 {
             profiler.begin_frame();
             profiler.end_frame();

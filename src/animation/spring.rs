@@ -18,7 +18,11 @@ pub struct SpringConfig {
 
 impl SpringConfig {
     pub fn new(stiffness: f32, damping: f32, mass: f32) -> Self {
-        Self { stiffness, damping, mass }
+        Self {
+            stiffness,
+            damping,
+            mass,
+        }
     }
 
     /// Calculate critical damping coefficient
@@ -47,34 +51,74 @@ pub mod presets {
     use super::SpringConfig;
 
     /// Default spring - balanced feel
-    pub const DEFAULT: SpringConfig = SpringConfig { stiffness: 170.0, damping: 26.0, mass: 1.0 };
-    
+    pub const DEFAULT: SpringConfig = SpringConfig {
+        stiffness: 170.0,
+        damping: 26.0,
+        mass: 1.0,
+    };
+
     /// Gentle spring - slow and smooth
-    pub const GENTLE: SpringConfig = SpringConfig { stiffness: 120.0, damping: 14.0, mass: 1.0 };
-    
+    pub const GENTLE: SpringConfig = SpringConfig {
+        stiffness: 120.0,
+        damping: 14.0,
+        mass: 1.0,
+    };
+
     /// Wobbly spring - bouncy with oscillation
-    pub const WOBBLY: SpringConfig = SpringConfig { stiffness: 180.0, damping: 12.0, mass: 1.0 };
-    
+    pub const WOBBLY: SpringConfig = SpringConfig {
+        stiffness: 180.0,
+        damping: 12.0,
+        mass: 1.0,
+    };
+
     /// Stiff spring - fast and snappy
-    pub const STIFF: SpringConfig = SpringConfig { stiffness: 210.0, damping: 20.0, mass: 1.0 };
-    
+    pub const STIFF: SpringConfig = SpringConfig {
+        stiffness: 210.0,
+        damping: 20.0,
+        mass: 1.0,
+    };
+
     /// Slow spring - very slow movement
-    pub const SLOW: SpringConfig = SpringConfig { stiffness: 280.0, damping: 60.0, mass: 1.0 };
-    
+    pub const SLOW: SpringConfig = SpringConfig {
+        stiffness: 280.0,
+        damping: 60.0,
+        mass: 1.0,
+    };
+
     /// Molasses spring - extremely slow
-    pub const MOLASSES: SpringConfig = SpringConfig { stiffness: 280.0, damping: 120.0, mass: 1.0 };
-    
+    pub const MOLASSES: SpringConfig = SpringConfig {
+        stiffness: 280.0,
+        damping: 120.0,
+        mass: 1.0,
+    };
+
     /// No wobble - critically damped, no overshoot
-    pub const NO_WOBBLE: SpringConfig = SpringConfig { stiffness: 170.0, damping: 26.0, mass: 1.0 };
-    
+    pub const NO_WOBBLE: SpringConfig = SpringConfig {
+        stiffness: 170.0,
+        damping: 26.0,
+        mass: 1.0,
+    };
+
     /// iOS default spring
-    pub const IOS_DEFAULT: SpringConfig = SpringConfig { stiffness: 400.0, damping: 30.0, mass: 1.0 };
-    
+    pub const IOS_DEFAULT: SpringConfig = SpringConfig {
+        stiffness: 400.0,
+        damping: 30.0,
+        mass: 1.0,
+    };
+
     /// Material Design spring
-    pub const MATERIAL: SpringConfig = SpringConfig { stiffness: 600.0, damping: 40.0, mass: 1.0 };
-    
+    pub const MATERIAL: SpringConfig = SpringConfig {
+        stiffness: 600.0,
+        damping: 40.0,
+        mass: 1.0,
+    };
+
     /// Bouncy spring - lots of oscillation
-    pub const BOUNCY: SpringConfig = SpringConfig { stiffness: 300.0, damping: 10.0, mass: 1.0 };
+    pub const BOUNCY: SpringConfig = SpringConfig {
+        stiffness: 300.0,
+        damping: 10.0,
+        mass: 1.0,
+    };
 }
 
 /// Spring animator state
@@ -142,12 +186,12 @@ impl Spring {
         // Spring force: F = -k * x
         // Damping force: F = -c * v
         // F = ma, so a = F/m
-        
+
         let displacement = self.value - self.target;
         let spring_force = -self.config.stiffness * displacement;
         let damping_force = -self.config.damping * self.velocity;
         let acceleration = (spring_force + damping_force) / self.config.mass;
-        
+
         self.velocity += acceleration * delta_seconds;
         self.value += self.velocity * delta_seconds;
 

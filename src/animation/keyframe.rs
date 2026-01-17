@@ -14,52 +14,106 @@ pub type EasingFn = fn(f32) -> f32;
 /// Built-in easing functions
 pub mod easing {
     /// Linear interpolation
-    pub fn linear(t: f32) -> f32 { t }
-    
+    pub fn linear(t: f32) -> f32 {
+        t
+    }
+
     /// Ease in (slow start)
-    pub fn ease_in_quad(t: f32) -> f32 { t * t }
-    pub fn ease_in_cubic(t: f32) -> f32 { t * t * t }
-    pub fn ease_in_quart(t: f32) -> f32 { t * t * t * t }
-    pub fn ease_in_quint(t: f32) -> f32 { t * t * t * t * t }
-    pub fn ease_in_sine(t: f32) -> f32 { 1.0 - (t * std::f32::consts::FRAC_PI_2).cos() }
-    pub fn ease_in_expo(t: f32) -> f32 { if t == 0.0 { 0.0 } else { (2.0_f32).powf(10.0 * t - 10.0) } }
-    pub fn ease_in_circ(t: f32) -> f32 { 1.0 - (1.0 - t * t).sqrt() }
-    
+    pub fn ease_in_quad(t: f32) -> f32 {
+        t * t
+    }
+    pub fn ease_in_cubic(t: f32) -> f32 {
+        t * t * t
+    }
+    pub fn ease_in_quart(t: f32) -> f32 {
+        t * t * t * t
+    }
+    pub fn ease_in_quint(t: f32) -> f32 {
+        t * t * t * t * t
+    }
+    pub fn ease_in_sine(t: f32) -> f32 {
+        1.0 - (t * std::f32::consts::FRAC_PI_2).cos()
+    }
+    pub fn ease_in_expo(t: f32) -> f32 {
+        if t == 0.0 {
+            0.0
+        } else {
+            (2.0_f32).powf(10.0 * t - 10.0)
+        }
+    }
+    pub fn ease_in_circ(t: f32) -> f32 {
+        1.0 - (1.0 - t * t).sqrt()
+    }
+
     /// Ease out (slow end)
-    pub fn ease_out_quad(t: f32) -> f32 { 1.0 - (1.0 - t) * (1.0 - t) }
-    pub fn ease_out_cubic(t: f32) -> f32 { 1.0 - (1.0 - t).powi(3) }
-    pub fn ease_out_quart(t: f32) -> f32 { 1.0 - (1.0 - t).powi(4) }
-    pub fn ease_out_quint(t: f32) -> f32 { 1.0 - (1.0 - t).powi(5) }
-    pub fn ease_out_sine(t: f32) -> f32 { (t * std::f32::consts::FRAC_PI_2).sin() }
-    pub fn ease_out_expo(t: f32) -> f32 { if t == 1.0 { 1.0 } else { 1.0 - (2.0_f32).powf(-10.0 * t) } }
-    pub fn ease_out_circ(t: f32) -> f32 { (1.0 - (t - 1.0) * (t - 1.0)).sqrt() }
-    
+    pub fn ease_out_quad(t: f32) -> f32 {
+        1.0 - (1.0 - t) * (1.0 - t)
+    }
+    pub fn ease_out_cubic(t: f32) -> f32 {
+        1.0 - (1.0 - t).powi(3)
+    }
+    pub fn ease_out_quart(t: f32) -> f32 {
+        1.0 - (1.0 - t).powi(4)
+    }
+    pub fn ease_out_quint(t: f32) -> f32 {
+        1.0 - (1.0 - t).powi(5)
+    }
+    pub fn ease_out_sine(t: f32) -> f32 {
+        (t * std::f32::consts::FRAC_PI_2).sin()
+    }
+    pub fn ease_out_expo(t: f32) -> f32 {
+        if t == 1.0 {
+            1.0
+        } else {
+            1.0 - (2.0_f32).powf(-10.0 * t)
+        }
+    }
+    pub fn ease_out_circ(t: f32) -> f32 {
+        (1.0 - (t - 1.0) * (t - 1.0)).sqrt()
+    }
+
     /// Ease in-out (slow start and end)
     pub fn ease_in_out_quad(t: f32) -> f32 {
-        if t < 0.5 { 2.0 * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(2) / 2.0 }
+        if t < 0.5 {
+            2.0 * t * t
+        } else {
+            1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+        }
     }
     pub fn ease_in_out_cubic(t: f32) -> f32 {
-        if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
+        if t < 0.5 {
+            4.0 * t * t * t
+        } else {
+            1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+        }
     }
     pub fn ease_in_out_quart(t: f32) -> f32 {
-        if t < 0.5 { 8.0 * t.powi(4) } else { 1.0 - (-2.0 * t + 2.0).powi(4) / 2.0 }
+        if t < 0.5 {
+            8.0 * t.powi(4)
+        } else {
+            1.0 - (-2.0 * t + 2.0).powi(4) / 2.0
+        }
     }
     pub fn ease_in_out_sine(t: f32) -> f32 {
         -((std::f32::consts::PI * t).cos() - 1.0) / 2.0
     }
-    
+
     /// Elastic easing (spring-like overshoot)
     pub fn ease_in_elastic(t: f32) -> f32 {
-        if t == 0.0 || t == 1.0 { return t; }
+        if t == 0.0 || t == 1.0 {
+            return t;
+        }
         let c4 = (2.0 * std::f32::consts::PI) / 3.0;
         -(2.0_f32.powf(10.0 * t - 10.0)) * ((t * 10.0 - 10.75) * c4).sin()
     }
     pub fn ease_out_elastic(t: f32) -> f32 {
-        if t == 0.0 || t == 1.0 { return t; }
+        if t == 0.0 || t == 1.0 {
+            return t;
+        }
         let c4 = (2.0 * std::f32::consts::PI) / 3.0;
         2.0_f32.powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0
     }
-    
+
     /// Back easing (slight overshoot)
     pub fn ease_in_back(t: f32) -> f32 {
         let c1 = 1.70158;
@@ -71,7 +125,7 @@ pub mod easing {
         let c3 = c1 + 1.0;
         1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
     }
-    
+
     /// Bounce easing
     pub fn ease_out_bounce(t: f32) -> f32 {
         let n1 = 7.5625;
@@ -89,7 +143,9 @@ pub mod easing {
             n1 * t * t + 0.984375
         }
     }
-    pub fn ease_in_bounce(t: f32) -> f32 { 1.0 - ease_out_bounce(1.0 - t) }
+    pub fn ease_in_bounce(t: f32) -> f32 {
+        1.0 - ease_out_bounce(1.0 - t)
+    }
 }
 
 /// A single keyframe
@@ -105,7 +161,11 @@ pub struct Keyframe {
 
 impl Keyframe {
     pub fn new(time: f32, value: f32) -> Self {
-        Self { time, value, easing: easing::linear }
+        Self {
+            time,
+            value,
+            easing: easing::linear,
+        }
     }
 
     pub fn with_easing(mut self, easing: EasingFn) -> Self {
@@ -161,7 +221,8 @@ impl KeyframeTrack {
     /// Add a keyframe
     pub fn add_keyframe(&mut self, keyframe: Keyframe) -> &mut Self {
         self.keyframes.push(keyframe);
-        self.keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+        self.keyframes
+            .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
         self
     }
 
@@ -191,7 +252,7 @@ impl KeyframeTrack {
         // Find surrounding keyframes
         let mut prev_idx = 0;
         let mut next_idx = 0;
-        
+
         for (i, kf) in self.keyframes.iter().enumerate() {
             if kf.time <= t {
                 prev_idx = i;
@@ -224,8 +285,12 @@ impl KeyframeTrack {
         prev.value + (next.value - prev.value) * eased_t
     }
 
-    pub fn name(&self) -> &str { &self.name }
-    pub fn duration_ms(&self) -> f32 { self.duration_ms }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn duration_ms(&self) -> f32 {
+        self.duration_ms
+    }
 }
 
 /// Timeline animation with multiple tracks
@@ -302,7 +367,7 @@ impl Timeline {
         }
 
         let delta = delta_ms * self.speed;
-        
+
         match self.direction {
             Direction::Forward => {
                 self.current_time_ms += delta;
@@ -354,7 +419,8 @@ impl Timeline {
     /// Get all current values
     pub fn get_all(&self) -> HashMap<String, f32> {
         let t = self.current_time_ms / self.duration_ms;
-        self.tracks.iter()
+        self.tracks
+            .iter()
             .map(|(name, track)| (name.clone(), track.sample(t)))
             .collect()
     }
@@ -398,12 +464,12 @@ mod tests {
         timeline.add_track(
             KeyframeTrack::new("x", 1000.0)
                 .keyframe(0.0, 0.0)
-                .keyframe(1.0, 100.0)
+                .keyframe(1.0, 100.0),
         );
-        
+
         timeline.play();
         timeline.update(500.0);
-        
+
         assert!((timeline.get("x").unwrap() - 50.0).abs() < 0.01);
     }
 }

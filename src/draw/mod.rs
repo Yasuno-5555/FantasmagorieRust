@@ -3,5 +3,5 @@
 mod drawlist;
 pub mod path;
 
-pub use drawlist::{DrawList, DrawCommand};
-pub use path::{Path, BezierTessellator};
+pub use drawlist::{DrawCommand, DrawList};
+pub use path::{BezierTessellator, Path};

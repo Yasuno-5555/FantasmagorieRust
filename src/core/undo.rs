@@ -12,18 +12,18 @@ use std::collections::VecDeque;
 pub trait Command: Send {
     /// Execute the command
     fn execute(&mut self);
-    
+
     /// Undo the command
     fn undo(&mut self);
-    
+
     /// Get command description
     fn description(&self) -> &str;
-    
+
     /// Check if command can be merged with another
     fn can_merge(&self, _other: &dyn Command) -> bool {
         false
     }
-    
+
     /// Merge with another command (for continuous edits like typing)
     fn merge(&mut self, _other: Box<dyn Command>) -> bool {
         false
@@ -43,7 +43,7 @@ unsafe impl<T: Clone + PartialEq + Send + 'static> Send for ValueChangeCommand<T
 
 impl<T: Clone + PartialEq + Send + 'static> ValueChangeCommand<T> {
     /// Create a new value change command
-    /// 
+    ///
     /// # Safety
     /// The target pointer must remain valid for the lifetime of this command
     pub unsafe fn new(target: &mut T, new_value: T, description: &str) -> Self {
@@ -242,7 +242,12 @@ impl CommandStack {
             cmd.undo();
             let desc = cmd.description().to_string();
             self.redo_stack.push(cmd);
-            Some(self.redo_stack.last().map(|c| c.description()).unwrap_or(""))
+            Some(
+                self.redo_stack
+                    .last()
+                    .map(|c| c.description())
+                    .unwrap_or(""),
+            )
         } else {
             None
         }
@@ -254,7 +259,12 @@ impl CommandStack {
             cmd.execute();
             let desc = cmd.description().to_string();
             self.undo_stack.push_back(cmd);
-            Some(self.undo_stack.back().map(|c| c.description()).unwrap_or(""))
+            Some(
+                self.undo_stack
+                    .back()
+                    .map(|c| c.description())
+                    .unwrap_or(""),
+            )
         } else {
             None
         }
@@ -308,7 +318,7 @@ mod tests {
         let mut cmd = CallbackCommand::new(
             move || *v1.lock().unwrap() = 10,
             move || *v2.lock().unwrap() = 0,
-            "Set value to 10"
+            "Set value to 10",
         );
 
         cmd.execute();
@@ -328,7 +338,7 @@ mod tests {
         stack.push(CallbackCommand::new(
             move || *v1.lock().unwrap() = 10,
             move || *v2.lock().unwrap() = 0,
-            "Set to 10"
+            "Set to 10",
         ));
         assert_eq!(*value.lock().unwrap(), 10);
 
@@ -351,7 +361,7 @@ mod tests {
         stack.push(CallbackCommand::new(
             move || *v1.lock().unwrap() += 5,
             move || *v2.lock().unwrap() -= 5,
-            "Add 5"
+            "Add 5",
         ));
 
         let v3 = value.clone();
@@ -359,7 +369,7 @@ mod tests {
         stack.push(CallbackCommand::new(
             move || *v3.lock().unwrap() += 7,
             move || *v4.lock().unwrap() -= 7,
-            "Add 7"
+            "Add 7",
         ));
 
         stack.end_batch();

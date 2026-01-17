@@ -1,6 +1,6 @@
 //! Micro-Interactions - Premium UI polish
 //! Ghost Scrollbar, Glass Toast, Laser Tooltip
-use crate::core::{ID, ColorF, Vec2};
+use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::ViewHeader;
 
 /// Toast notification state
@@ -32,7 +32,7 @@ impl<'a> ToastBuilder<'a> {
 
     pub fn build(self) -> &'a ViewHeader<'a> {
         self.view.text.set(self.message);
-        
+
         // Set color based on type
         let color = match self.toast_type {
             ToastType::Info => ColorF::new(0.3, 0.6, 1.0, 1.0),
@@ -41,7 +41,7 @@ impl<'a> ToastBuilder<'a> {
             ToastType::Error => ColorF::new(1.0, 0.3, 0.3, 1.0),
         };
         self.view.glow_color.set(color);
-        
+
         self.view
     }
 }

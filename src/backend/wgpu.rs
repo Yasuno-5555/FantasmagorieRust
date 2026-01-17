@@ -41,7 +41,7 @@ pub struct WgpuBackend {
     vertex_buffer: wgpu::Buffer,
     #[allow(dead_code)]
     vertex_capacity: usize,
-    
+
     // Font texture
     #[allow(dead_code)]
     font_texture: Option<wgpu::Texture>,
@@ -54,19 +54,19 @@ pub struct WgpuBackend {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     projection: [[f32; 4]; 4],
-    rect: [f32; 4],      // x, y, w, h
-    radii: [f32; 4],     // tl, tr, br, bl
+    rect: [f32; 4],  // x, y, w, h
+    radii: [f32; 4], // tl, tr, br, bl
     border_color: [f32; 4],
-    glow_color: [f32; 4],    // Added
+    glow_color: [f32; 4], // Added
 
     mode: i32,
     border_width: f32,
     elevation: f32,
-    is_squircle: i32,        // Added
+    is_squircle: i32, // Added
 
-    glow_strength: f32,      // Added
-    start_angle: f32,        // Added for Arc
-    end_angle: f32,          // Added for Arc
+    glow_strength: f32, // Added
+    start_angle: f32,   // Added for Arc
+    end_angle: f32,     // Added for Arc
     _pad3: f32,
 }
 
@@ -108,7 +108,9 @@ impl WgpuBackend {
 
         // Configure surface
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps.formats.iter()
+        let surface_format = surface_caps
+            .formats
+            .iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
@@ -277,12 +279,36 @@ impl WgpuBackend {
         let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
 
         [
-            Vertex { pos: [x0, y0], uv: [u0, v0], color: c },
-            Vertex { pos: [x0, y1], uv: [u0, v1], color: c },
-            Vertex { pos: [x1, y1], uv: [u1, v1], color: c },
-            Vertex { pos: [x0, y0], uv: [u0, v0], color: c },
-            Vertex { pos: [x1, y1], uv: [u1, v1], color: c },
-            Vertex { pos: [x1, y0], uv: [u1, v0], color: c },
+            Vertex {
+                pos: [x0, y0],
+                uv: [u0, v0],
+                color: c,
+            },
+            Vertex {
+                pos: [x0, y1],
+                uv: [u0, v1],
+                color: c,
+            },
+            Vertex {
+                pos: [x1, y1],
+                uv: [u1, v1],
+                color: c,
+            },
+            Vertex {
+                pos: [x0, y0],
+                uv: [u0, v0],
+                color: c,
+            },
+            Vertex {
+                pos: [x1, y1],
+                uv: [u1, v1],
+                color: c,
+            },
+            Vertex {
+                pos: [x1, y0],
+                uv: [u1, v0],
+                color: c,
+            },
         ]
     }
 
@@ -369,7 +395,9 @@ impl WgpuBackend {
             Ok(t) => t,
             Err(_) => return,
         };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Prepare Resources
         struct PreparedDraw {
@@ -381,139 +409,292 @@ impl WgpuBackend {
         let mut prepared = Vec::new();
 
         // Create font view once if texture exists
-        let font_view = self.font_texture.as_ref().map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
+        let font_view = self
+            .font_texture
+            .as_ref()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
 
         // Helper to prepare a draw
         let mut prepare = |uniforms: Uniforms, vertices: &[Vertex], label: &str| {
-            let u_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{} Uniforms", label)),
-                contents: bytemuck::bytes_of(&uniforms),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let v_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("{} Vertices", label)),
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            
-            // Use font view if available, otherwise we might need a dummy? 
+            let u_buf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} Uniforms", label)),
+                    contents: bytemuck::bytes_of(&uniforms),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+            let v_buf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{} Vertices", label)),
+                    contents: bytemuck::cast_slice(vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+
+            // Use font view if available, otherwise we might need a dummy?
             // For now, if no font, we can't really draw text but we can draw other things if we use a dummy view.
             // But our bind group layout EXPECTS a texture.
-            if font_view.is_none() { return; } 
+            if font_view.is_none() {
+                return;
+            }
 
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("{} Bind Group", label)),
                 layout: &self.bind_group_layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: u_buf.as_entire_binding() },
-                    wgpu::BindGroupEntry { 
-                        binding: 1, 
-                        resource: wgpu::BindingResource::TextureView(font_view.as_ref().unwrap()) 
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: u_buf.as_entire_binding(),
                     },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(font_view.as_ref().unwrap()),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
                 ],
             });
-            prepared.push(PreparedDraw { u_buf, v_buf, bind_group, vertex_count: vertices.len() as u32 });
+            prepared.push(PreparedDraw {
+                u_buf,
+                v_buf,
+                bind_group,
+                vertex_count: vertices.len() as u32,
+            });
         };
 
         // 1. Aurora
         let aurora_uniforms = Uniforms {
             projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
             rect: [0.0, 0.0, width as f32, height as f32],
-            radii: [0.0; 4], border_color: [0.0; 4], glow_color: [0.0; 4],
-            mode: 5, border_width: 0.0, elevation: 0.0, is_squircle: 0,
-            glow_strength: 0.0, start_angle: 0.0, end_angle: 0.0, _pad3: 0.0,
+            radii: [0.0; 4],
+            border_color: [0.0; 4],
+            glow_color: [0.0; 4],
+            mode: 5,
+            border_width: 0.0,
+            elevation: 0.0,
+            is_squircle: 0,
+            glow_strength: 0.0,
+            start_angle: 0.0,
+            end_angle: 0.0,
+            _pad3: 0.0,
         };
-        let aurora_verts = Self::quad_vertices(Vec2::ZERO, Vec2::new(width as f32, height as f32), ColorF::white());
+        let aurora_verts = Self::quad_vertices(
+            Vec2::ZERO,
+            Vec2::new(width as f32, height as f32),
+            ColorF::white(),
+        );
         prepare(aurora_uniforms, &aurora_verts, "Aurora");
 
         // 2. Commands
         for cmd in dl.commands() {
-             match cmd {
-                DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, wobble: _, glow_strength, glow_color } => {
-                     let uniforms = Uniforms {
-                         projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
-                         rect: [pos.x, pos.y, size.x, size.y],
-                         radii: *radii,
-                         border_color: [border_color.r, border_color.g, border_color.b, border_color.a],
-                         glow_color: [glow_color.r, glow_color.g, glow_color.b, glow_color.a],
-                         mode: 2, border_width: *border_width, elevation: *elevation,
-                         is_squircle: if *is_squircle { 1 } else { 0 }, glow_strength: *glow_strength,
-                         start_angle: 0.0, end_angle: 0.0, _pad3: 0.0,
-                     };
-                     let verts = Self::quad_vertices(*pos, *size, *color);
-                     prepare(uniforms, &verts, "RoundedRect");
+            match cmd {
+                DrawCommand::RoundedRect {
+                    pos,
+                    size,
+                    radii,
+                    color,
+                    elevation,
+                    is_squircle,
+                    border_width,
+                    border_color,
+                    wobble: _,
+                    glow_strength,
+                    glow_color,
+                } => {
+                    let uniforms = Uniforms {
+                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
+                        rect: [pos.x, pos.y, size.x, size.y],
+                        radii: *radii,
+                        border_color: [
+                            border_color.r,
+                            border_color.g,
+                            border_color.b,
+                            border_color.a,
+                        ],
+                        glow_color: [glow_color.r, glow_color.g, glow_color.b, glow_color.a],
+                        mode: 2,
+                        border_width: *border_width,
+                        elevation: *elevation,
+                        is_squircle: if *is_squircle { 1 } else { 0 },
+                        glow_strength: *glow_strength,
+                        start_angle: 0.0,
+                        end_angle: 0.0,
+                        _pad3: 0.0,
+                    };
+                    let verts = Self::quad_vertices(*pos, *size, *color);
+                    prepare(uniforms, &verts, "RoundedRect");
                 }
-                DrawCommand::Text { pos, size, uv, color } => {
-                     let uniforms = Uniforms {
-                         projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
-                         rect: [pos.x, pos.y, size.x, size.y],
-                         radii: [0.0; 4], border_color: [0.0; 4], glow_color: [0.0; 4],
-                         mode: 1, border_width: 0.0, elevation: 0.0, is_squircle: 0,
-                         glow_strength: 0.0, start_angle: 0.0, end_angle: 0.0, _pad3: 0.0,
-                     };
-                     let verts = Self::quad_vertices_uv(*pos, *size, *uv, *color);
-                     prepare(uniforms, &verts, "Text");
+                DrawCommand::Text {
+                    pos,
+                    size,
+                    uv,
+                    color,
+                } => {
+                    let uniforms = Uniforms {
+                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
+                        rect: [pos.x, pos.y, size.x, size.y],
+                        radii: [0.0; 4],
+                        border_color: [0.0; 4],
+                        glow_color: [0.0; 4],
+                        mode: 1,
+                        border_width: 0.0,
+                        elevation: 0.0,
+                        is_squircle: 0,
+                        glow_strength: 0.0,
+                        start_angle: 0.0,
+                        end_angle: 0.0,
+                        _pad3: 0.0,
+                    };
+                    let verts = Self::quad_vertices_uv(*pos, *size, *uv, *color);
+                    prepare(uniforms, &verts, "Text");
                 }
-                DrawCommand::Arc { center, radius, start_angle, end_angle, thickness, color } => {
-                     let s = *radius * 2.0 + *thickness * 2.0;
-                     let pos = Vec2::new(center.x - s * 0.5, center.y - s * 0.5);
-                     let uniforms = Uniforms {
-                         projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
-                         rect: [pos.x, pos.y, s, s],
-                         radii: [*radius, *thickness, 0.0, 0.0],
-                         border_color: [0.0; 4], glow_color: [color.r, color.g, color.b, color.a],
-                         mode: 6, border_width: 0.0, elevation: 0.0, is_squircle: 0,
-                         glow_strength: 0.0, start_angle: *start_angle, end_angle: *end_angle, _pad3: 0.0,
-                     };
-                     let verts = Self::quad_vertices(pos, Vec2::new(s, s), *color);
-                     prepare(uniforms, &verts, "Arc");
+                DrawCommand::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                    thickness,
+                    color,
+                } => {
+                    let s = *radius * 2.0 + *thickness * 2.0;
+                    let pos = Vec2::new(center.x - s * 0.5, center.y - s * 0.5);
+                    let uniforms = Uniforms {
+                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
+                        rect: [pos.x, pos.y, s, s],
+                        radii: [*radius, *thickness, 0.0, 0.0],
+                        border_color: [0.0; 4],
+                        glow_color: [color.r, color.g, color.b, color.a],
+                        mode: 6,
+                        border_width: 0.0,
+                        elevation: 0.0,
+                        is_squircle: 0,
+                        glow_strength: 0.0,
+                        start_angle: *start_angle,
+                        end_angle: *end_angle,
+                        _pad3: 0.0,
+                    };
+                    let verts = Self::quad_vertices(pos, Vec2::new(s, s), *color);
+                    prepare(uniforms, &verts, "Arc");
                 }
-                DrawCommand::Plot { points, color, fill_color, thickness, baseline } => {
-                    if points.len() < 2 { continue; }
+                DrawCommand::Plot {
+                    points,
+                    color,
+                    fill_color,
+                    thickness,
+                    baseline,
+                } => {
+                    if points.len() < 2 {
+                        continue;
+                    }
                     let uniforms = Uniforms {
                         projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
                         rect: [0.0, 0.0, width as f32, height as f32],
-                        radii: [0.0; 4], border_color: [fill_color.r, fill_color.g, fill_color.b, fill_color.a],
+                        radii: [0.0; 4],
+                        border_color: [fill_color.r, fill_color.g, fill_color.b, fill_color.a],
                         glow_color: [color.r, color.g, color.b, color.a],
-                        mode: 7, border_width: *thickness, elevation: 0.0, is_squircle: 0,
-                        glow_strength: 0.0, start_angle: 0.0, end_angle: 0.0, _pad3: 0.0,
+                        mode: 7,
+                        border_width: *thickness,
+                        elevation: 0.0,
+                        is_squircle: 0,
+                        glow_strength: 0.0,
+                        start_angle: 0.0,
+                        end_angle: 0.0,
+                        _pad3: 0.0,
                     };
                     let mut verts = Vec::with_capacity(points.len() * 12);
-                    for i in 0..points.len()-1 {
-                        let p0 = points[i]; let p1 = points[i+1];
-                        let b0 = Vec2::new(p0.x, *baseline); let b1 = Vec2::new(p1.x, *baseline);
+                    for i in 0..points.len() - 1 {
+                        let p0 = points[i];
+                        let p1 = points[i + 1];
+                        let b0 = Vec2::new(p0.x, *baseline);
+                        let b1 = Vec2::new(p1.x, *baseline);
                         let c = [fill_color.r, fill_color.g, fill_color.b, fill_color.a];
-                        verts.push(Vertex { pos: [p0.x, p0.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [p1.x, p1.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [b1.x, b1.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [p0.x, p0.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [b1.x, b1.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [b0.x, b0.y], uv: [0.0, 0.0], color: c });
+                        verts.push(Vertex {
+                            pos: [p0.x, p0.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [p1.x, p1.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [b1.x, b1.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [p0.x, p0.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [b1.x, b1.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [b0.x, b0.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
                     }
                     let half_t = *thickness * 0.5;
-                    for i in 0..points.len()-1 {
-                        let p0 = points[i]; let p1 = points[i+1];
+                    for i in 0..points.len() - 1 {
+                        let p0 = points[i];
+                        let p1 = points[i + 1];
                         let dir = (p1 - p0).normalized();
                         let normal = Vec2::new(-dir.y, dir.x) * half_t;
-                        let v0 = p0 + normal; let v1 = p0 - normal;
-                        let v2 = p1 + normal; let v3 = p1 - normal;
+                        let v0 = p0 + normal;
+                        let v1 = p0 - normal;
+                        let v2 = p1 + normal;
+                        let v3 = p1 - normal;
                         let c = [color.r, color.g, color.b, color.a];
-                        verts.push(Vertex { pos: [v0.x, v0.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [v1.x, v1.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [v2.x, v2.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [v1.x, v1.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [v3.x, v3.y], uv: [0.0, 0.0], color: c });
-                        verts.push(Vertex { pos: [v2.x, v2.y], uv: [0.0, 0.0], color: c });
+                        verts.push(Vertex {
+                            pos: [v0.x, v0.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [v1.x, v1.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [v2.x, v2.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [v1.x, v1.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [v3.x, v3.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
+                        verts.push(Vertex {
+                            pos: [v2.x, v2.y],
+                            uv: [0.0, 0.0],
+                            color: c,
+                        });
                     }
                     prepare(uniforms, &verts, "Plot");
                 }
                 _ => {}
-             }
+            }
         }
 
         // 3. Execution Pass
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Main Encoder") });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Main Encoder"),
+            });
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Pass"),
@@ -521,7 +702,12 @@ impl WgpuBackend {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.08, g: 0.08, b: 0.1, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.08,
+                            g: 0.08,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -537,14 +723,16 @@ impl WgpuBackend {
                 render_pass.draw(0..p.vertex_count, 0..1);
             }
         }
-        
+
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
     }
 }
 
 impl super::Backend for WgpuBackend {
-    fn name(&self) -> &str { "WGPU" }
+    fn name(&self) -> &str {
+        "WGPU"
+    }
     fn render(&mut self, _dl: &DrawList, _width: u32, _height: u32) {
         eprintln!("WGPU: Use render_to_surface() for proper rendering");
     }

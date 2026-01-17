@@ -21,11 +21,24 @@ pub enum GestureType {
     /// Long press (held for duration)
     LongPress { pos: Vec2, duration_ms: u32 },
     /// Swipe gesture with direction and velocity
-    Swipe { start: Vec2, end: Vec2, velocity: Vec2, direction: SwipeDirection },
+    Swipe {
+        start: Vec2,
+        end: Vec2,
+        velocity: Vec2,
+        direction: SwipeDirection,
+    },
     /// Drag gesture (ongoing movement)
-    Drag { start: Vec2, current: Vec2, delta: Vec2 },
+    Drag {
+        start: Vec2,
+        current: Vec2,
+        delta: Vec2,
+    },
     /// Pinch gesture (two-finger zoom)
-    Pinch { center: Vec2, scale: f32, rotation: f32 },
+    Pinch {
+        center: Vec2,
+        scale: f32,
+        rotation: f32,
+    },
     /// Pan gesture (two-finger drag)
     Pan { delta: Vec2 },
 }
@@ -109,14 +122,16 @@ impl GestureDetector {
     /// Update the current time (call each frame with delta_ms)
     pub fn update(&mut self, current_time_ms: u64) {
         self.current_time_ms = current_time_ms;
-        
+
         // Check for long press
         if self.touches.len() == 1 {
             let touch = &self.touches[0];
             let duration = (self.current_time_ms - touch.start_time_ms) as u32;
             let distance = (touch.pos - touch.start_pos).length();
-            
-            if duration >= self.config.long_press_duration_ms && distance < self.config.tap_threshold {
+
+            if duration >= self.config.long_press_duration_ms
+                && distance < self.config.tap_threshold
+            {
                 self.pending_gesture = GestureType::LongPress {
                     pos: touch.pos,
                     duration_ms: duration,
@@ -151,7 +166,7 @@ impl GestureDetector {
                     delta,
                 };
             }
-            
+
             // Two-touch pinch/pan
             if self.touches.len() == 2 {
                 return self.detect_pinch_pan();
@@ -168,14 +183,14 @@ impl GestureDetector {
         } else {
             GestureType::None
         };
-        
+
         // Return pending gesture if we have one
         if self.pending_gesture != GestureType::None {
             let pending = self.pending_gesture;
             self.pending_gesture = GestureType::None;
             return pending;
         }
-        
+
         gesture
     }
 
@@ -184,7 +199,7 @@ impl GestureDetector {
         let delta = end_pos - touch.start_pos;
         let distance = delta.length();
         let duration_ms = (self.current_time_ms - touch.start_time_ms) as f32;
-        
+
         // Calculate velocity (pixels per second)
         let velocity = if duration_ms > 0.0 {
             delta * (1000.0 / duration_ms)
@@ -194,7 +209,8 @@ impl GestureDetector {
         let speed = velocity.length();
 
         // Check for swipe
-        if distance >= self.config.swipe_threshold && speed >= self.config.swipe_velocity_threshold {
+        if distance >= self.config.swipe_threshold && speed >= self.config.swipe_velocity_threshold
+        {
             let direction = self.get_swipe_direction(delta);
             return GestureType::Swipe {
                 start: touch.start_pos,
@@ -205,17 +221,20 @@ impl GestureDetector {
         }
 
         // Check for tap
-        if distance < self.config.tap_threshold && duration_ms < self.config.long_press_duration_ms as f32 {
+        if distance < self.config.tap_threshold
+            && duration_ms < self.config.long_press_duration_ms as f32
+        {
             // Check for double tap
             let time_since_last_tap = self.current_time_ms - self.last_tap_time_ms;
             let dist_from_last_tap = (end_pos - self.last_tap_pos).length();
-            
-            if time_since_last_tap < self.config.double_tap_interval_ms as u64 
-               && dist_from_last_tap < self.config.tap_threshold * 2.0 {
+
+            if time_since_last_tap < self.config.double_tap_interval_ms as u64
+                && dist_from_last_tap < self.config.tap_threshold * 2.0
+            {
                 self.last_tap_time_ms = 0;
                 return GestureType::DoubleTap { pos: end_pos };
             }
-            
+
             self.last_tap_time_ms = self.current_time_ms;
             self.last_tap_pos = end_pos;
             return GestureType::Tap { pos: end_pos };
@@ -236,10 +255,10 @@ impl GestureDetector {
         // Current state
         let center = (t0.pos + t1.pos) * 0.5;
         let current_dist = (t0.pos - t1.pos).length();
-        
+
         // Initial state
         let initial_dist = (t0.start_pos - t1.start_pos).length();
-        
+
         // Calculate scale
         let scale = if initial_dist > 0.0 {
             current_dist / initial_dist
@@ -254,7 +273,11 @@ impl GestureDetector {
 
         // Check if it's more of a pinch or pan
         if (scale - 1.0).abs() >= self.config.pinch_threshold {
-            GestureType::Pinch { center, scale, rotation }
+            GestureType::Pinch {
+                center,
+                scale,
+                rotation,
+            }
         } else {
             let initial_center = (t0.start_pos + t1.start_pos) * 0.5;
             let delta = center - initial_center;
@@ -265,9 +288,17 @@ impl GestureDetector {
     /// Get swipe direction from delta
     fn get_swipe_direction(&self, delta: Vec2) -> SwipeDirection {
         if delta.x.abs() > delta.y.abs() {
-            if delta.x > 0.0 { SwipeDirection::Right } else { SwipeDirection::Left }
+            if delta.x > 0.0 {
+                SwipeDirection::Right
+            } else {
+                SwipeDirection::Left
+            }
         } else {
-            if delta.y > 0.0 { SwipeDirection::Down } else { SwipeDirection::Up }
+            if delta.y > 0.0 {
+                SwipeDirection::Down
+            } else {
+                SwipeDirection::Up
+            }
         }
     }
 
@@ -306,22 +337,28 @@ mod tests {
     #[test]
     fn test_tap_detection() {
         let mut detector = GestureDetector::new();
-        
+
         detector.on_touch_start(0, Vec2::new(100.0, 100.0));
         detector.update(50);
         let gesture = detector.on_touch_end(0, Vec2::new(102.0, 101.0));
-        
+
         assert!(matches!(gesture, GestureType::Tap { .. }));
     }
 
     #[test]
     fn test_swipe_detection() {
         let mut detector = GestureDetector::new();
-        
+
         detector.on_touch_start(0, Vec2::new(100.0, 100.0));
         detector.update(100);
         let gesture = detector.on_touch_end(0, Vec2::new(200.0, 100.0));
-        
-        assert!(matches!(gesture, GestureType::Swipe { direction: SwipeDirection::Right, .. }));
+
+        assert!(matches!(
+            gesture,
+            GestureType::Swipe {
+                direction: SwipeDirection::Right,
+                ..
+            }
+        ));
     }
 }

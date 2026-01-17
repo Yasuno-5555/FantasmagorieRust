@@ -1,5 +1,5 @@
 //! Context Menu widget - Popup menu with blur overlay
-use crate::core::{ID, ColorF};
+use crate::core::{ColorF, ID};
 use crate::view::header::ViewHeader;
 
 /// Context Menu builder

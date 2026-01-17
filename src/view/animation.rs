@@ -6,11 +6,21 @@ use crate::core::Vec2;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Easing {
     Linear,
-    QuadIn, QuadOut, QuadInOut,
-    CubicIn, CubicOut, CubicInOut,
-    ExpoIn, ExpoOut, ExpoInOut,
-    ElasticIn, ElasticOut, ElasticInOut,
-    BackIn, BackOut, BackInOut,
+    QuadIn,
+    QuadOut,
+    QuadInOut,
+    CubicIn,
+    CubicOut,
+    CubicInOut,
+    ExpoIn,
+    ExpoOut,
+    ExpoInOut,
+    ElasticIn,
+    ElasticOut,
+    ElasticInOut,
+    BackIn,
+    BackOut,
+    BackInOut,
     Spring,
 }
 
@@ -47,23 +57,59 @@ pub fn ease(t: f32, easing: Easing) -> f32 {
         Easing::Linear => t,
         Easing::QuadIn => t * t,
         Easing::QuadOut => t * (2.0 - t),
-        Easing::QuadInOut => if t < 0.5 { 2.0 * t * t } else { -1.0 + (4.0 - 2.0 * t) * t },
+        Easing::QuadInOut => {
+            if t < 0.5 {
+                2.0 * t * t
+            } else {
+                -1.0 + (4.0 - 2.0 * t) * t
+            }
+        }
         Easing::CubicIn => t * t * t,
-        Easing::CubicOut => { let t = t - 1.0; t * t * t + 1.0 },
-        Easing::CubicInOut => if t < 0.5 { 4.0 * t * t * t } else { (t - 1.0) * (2.0 * t - 2.0).powi(2) + 1.0 },
-        Easing::ExpoIn => if t == 0.0 { 0.0 } else { (2.0f32).powf(10.0 * (t - 1.0)) },
-        Easing::ExpoOut => if t == 1.0 { 1.0 } else { 1.0 - (2.0f32).powf(-10.0 * t) },
+        Easing::CubicOut => {
+            let t = t - 1.0;
+            t * t * t + 1.0
+        }
+        Easing::CubicInOut => {
+            if t < 0.5 {
+                4.0 * t * t * t
+            } else {
+                (t - 1.0) * (2.0 * t - 2.0).powi(2) + 1.0
+            }
+        }
+        Easing::ExpoIn => {
+            if t == 0.0 {
+                0.0
+            } else {
+                (2.0f32).powf(10.0 * (t - 1.0))
+            }
+        }
+        Easing::ExpoOut => {
+            if t == 1.0 {
+                1.0
+            } else {
+                1.0 - (2.0f32).powf(-10.0 * t)
+            }
+        }
         Easing::ExpoInOut => {
-            if t == 0.0 { 0.0 }
-            else if t == 1.0 { 1.0 }
-            else if t < 0.5 { (2.0f32).powf(20.0 * t - 10.0) / 2.0 }
-            else { (2.0 - (2.0f32).powf(-20.0 * t + 10.0)) / 2.0 }
+            if t == 0.0 {
+                0.0
+            } else if t == 1.0 {
+                1.0
+            } else if t < 0.5 {
+                (2.0f32).powf(20.0 * t - 10.0) / 2.0
+            } else {
+                (2.0 - (2.0f32).powf(-20.0 * t + 10.0)) / 2.0
+            }
         }
         Easing::ElasticOut => {
             let c4 = (2.0 * std::f32::consts::PI) / 3.0;
-            if t == 0.0 { 0.0 }
-            else if t == 1.0 { 1.0 }
-            else { (2.0f32).powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0 }
+            if t == 0.0 {
+                0.0
+            } else if t == 1.0 {
+                1.0
+            } else {
+                (2.0f32).powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0
+            }
         }
         Easing::BackOut => {
             let c1 = 1.70158;
@@ -81,7 +127,7 @@ pub struct AnimationStateEx {
     pub start_value: f32,
     pub target: f32,
     pub velocity: f32,
-    pub time: f32,     // Time since start or current progress
+    pub time: f32, // Time since start or current progress
     pub duration: f32,
     pub easing: Easing,
 }

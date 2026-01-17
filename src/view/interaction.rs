@@ -1,15 +1,13 @@
 //! Interaction detection - hot/active/focus states
 //! Ported from interaction.hpp
 
-use crate::core::{ID, Rectangle, Vec2};
+use crate::core::{Rectangle, Vec2, ID};
 use std::cell::RefCell;
 use std::collections::HashSet;
 
 thread_local! {
     static CTX: RefCell<InteractionContext> = RefCell::new(InteractionContext::default());
 }
-
-
 
 // ...
 
@@ -27,24 +25,26 @@ struct InteractionContext {
     middle_mouse_down: bool,
     mouse_was_down: bool,
     initialized: bool,
-    
+
     // Keyboard
     keys_down: HashSet<winit::keyboard::KeyCode>,
     keys_pressed: HashSet<winit::keyboard::KeyCode>,
     modifiers: u32, // 1=Shift, 2=Ctrl, 4=Alt, 8=Super
 
     input_buffer: String,
-    
+
     // Persistent layout for interaction (ID -> Rect)
     last_frame_rects: std::collections::HashMap<ID, Rectangle>,
-    
+
     // Scroll state
     scroll_delta_x: f32,
     scroll_delta_y: f32,
     scroll_offsets: std::collections::HashMap<ID, Vec2>,
+    pub virtual_list_ranges: std::collections::HashMap<ID, std::ops::Range<usize>>,
 
     // Animation state
-    animation_states_ex: std::collections::HashMap<(ID, String), crate::view::animation::AnimationStateEx>,
+    animation_states_ex:
+        std::collections::HashMap<(ID, String), crate::view::animation::AnimationStateEx>,
     last_frame_time: std::time::Instant,
     dt: f32,
 
@@ -87,6 +87,7 @@ impl Default for InteractionContext {
             scroll_delta_x: 0.0,
             scroll_delta_y: 0.0,
             scroll_offsets: std::collections::HashMap::new(),
+            virtual_list_ranges: std::collections::HashMap::new(),
             animation_states_ex: std::collections::HashMap::new(),
             last_frame_time: std::time::Instant::now(),
             dt: 1.0 / 60.0, // Default to 60fps
@@ -96,7 +97,7 @@ impl Default for InteractionContext {
             active_menu_id: None,
             popup_position: Vec2::ZERO,
             popup_screen_size: Vec2::new(1920.0, 1080.0),
-            
+
             screenshot_requested: None,
         }
     }
@@ -125,14 +126,14 @@ pub fn get_screenshot_request() -> Option<String> {
 pub fn begin_interaction_pass() {
     CTX.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        
+
         let now = std::time::Instant::now();
         ctx.dt = now.duration_since(ctx.last_frame_time).as_secs_f32();
         ctx.last_frame_time = now;
-        
+
         // Clamp dt to avoid huge jumps on first frame or window hang
-        if ctx.dt > 0.1 || ctx.dt <= 0.0 { 
-            ctx.dt = 1.0/60.0; 
+        if ctx.dt > 0.1 || ctx.dt <= 0.0 {
+            ctx.dt = 1.0 / 60.0;
         }
 
         ctx.hot_id = ID::NONE;
@@ -140,31 +141,46 @@ pub fn begin_interaction_pass() {
         ctx.scroll_delta_x = 0.0;
         ctx.scroll_delta_y = 0.0;
         ctx.cursor_requested = None;
+        // Don't clear virtual_list_ranges, they need to persist across frames
     });
 }
 
 /// Simple property animation
 pub fn animate(id: ID, property: &str, target: f32, speed: f32) -> f32 {
     // Map legacy speed to duration
-    animate_ex(id, property, target, 1.0 / speed.max(0.1), crate::view::animation::Easing::ExpoOut)
+    animate_ex(
+        id,
+        property,
+        target,
+        1.0 / speed.max(0.1),
+        crate::view::animation::Easing::ExpoOut,
+    )
 }
 
 /// Advanced property animation
-pub fn animate_ex(id: ID, property: &str, target: f32, duration: f32, easing: crate::view::animation::Easing) -> f32 {
+pub fn animate_ex(
+    id: ID,
+    property: &str,
+    target: f32,
+    duration: f32,
+    easing: crate::view::animation::Easing,
+) -> f32 {
     CTX.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
         let key = (id, property.to_string());
         let dt = ctx.dt;
-        
-        let state = ctx.animation_states_ex.entry(key).or_insert(crate::view::animation::AnimationStateEx {
-            value: target,
-            start_value: target,
-            target,
-            duration,
-            easing,
-            ..Default::default()
-        });
-        
+
+        let state = ctx.animation_states_ex.entry(key).or_insert(
+            crate::view::animation::AnimationStateEx {
+                value: target,
+                start_value: target,
+                target,
+                duration,
+                easing,
+                ..Default::default()
+            },
+        );
+
         if (state.target - target).abs() > 0.001 {
             state.start_value = state.value;
             state.target = target;
@@ -182,16 +198,22 @@ pub fn animate_ex(id: ID, property: &str, target: f32, duration: f32, easing: cr
             let alpha = crate::view::animation::ease(t, state.easing);
             state.value = state.start_value + (state.target - state.start_value) * alpha;
         }
-        
+
         state.value
     })
 }
 
 /// Update input state
-pub fn update_input(mouse_x: f32, mouse_y: f32, mouse_down: bool, right_mouse_down: bool, middle_mouse_down: bool) {
+pub fn update_input(
+    mouse_x: f32,
+    mouse_y: f32,
+    mouse_down: bool,
+    right_mouse_down: bool,
+    middle_mouse_down: bool,
+) {
     CTX.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        
+
         if !ctx.initialized {
             ctx.mouse_x = mouse_x;
             ctx.mouse_y = mouse_y;
@@ -200,7 +222,7 @@ pub fn update_input(mouse_x: f32, mouse_y: f32, mouse_down: bool, right_mouse_do
 
         let dx = mouse_x - ctx.mouse_x;
         let dy = mouse_y - ctx.mouse_y;
-        
+
         ctx.mouse_delta_x = dx;
         ctx.mouse_delta_y = dy;
 
@@ -225,6 +247,18 @@ pub fn is_middle_mouse_down() -> bool {
     CTX.with(|ctx| ctx.borrow().middle_mouse_down)
 }
 
+/// Get last frame's visible range for a virtual list
+pub fn get_last_visible_range(id: ID) -> Option<std::ops::Range<usize>> {
+    CTX.with(|ctx| ctx.borrow().virtual_list_ranges.get(&id).cloned())
+}
+
+/// Set visible range for a virtual list
+pub fn set_last_visible_range(id: ID, range: std::ops::Range<usize>) {
+    CTX.with(|ctx| {
+        ctx.borrow_mut().virtual_list_ranges.insert(id, range);
+    })
+}
+
 /// Check if point is in rectangle
 fn hit_test(rect: Rectangle, px: f32, py: f32) -> bool {
     px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h
@@ -234,7 +268,7 @@ fn hit_test(rect: Rectangle, px: f32, py: f32) -> bool {
 pub fn register_interactive(id: ID, rect: Rectangle) {
     CTX.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        
+
         // Hit test
         if hit_test(rect, ctx.mouse_x, ctx.mouse_y) {
             // Only set hot if nothing is captured or we are the captured element
@@ -242,7 +276,7 @@ pub fn register_interactive(id: ID, rect: Rectangle) {
                 ctx.hot_id = id;
             }
         }
-        
+
         // Handle click
         if ctx.hot_id == id {
             if ctx.mouse_down && !ctx.mouse_was_down {
@@ -250,7 +284,7 @@ pub fn register_interactive(id: ID, rect: Rectangle) {
                 ctx.captured_id = id;
             }
         }
-        
+
         // Release on mouse up
         if !ctx.mouse_down && ctx.captured_id == id {
             ctx.captured_id = ID::NONE;
@@ -283,10 +317,20 @@ pub fn set_focus(id: ID) {
 
 /// Check if widget was just clicked (released while hot)
 pub fn is_clicked(id: ID) -> bool {
-    id != ID::NONE && CTX.with(|ctx| {
-        let ctx = ctx.borrow();
-        ctx.hot_id == id && ctx.mouse_was_down && !ctx.mouse_down
-    })
+    id != ID::NONE
+        && CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            ctx.hot_id == id && ctx.mouse_was_down && !ctx.mouse_down
+        })
+}
+
+/// Check if widget was right clicked
+pub fn is_right_clicked(id: ID) -> bool {
+    id != ID::NONE
+        && CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            ctx.hot_id == id && ctx.right_mouse_down && ctx.mouse_was_down // Simple approximation
+        })
 }
 
 /// Capture mouse for dragging
@@ -386,9 +430,7 @@ pub fn update_rect(id: ID, rect: Rectangle) {
 }
 
 pub fn get_rect(id: ID) -> Option<Rectangle> {
-    CTX.with(|ctx| {
-        ctx.borrow().last_frame_rects.get(&id).cloned()
-    })
+    CTX.with(|ctx| ctx.borrow().last_frame_rects.get(&id).cloned())
 }
 
 /// Handle mouse wheel scroll
@@ -411,7 +453,11 @@ pub fn get_scroll_delta() -> (f32, f32) {
 /// Get persistent scroll offset for a view
 pub fn get_scroll_offset(id: ID) -> Vec2 {
     CTX.with(|ctx| {
-        ctx.borrow().scroll_offsets.get(&id).cloned().unwrap_or(Vec2::ZERO)
+        ctx.borrow()
+            .scroll_offsets
+            .get(&id)
+            .cloned()
+            .unwrap_or(Vec2::ZERO)
     })
 }
 
@@ -437,14 +483,20 @@ pub fn get_requested_cursor() -> Option<Option<winit::window::CursorIcon>> {
 /// Get canvas transform (offset, zoom)
 pub fn get_canvas_transform(id: ID) -> (Vec2, f32) {
     CTX.with(|ctx| {
-        ctx.borrow().canvas_transforms.get(&id).cloned().unwrap_or((Vec2::ZERO, 1.0))
+        ctx.borrow()
+            .canvas_transforms
+            .get(&id)
+            .cloned()
+            .unwrap_or((Vec2::ZERO, 1.0))
     })
 }
 
 /// Set canvas transform
 pub fn set_canvas_transform(id: ID, offset: Vec2, zoom: f32) {
     CTX.with(|ctx| {
-        ctx.borrow_mut().canvas_transforms.insert(id, (offset, zoom));
+        ctx.borrow_mut()
+            .canvas_transforms
+            .insert(id, (offset, zoom));
     })
 }
 
@@ -517,10 +569,34 @@ pub fn get_popup_screen_size() -> Vec2 {
     CTX.with(|ctx| ctx.borrow().popup_screen_size)
 }
 
-/// Check if right mouse was just clicked (for opening context menus)
-pub fn is_right_clicked() -> bool {
-    CTX.with(|ctx| {
-        let ctx = ctx.borrow();
-        ctx.right_mouse_down && !ctx.mouse_was_down
-    })
+// ============ IME Functions ============
+
+/// Get current IME preedit text
+pub fn get_ime_preedit() -> String {
+    // Current implementation doesn't track IME state in InteractionContext yet
+    // Returning empty string as placeholder
+    String::new()
+}
+
+/// Set the focused text input ID (for IME)
+pub fn set_focused_text_input(_id: ID, _rect: Rectangle) {
+    // Placeholder
+}
+
+/// Set the IME cursor area/position
+pub fn set_ime_cursor_area(_pos: Vec2, _size: Vec2) {
+    // Placeholder
+}
+
+/// Helper for winit integration
+pub fn get_ime_cursor_area() -> Vec2 {
+    Vec2::ZERO
+}
+
+pub fn set_ime_enabled(_enabled: bool) {
+    // Placeholder
+}
+
+pub fn set_ime_preedit(_text: String, _cursor: Option<(usize, usize)>) {
+    // Placeholder
 }

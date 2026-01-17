@@ -5,15 +5,14 @@
 //! - Spring physics animation
 //! - Sequential and parallel animation groups
 
+pub mod groups;
 pub mod keyframe;
 pub mod spring;
-pub mod groups;
 
 // Re-export commonly used types
-pub use keyframe::{Timeline, KeyframeTrack, Keyframe, LoopMode, PlaybackState, easing};
-pub use spring::{Spring, Spring2D, SpringColor, SpringConfig, presets as spring_presets};
 pub use groups::{
-    Animation, AnimationManager, AnimationState,
-    Tween, SequentialGroup, ParallelGroup, StaggeredGroup,
-    Animatable,
+    Animatable, Animation, AnimationManager, AnimationState, ParallelGroup, SequentialGroup,
+    StaggeredGroup, Tween,
 };
+pub use keyframe::{easing, Keyframe, KeyframeTrack, LoopMode, PlaybackState, Timeline};
+pub use spring::{presets as spring_presets, Spring, Spring2D, SpringColor, SpringConfig};

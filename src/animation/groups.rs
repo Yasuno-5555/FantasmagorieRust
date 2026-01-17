@@ -24,7 +24,10 @@ impl Animatable for f32 {
 
 impl Animatable for (f32, f32) {
     fn lerp(&self, target: &Self, t: f32) -> Self {
-        (self.0 + (target.0 - self.0) * t, self.1 + (target.1 - self.1) * t)
+        (
+            self.0 + (target.0 - self.0) * t,
+            self.1 + (target.1 - self.1) * t,
+        )
     }
 }
 
@@ -85,7 +88,7 @@ impl<T: Animatable> Tween<T> {
         }
 
         self.elapsed_ms += delta_ms;
-        
+
         // Handle delay
         if self.elapsed_ms < self.delay_ms {
             return self.start.clone();
@@ -169,13 +172,14 @@ impl SequentialGroup {
         if self.animations.is_empty() {
             return 1.0;
         }
-        
+
         let completed = self.current_index as f32;
-        let current_progress = self.animations
+        let current_progress = self
+            .animations
             .get(self.current_index)
             .map(|a| a.progress())
             .unwrap_or(0.0);
-        
+
         (completed + current_progress) / self.animations.len() as f32
     }
 }
@@ -238,9 +242,10 @@ impl ParallelGroup {
         if self.animations.is_empty() {
             return 1.0;
         }
-        
+
         // Return the minimum progress (all must complete)
-        self.animations.iter()
+        self.animations
+            .iter()
             .map(|a| a.progress())
             .fold(1.0f32, |acc, p| acc.min(p))
     }
@@ -321,10 +326,12 @@ impl StaggeredGroup {
         if self.animations.is_empty() {
             return 1.0;
         }
-        
-        self.animations.iter()
+
+        self.animations
+            .iter()
             .map(|(_, a)| a.progress())
-            .sum::<f32>() / self.animations.len() as f32
+            .sum::<f32>()
+            / self.animations.len() as f32
     }
 }
 
@@ -344,35 +351,75 @@ pub trait Animation: Send {
 }
 
 impl<T: Animatable + Send> Animation for Tween<T> {
-    fn start(&mut self) { self.start(); }
-    fn update(&mut self, delta_ms: f32) { let _ = self.update(delta_ms); }
-    fn is_complete(&self) -> bool { self.is_complete() }
-    fn is_running(&self) -> bool { self.state == AnimationState::Running }
-    fn progress(&self) -> f32 { self.progress() }
+    fn start(&mut self) {
+        self.start();
+    }
+    fn update(&mut self, delta_ms: f32) {
+        let _ = self.update(delta_ms);
+    }
+    fn is_complete(&self) -> bool {
+        self.is_complete()
+    }
+    fn is_running(&self) -> bool {
+        self.state == AnimationState::Running
+    }
+    fn progress(&self) -> f32 {
+        self.progress()
+    }
 }
 
 impl Animation for SequentialGroup {
-    fn start(&mut self) { self.start(); }
-    fn update(&mut self, delta_ms: f32) { self.update(delta_ms); }
-    fn is_complete(&self) -> bool { self.is_complete() }
-    fn is_running(&self) -> bool { self.state == AnimationState::Running }
-    fn progress(&self) -> f32 { self.progress() }
+    fn start(&mut self) {
+        self.start();
+    }
+    fn update(&mut self, delta_ms: f32) {
+        self.update(delta_ms);
+    }
+    fn is_complete(&self) -> bool {
+        self.is_complete()
+    }
+    fn is_running(&self) -> bool {
+        self.state == AnimationState::Running
+    }
+    fn progress(&self) -> f32 {
+        self.progress()
+    }
 }
 
 impl Animation for ParallelGroup {
-    fn start(&mut self) { self.start(); }
-    fn update(&mut self, delta_ms: f32) { self.update(delta_ms); }
-    fn is_complete(&self) -> bool { self.is_complete() }
-    fn is_running(&self) -> bool { self.state == AnimationState::Running }
-    fn progress(&self) -> f32 { self.progress() }
+    fn start(&mut self) {
+        self.start();
+    }
+    fn update(&mut self, delta_ms: f32) {
+        self.update(delta_ms);
+    }
+    fn is_complete(&self) -> bool {
+        self.is_complete()
+    }
+    fn is_running(&self) -> bool {
+        self.state == AnimationState::Running
+    }
+    fn progress(&self) -> f32 {
+        self.progress()
+    }
 }
 
 impl Animation for StaggeredGroup {
-    fn start(&mut self) { self.start(); }
-    fn update(&mut self, delta_ms: f32) { self.update(delta_ms); }
-    fn is_complete(&self) -> bool { self.is_complete() }
-    fn is_running(&self) -> bool { self.state == AnimationState::Running }
-    fn progress(&self) -> f32 { self.progress() }
+    fn start(&mut self) {
+        self.start();
+    }
+    fn update(&mut self, delta_ms: f32) {
+        self.update(delta_ms);
+    }
+    fn is_complete(&self) -> bool {
+        self.is_complete()
+    }
+    fn is_running(&self) -> bool {
+        self.state == AnimationState::Running
+    }
+    fn progress(&self) -> f32 {
+        self.progress()
+    }
 }
 
 /// Animation manager for running multiple animations
@@ -389,7 +436,8 @@ impl AnimationManager {
 
     /// Add a named animation
     pub fn add<A: Animation + 'static>(&mut self, name: &str, animation: A) {
-        self.animations.insert(name.to_string(), Box::new(animation));
+        self.animations
+            .insert(name.to_string(), Box::new(animation));
     }
 
     /// Start an animation by name
@@ -413,12 +461,18 @@ impl AnimationManager {
 
     /// Check if animation is complete
     pub fn is_complete(&self, name: &str) -> bool {
-        self.animations.get(name).map(|a| a.is_complete()).unwrap_or(true)
+        self.animations
+            .get(name)
+            .map(|a| a.is_complete())
+            .unwrap_or(true)
     }
 
     /// Get animation progress
     pub fn progress(&self, name: &str) -> f32 {
-        self.animations.get(name).map(|a| a.progress()).unwrap_or(1.0)
+        self.animations
+            .get(name)
+            .map(|a| a.progress())
+            .unwrap_or(1.0)
     }
 }
 
@@ -436,10 +490,10 @@ mod tests {
     fn test_tween() {
         let mut tween = Tween::new(0.0f32, 100.0, 1000.0);
         tween.start();
-        
+
         let val = tween.update(500.0);
         assert!((val - 50.0).abs() < 0.01);
-        
+
         let val = tween.update(500.0);
         assert!((val - 100.0).abs() < 0.01);
         assert!(tween.is_complete());
@@ -450,15 +504,15 @@ mod tests {
         let mut group = SequentialGroup::new()
             .add(Tween::new(0.0f32, 50.0, 500.0))
             .add(Tween::new(50.0f32, 100.0, 500.0));
-        
+
         group.start();
-        
+
         group.update(250.0);
         assert!(!group.is_complete());
-        
+
         group.update(250.0);
         assert!(!group.is_complete()); // First complete, second starting
-        
+
         group.update(500.0);
         assert!(group.is_complete());
     }

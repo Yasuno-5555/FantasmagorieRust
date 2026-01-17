@@ -36,7 +36,12 @@ pub struct Rect {
 
 impl Rect {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Create from two corner points
@@ -55,24 +60,26 @@ impl Rect {
 
     /// Check if this rect contains a point
     pub fn contains(&self, point: Vec2) -> bool {
-        point.x >= self.x && point.x <= self.x + self.width &&
-        point.y >= self.y && point.y <= self.y + self.height
+        point.x >= self.x
+            && point.x <= self.x + self.width
+            && point.y >= self.y
+            && point.y <= self.y + self.height
     }
 
     /// Check if this rect intersects another rect
     pub fn intersects(&self, other: &Rect) -> bool {
-        self.x < other.x + other.width &&
-        self.x + self.width > other.x &&
-        self.y < other.y + other.height &&
-        self.y + self.height > other.y
+        self.x < other.x + other.width
+            && self.x + self.width > other.x
+            && self.y < other.y + other.height
+            && self.y + self.height > other.y
     }
 
     /// Check if this rect fully contains another rect
     pub fn contains_rect(&self, other: &Rect) -> bool {
-        other.x >= self.x &&
-        other.y >= self.y &&
-        other.x + other.width <= self.x + self.width &&
-        other.y + other.height <= self.y + self.height
+        other.x >= self.x
+            && other.y >= self.y
+            && other.x + other.width <= self.x + self.width
+            && other.y + other.height <= self.y + self.height
     }
 
     /// Get the center point
@@ -90,7 +97,7 @@ impl Rect {
 pub trait Selectable {
     /// Get the bounding rectangle of this item
     fn bounds(&self) -> Rect;
-    
+
     /// Get unique identifier
     fn id(&self) -> usize;
 }
@@ -118,7 +125,10 @@ impl MarqueeSelection {
 
     /// Start a potential selection
     pub fn begin(&mut self, pos: Vec2) {
-        self.state = MarqueeState::Selecting { start: pos, current: pos };
+        self.state = MarqueeState::Selecting {
+            start: pos,
+            current: pos,
+        };
     }
 
     /// Update the selection as the mouse moves
@@ -126,7 +136,10 @@ impl MarqueeSelection {
         if let MarqueeState::Selecting { start, .. } = self.state {
             let distance = (pos - start).length();
             if distance >= self.threshold {
-                self.state = MarqueeState::Selecting { start, current: pos };
+                self.state = MarqueeState::Selecting {
+                    start,
+                    current: pos,
+                };
                 return true;
             }
         }
@@ -172,7 +185,8 @@ impl MarqueeSelection {
             None => return Vec::new(),
         };
 
-        items.iter()
+        items
+            .iter()
             .filter(|item| rect.intersects(&item.bounds()))
             .map(|item| item.id())
             .collect()
@@ -185,7 +199,8 @@ impl MarqueeSelection {
             None => return Vec::new(),
         };
 
-        items.iter()
+        items
+            .iter()
             .filter(|item| rect.contains_rect(&item.bounds()))
             .map(|item| item.id())
             .collect()
@@ -218,8 +233,12 @@ mod tests {
     }
 
     impl Selectable for TestItem {
-        fn bounds(&self) -> Rect { self.rect }
-        fn id(&self) -> usize { self.id }
+        fn bounds(&self) -> Rect {
+            self.rect
+        }
+        fn id(&self) -> usize {
+            self.id
+        }
     }
 
     #[test]
@@ -235,16 +254,25 @@ mod tests {
     #[test]
     fn test_marquee_selection() {
         let mut marquee = MarqueeSelection::new().with_threshold(5.0);
-        
+
         let items = vec![
-            TestItem { id: 0, rect: Rect::new(10.0, 10.0, 20.0, 20.0) },
-            TestItem { id: 1, rect: Rect::new(50.0, 50.0, 20.0, 20.0) },
-            TestItem { id: 2, rect: Rect::new(100.0, 100.0, 20.0, 20.0) },
+            TestItem {
+                id: 0,
+                rect: Rect::new(10.0, 10.0, 20.0, 20.0),
+            },
+            TestItem {
+                id: 1,
+                rect: Rect::new(50.0, 50.0, 20.0, 20.0),
+            },
+            TestItem {
+                id: 2,
+                rect: Rect::new(100.0, 100.0, 20.0, 20.0),
+            },
         ];
 
         marquee.begin(Vec2::new(0.0, 0.0));
         marquee.update(Vec2::new(60.0, 60.0));
-        
+
         let selected = marquee.test_items(&items);
         assert!(selected.contains(&0));
         assert!(selected.contains(&1));

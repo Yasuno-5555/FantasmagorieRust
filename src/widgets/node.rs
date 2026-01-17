@@ -1,5 +1,5 @@
-//! Node and Socket widgets - Visual programming elements
-use crate::core::{Vec2, ID, ColorF};
+use crate::core::persistence::PersistenceManager;
+use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use std::cell::Cell;
 
@@ -7,6 +7,8 @@ use std::cell::Cell;
 pub struct NodeBuilder<'a> {
     pub view: &'a ViewHeader<'a>,
     pub title: &'a str,
+    pub persistence: Option<&'a PersistenceManager>,
+    pub should_persist: bool,
 }
 
 impl<'a> NodeBuilder<'a> {
@@ -27,17 +29,38 @@ impl<'a> NodeBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> &'a ViewHeader<'a> {
+    pub fn persist_pos(mut self) -> Self {
+        self.should_persist = true;
+        // Try to load position if ID is set and persistence is available
+        // We need ID first.
+        let id = self.view.id.get();
+        if let Some(pm) = &self.persistence {
+            if let Some(saved_pos) = pm.load::<Vec2>(id) {
+                self.view.pos_x.set(saved_pos.x);
+                self.view.pos_y.set(saved_pos.y);
+            }
+        }
+        self
+    }
+
+    pub fn build(mut self) -> &'a ViewHeader<'a> {
         self.view.text.set(self.title);
-        
+
         // Node dragging logic
         let id = self.view.id.get();
         if crate::view::interaction::is_active(id) {
             let delta = crate::view::interaction::get_mouse_delta();
             self.view.pos_x.set(self.view.pos_x.get() + delta.x);
             self.view.pos_y.set(self.view.pos_y.get() + delta.y);
+
+            if self.should_persist {
+                if let Some(pm) = self.persistence {
+                    let new_pos = Vec2::new(self.view.pos_x.get(), self.view.pos_y.get());
+                    pm.save(id, &new_pos);
+                }
+            }
         }
-        
+
         self.view
     }
 }
@@ -63,21 +86,29 @@ impl<'a> SocketBuilder<'a> {
     pub fn build(self) -> &'a ViewHeader<'a> {
         self.view.text.set(self.name);
         self.view.is_bipolar.set(self.is_input); // Reuse for input flag
-        
+
         // Socket wire interaction logic
         let id = self.view.id.get();
         if crate::view::interaction::is_clicked(id) {
-             // Start wire drag?
-             // For now, let's just log or set a placeholder state
-             let pos = crate::view::interaction::get_mouse_pos();
-             // We'd need PortId here, but for now we'll just track start pos
-             crate::view::interaction::set_wire_state(crate::core::wire::WireState::Dragging {
-                 start_port: crate::core::wire::PortId::new(0, 0, if self.is_input { crate::core::wire::PortType::Input } else { crate::core::wire::PortType::Output }),
-                 start_pos: pos,
-                 end_pos: pos,
-             });
+            // Start wire drag?
+            // For now, let's just log or set a placeholder state
+            let pos = crate::view::interaction::get_mouse_pos();
+            // We'd need PortId here, but for now we'll just track start pos
+            crate::view::interaction::set_wire_state(crate::core::wire::WireState::Dragging {
+                start_port: crate::core::wire::PortId::new(
+                    0,
+                    0,
+                    if self.is_input {
+                        crate::core::wire::PortType::Input
+                    } else {
+                        crate::core::wire::PortType::Output
+                    },
+                ),
+                start_pos: pos,
+                end_pos: pos,
+            });
         }
-        
+
         self.view
     }
 }
