@@ -42,9 +42,21 @@ fn measure_recursive(node: &ViewHeader) {
         }
     }
 
+    // Special handling for Grid Measure
+    if node.view_type == ViewType::LayoutGrid {
+        measure_grid(node);
+        return;
+    }
+
     // Add own padding
     content_w += node_padding * 2.0;
     content_h += node_padding * 2.0;
+
+    // Special handling for Grid Measure
+    if node.view_type == ViewType::LayoutGrid {
+        measure_grid(node);
+        return;
+    }
 
     // Type-specific sizing
     match node.view_type {
@@ -280,6 +292,9 @@ fn arrange_splitter(node: &ViewHeader, inner_x: f32, inner_y: f32, inner_w: f32,
                 inner_h - margin2 * 2.0,
             );
         }
+        }
+    } else if node.view_type == ViewType::LayoutGrid {
+        arrange_grid(node, inner_x, inner_y, inner_w, inner_h);
     } else {
         // Just one child, fill
         arrange_recursive(
@@ -376,6 +391,82 @@ fn arrange_flex(node: &ViewHeader, inner_x: f32, inner_y: f32, inner_w: f32, inn
             arrange_recursive(child, c_x, c_y, c_cross, c_main);
             cursor += c_main + margin * 2.0;
         }
+    }
+}
+
+fn measure_grid(node: &ViewHeader) {
+    let cols = node.value.get() as usize;
+    if cols == 0 { return; } 
+    
+    let gap = node.margin.get();
+    
+    let mut max_child_w: f32 = 0.0;
+    let mut row_h: f32 = 0.0;
+    let mut total_h: f32 = 0.0;
+    
+    let children: Vec<&ViewHeader> = node.children().collect();
+    
+    for (i, child) in children.iter().enumerate() {
+        let size = child.measured_size.get();
+        let margin = child.margin.get();
+        let w = size.w + margin * 2.0;
+        let h = size.h + margin * 2.0;
+        
+        max_child_w = max_child_w.max(w);
+        row_h = row_h.max(h);
+        
+        if (i + 1) % cols == 0 || i == children.len() - 1 {
+            total_h += row_h + gap;
+            row_h = 0.0;
+        }
+    }
+    if total_h > 0.0 { total_h -= gap; }
+    
+    let total_w = max_child_w * (cols as f32) + (gap * (cols as f32 - 1.0));
+    
+    let padding = node.padding.get();
+    node.measured_size.set(Size::new(
+        total_w + padding * 2.0,
+        total_h + padding * 2.0
+    ));
+}
+
+fn arrange_grid(node: &ViewHeader, x: f32, y: f32, w: f32, _h: f32) {
+    let padding = node.padding.get();
+    let gap = node.margin.get();
+    let cols = node.value.get() as usize;
+    if cols == 0 { return; }
+
+    let start_x = x + padding;
+    let start_y = y + padding;
+    let avail_w = w - padding * 2.0;
+    
+    let cell_w = (avail_w - ((cols as f32 - 1.0).max(0.0) * gap)) / (cols as f32);
+    
+    let children: Vec<&ViewHeader> = node.children().collect();
+    let mut current_row_start_idx = 0;
+    let mut current_y = start_y;
+    
+    while current_row_start_idx < children.len() {
+        let end_idx = (current_row_start_idx + cols).min(children.len());
+        let row_slice = &children[current_row_start_idx..end_idx];
+        
+        let mut row_max_h: f32 = 0.0;
+        for child in row_slice {
+            let size = child.measured_size.get();
+            let margin = child.margin.get();
+            row_max_h = row_max_h.max(size.h + margin * 2.0);
+        }
+        
+        for (col_idx, child) in row_slice.iter().enumerate() {
+            let child_x = start_x + (col_idx as f32) * (cell_w + gap);
+            
+            // Layout child
+            arrange_recursive(child, child_x, current_y, cell_w, row_max_h);
+        }
+        
+        current_y += row_max_h + gap;
+        current_row_start_idx += cols;
     }
 }
 

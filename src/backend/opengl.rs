@@ -453,6 +453,11 @@ impl OpenGLBackend {
         // Explicitly set u_texture to Unit 0
         gl.use_program(Some(program));
         gl.uniform_1_i32(Some(&texture_loc), 0);
+        
+        if let Some(loc) = lut_loc.as_ref() {
+            gl.uniform_1_i32(Some(loc), 1);
+        }
+        
         gl.use_program(None);
 
         // Create VAO
@@ -680,7 +685,8 @@ impl super::Backend for OpenGLBackend {
     /// Render a DrawList
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         unsafe {
-            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error at START of render (Previous Frame?)"); }
+            let err = self.gl.get_error();
+            if err != glow::NO_ERROR { println!("❌ Error at START of render (Previous Frame?): {}", err); }
 
             // Check texture update
             crate::text::FONT_MANAGER.with(|fm| {
@@ -714,15 +720,18 @@ impl super::Backend for OpenGLBackend {
 
             // Enable Blending for Text and Transparent shapes
             self.gl.enable(glow::BLEND);
-            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after enable blend"); }
+            let err = self.gl.get_error();
+            if err != glow::NO_ERROR { println!("❌ Error after enable blend: {}", err); }
 
             self.gl
                 .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             
-            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after blend func"); }
+            let err = self.gl.get_error();
+            if err != glow::NO_ERROR { println!("❌ Error after blend func: {}", err); }
 
             self.gl.use_program(Some(self.program));
-            if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after use_program"); }
+            let err = self.gl.get_error();
+            if err != glow::NO_ERROR { println!("❌ Error after use_program: {}", err); }
 
             self.gl.bind_vertex_array(Some(self.vao));
             if self.gl.get_error() != glow::NO_ERROR { println!("❌ Error after bind_vao"); }
@@ -780,7 +789,7 @@ impl super::Backend for OpenGLBackend {
             self.upload_and_draw(&bg_quad);
 
             // Process commands
-            for cmd in dl.commands() {
+            for cmd in dl.commands().iter() {
                 self.render_command(cmd, height);
             }
 

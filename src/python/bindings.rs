@@ -350,6 +350,127 @@ impl PyContext {
         })
     }
 
+    /// Create a toggle switch
+    #[pyo3(signature = (label, value))]
+    fn toggle(&self, label: String, value: bool) -> PyResult<(bool, PyToggleBuilder)> {
+         let mut new_val = value;
+         
+         let builder = PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            if let Some(inner) = contexts.get_mut(&self.window_id) {
+                 let builder = inner.context.toggle(&mut new_val);
+                 
+                 let view_id = builder.view.id.get().0;
+                 
+                 // Set text immediately
+                 let s = inner.arena.alloc_str(&label);
+                 builder.view.text.set(std::mem::transmute::<&str, &'static str>(s));
+
+                 PyToggleBuilder { view_id }
+            } else {
+                PyToggleBuilder { view_id: 0 }
+            }
+        });
+
+        Ok((new_val, builder))
+    }
+
+    /// Create a checkbox
+    #[pyo3(signature = (label, value))]
+    fn checkbox(&self, label: String, value: bool) -> PyResult<(bool, PyCheckboxBuilder)> {
+         let mut new_val = value;
+         
+         let builder = PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            if let Some(inner) = contexts.get_mut(&self.window_id) {
+                 let builder = inner.context.checkbox(&mut new_val);
+                 
+                 let view_id = builder.view.id.get().0;
+                 
+                 // Set text
+                 let s = inner.arena.alloc_str(&label);
+                 builder.view.text.set(std::mem::transmute::<&str, &'static str>(s));
+
+                 PyCheckboxBuilder { view_id }
+            } else {
+                PyCheckboxBuilder { view_id: 0 }
+            }
+        });
+
+        Ok((new_val, builder))
+    }
+
+    /// Create a radio button
+    #[pyo3(signature = (label, current_value, my_value))]
+    fn radio(&self, label: String, current_value: i32, my_value: i32) -> PyResult<(i32, PyRadioBuilder)> {
+         let mut new_val = current_value;
+         
+         let builder = PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            if let Some(inner) = contexts.get_mut(&self.window_id) {
+                 let builder = inner.context.radio(&mut new_val, my_value);
+                 
+                 let view_id = builder.view.id.get().0;
+                 
+                 let s = inner.arena.alloc_str(&label);
+                 builder.view.text.set(std::mem::transmute::<&str, &'static str>(s));
+
+                 PyRadioBuilder { view_id }
+            } else {
+                PyRadioBuilder { view_id: 0 }
+            }
+        });
+
+        Ok((new_val, builder))
+    }
+
+    /// Create a dropdown
+    #[pyo3(signature = (label, items, index))]
+    fn dropdown(&self, label: String, items: Vec<String>, index: usize) -> PyResult<(usize, PyDropdownBuilder)> {
+         let mut new_idx = index;
+         
+         let builder = PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            if let Some(inner) = contexts.get_mut(&self.window_id) {
+                 let builder = inner.context.dropdown(items, &mut new_idx);
+                 
+                 let view_id = builder.view.id.get().0;
+                 
+                 // Label is handled by selection logic inside builder usually, 
+                 // but we might want to override or set initial label if empty?
+                 // Builder sets text to selected item.
+                 if !label.is_empty() {
+                    // Maybe prepend label "Label: Selection"? 
+                    // For now let's just ignore label argument or use as prefix?
+                    // Standard immediate mode often uses label as ID source too.
+                    // Let's assume label is just for ID stability or prefix, 
+                    // but our builder uses auto-generated IDs.
+                 }
+
+                 PyDropdownBuilder { view_id }
+            } else {
+                PyDropdownBuilder { view_id: 0 }
+            }
+        });
+
+        Ok((new_idx, builder))
+    }
+
+    /// Create a layout grid
+    #[pyo3(signature = (cols))]
+    fn grid(&self, cols: usize) -> PyResult<PyGridLayoutBuilder> {
+         let builder = PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            if let Some(inner) = contexts.get_mut(&self.window_id) {
+                 let builder = inner.context.grid(cols);
+                 PyGridLayoutBuilder { view_id: builder.view.id.get().0 }
+            } else {
+                PyGridLayoutBuilder { view_id: 0 }
+            }
+        });
+        Ok(builder)
+    }
+
     /// Explicitly set this context as active (for manual thread hopping if needed)
     fn make_current(&self) {
         CURRENT_WINDOW.with(|cw| *cw.borrow_mut() = self.window_id);
@@ -1700,6 +1821,11 @@ pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyTransformGizmoBuilder>()?;
     m.add_class::<PyMathBuilder>()?;
     m.add_class::<PyVec3>()?;
+    m.add_class::<PyToggleBuilder>()?;
+    m.add_class::<PyCheckboxBuilder>()?;
+    m.add_class::<PyRadioBuilder>()?;
+    m.add_class::<PyDropdownBuilder>()?;
+    m.add_class::<PyGridLayoutBuilder>()?;
 
     m.add_function(wrap_pyfunction!(py_box, m)?)?;
     m.add_function(wrap_pyfunction!(py_row, m)?)?;
@@ -1727,4 +1853,197 @@ pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_camera_target_free, m)?)?;
 
     Ok(())
+}
+// ============================================================================
+// Toggle Builder
+// ============================================================================
+
+#[pyclass(name = "ToggleBuilder", unsendable)]
+#[derive(Clone, Copy)]
+pub struct PyToggleBuilder {
+    view_id: u64,
+}
+
+#[pymethods]
+impl PyToggleBuilder {
+    fn label(&self, text: String) -> PyResult<Self> {
+         PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            CURRENT_WINDOW.with(|cw| {
+                if let Some(inner) = contexts.get_mut(&*cw.borrow()) {
+                    if let Some(&ptr) = inner.views.get(&self.view_id) {
+                        unsafe {
+                            let s = inner.arena.alloc_str(&text);
+                            (*ptr).text = std::mem::transmute::<&str, &'static str>(s).into();
+                        }
+                    }
+                }
+            })
+        });
+        Ok(*self)
+    }
+
+    fn width(&self, w: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.width.set(w));
+        Ok(*self)
+    }
+
+    fn height(&self, h: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.height.set(h));
+        Ok(*self)
+    }
+    
+    fn color(&self, color: PyColor) -> PyResult<Self> {
+        let c: ColorF = color.into();
+        // Toggle usually implies active color, so let's set fg_color
+        with_view_mut(self.view_id, |v| v.fg_color.set(c)); 
+        Ok(*self)
+    }
+}
+
+// ============================================================================
+// Checkbox Builder
+// ============================================================================
+
+#[pyclass(name = "CheckboxBuilder", unsendable)]
+#[derive(Clone, Copy)]
+pub struct PyCheckboxBuilder {
+    view_id: u64,
+}
+
+#[pymethods]
+impl PyCheckboxBuilder {
+    fn label(&self, text: String) -> PyResult<Self> {
+         PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            CURRENT_WINDOW.with(|cw| {
+                if let Some(inner) = contexts.get_mut(&*cw.borrow()) {
+                    if let Some(&ptr) = inner.views.get(&self.view_id) {
+                        unsafe {
+                            let s = inner.arena.alloc_str(&text);
+                            (*ptr).text = std::mem::transmute::<&str, &'static str>(s).into();
+                        }
+                    }
+                }
+            })
+        });
+        Ok(*self)
+    }
+
+    fn width(&self, w: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.width.set(w));
+        Ok(*self)
+    }
+
+    fn height(&self, h: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.height.set(h));
+        Ok(*self)
+    }
+    
+    // Checkbox color usually sets fg_color (fill when checked)
+    fn color(&self, color: PyColor) -> PyResult<Self> {
+        let c: ColorF = color.into();
+        with_view_mut(self.view_id, |v| v.fg_color.set(c)); 
+        Ok(*self)
+    }
+}
+
+// ============================================================================
+// Radio Builder
+// ============================================================================
+
+#[pyclass(name = "RadioBuilder", unsendable)]
+#[derive(Clone, Copy)]
+pub struct PyRadioBuilder {
+    view_id: u64,
+}
+
+#[pymethods]
+impl PyRadioBuilder {
+    fn label(&self, text: String) -> PyResult<Self> {
+         PY_CONTEXTS.with(|ctx| {
+            let mut contexts = ctx.borrow_mut();
+            CURRENT_WINDOW.with(|cw| {
+                if let Some(inner) = contexts.get_mut(&*cw.borrow()) {
+                    if let Some(&ptr) = inner.views.get(&self.view_id) {
+                        unsafe {
+                            let s = inner.arena.alloc_str(&text);
+                            (*ptr).text = std::mem::transmute::<&str, &'static str>(s).into();
+                        }
+                    }
+                }
+            })
+        });
+        Ok(*self)
+    }
+
+    fn size(&self, size: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| {
+            v.width.set(size);
+            v.height.set(size);
+        });
+        Ok(*self)
+    }
+    
+    fn color(&self, color: PyColor) -> PyResult<Self> {
+        let c: ColorF = color.into();
+        with_view_mut(self.view_id, |v| v.fg_color.set(c)); 
+        Ok(*self)
+    }
+}
+
+// ============================================================================
+// Dropdown Builder
+// ============================================================================
+
+#[pyclass(name = "DropdownBuilder", unsendable)]
+#[derive(Clone, Copy)]
+pub struct PyDropdownBuilder {
+    view_id: u64,
+}
+
+#[pymethods]
+impl PyDropdownBuilder {
+    fn width(&self, w: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.width.set(w));
+        Ok(*self)
+    }
+
+    fn height(&self, h: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.height.set(h));
+        Ok(*self)
+    }
+}
+
+// ============================================================================
+// Grid Layout Builder
+// ============================================================================
+
+#[pyclass(name = "GridLayoutBuilder", unsendable)]
+#[derive(Clone, Copy)]
+pub struct PyGridLayoutBuilder {
+    view_id: u64,
+}
+
+#[pymethods]
+impl PyGridLayoutBuilder {
+    fn gap(&self, gap: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.margin.set(gap));
+        Ok(*self)
+    }
+
+    fn width(&self, w: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.width.set(w));
+        Ok(*self)
+    }
+    
+    fn height(&self, h: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.height.set(h));
+        Ok(*self)
+    }
+    
+    fn flex(&self, grow: f32) -> PyResult<Self> {
+        with_view_mut(self.view_id, |v| v.flex_grow.set(grow));
+        Ok(*self)
+    }
 }

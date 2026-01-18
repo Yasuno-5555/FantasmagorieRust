@@ -137,6 +137,15 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             if let Some(path) = view.path.get() {
                 dl.add_path(path, view.fg_color.get(), view.thickness.get());
             }
+        ViewType::Checkbox => {
+            render_checkbox(view, dl);
+        }
+        ViewType::Radio => {
+             render_radio(view, dl);
+        }
+        ViewType::Dropdown => {
+             render_dropdown(view, dl);
+             // Recursion handled below? No, must check structure.
         }
         ViewType::Knob => {
             render_knob(view, dl);
@@ -530,10 +539,8 @@ fn render_markdown(view: &ViewHeader, dl: &mut DrawList) {
 /// Render toggle switch
 fn render_toggle(view: &ViewHeader, dl: &mut DrawList) {
     let rect = view.computed_rect.get();
-    // Placeholder toggle rendering
-    // Would need ToggleView cast for value
-
-    let is_on = false; // Would come from ToggleView.value
+    // Use view.value (0.0 or 1.0)
+    let is_on = view.value.get() > 0.5;
 
     let track_color = if is_on {
         ColorF::new(0.2, 0.6, 0.4, 1.0)
@@ -557,6 +564,222 @@ fn render_toggle(view: &ViewHeader, dl: &mut DrawList) {
         8.0,
         ColorF::new(0.9, 0.9, 1.0, 1.0),
     );
+}
+
+    );
+}
+
+/// Render checkbox
+fn render_checkbox(view: &ViewHeader, dl: &mut DrawList) {
+    let rect = view.computed_rect.get();
+    let is_checked = view.value.get() > 0.5;
+
+    // Box
+    let bg = if is_checked { view.fg_color.get() } else { view.bg_color.get() };
+    
+    dl.add_rounded_rect(
+        Vec2::new(rect.x, rect.y),
+        Vec2::new(rect.w, rect.h),
+        view.border_radius_tl.get(),
+        bg,
+    );
+    
+    // Border
+    if view.border_width.get() > 0.0 {
+        dl.add_rounded_rect_stroke(
+             Vec2::new(rect.x, rect.y),
+             Vec2::new(rect.w, rect.h),
+             view.border_radius_tl.get(),
+             view.border_color.get(),
+             view.border_width.get()
+        );
+    }
+
+    // Checkmark (simple lines for now)
+    if is_checked {
+        let check_color = ColorF::white(); // Or contrasting color
+        // Draw checkmark
+        let center = Vec2::new(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+        let size = rect.w * 0.6;
+        
+        // V shape
+        // p1: top leftish of V
+        // p2: bottom center
+        // p3: top right
+        
+        let p1 = Vec2::new(center.x - size * 0.4, center.y);
+        let p2 = Vec2::new(center.x - size * 0.1, center.y + size * 0.3);
+        let p3 = Vec2::new(center.x + size * 0.4, center.y - size * 0.4);
+        
+        dl.add_line(p1, p2, 2.0, check_color);
+        dl.add_line(p2, p3, 2.0, check_color);
+    }
+    
+    // Label ? The CheckboxBuilder sets view.text, so if it's there we should render it?
+    // Usually render_label_and_icon_at handles this if we call it. 
+    // But standard checkboxes often have label to the right.
+    // Let's assume layout handles the label as a sibling TEXT widget for now to be flexible,
+    // OR we render it here if present.
+    // The builder sets `view.text`, so we should probably render it.
+    
+    if !view.text.get().is_empty() {
+        // Draw text to the right of the box
+        let text_padding = 8.0;
+        let text_pos = Vec2::new(rect.x + rect.w + text_padding, rect.y + rect.h * 0.15); // Vertically align roughly
+        // We need access to FontManager. It is passed to generic render functions via UIContext usually, 
+        // but here render_checkbox signature only has DrawList.
+        // Wait, `render_text_input` doesn't take FM either? 
+        // Ah, `render_text_input` uses `crate::text::FONT_MANAGER.with(...)`.
+        
+        crate::text::FONT_MANAGER.with(|fm| {
+             let mut font_manager = fm.borrow_mut();
+             if !font_manager.fonts.is_empty() {
+                // Determine color
+                let color = view.fg_color.get(); // Or theme text color? 
+                // Using fg_color for checkbox fill might make text same color as fill if we aren't careful.
+                // But typically checkbox fg is accent. Text might be label color.
+                // Let's use a standard text color if we can access theme, but we can't here easily.
+                // For now use white/black or same as fg.
+                
+                font_manager.render_text(
+                    dl,
+                    &view.text.get(),
+                    text_pos,
+                    view.font_size.get(),
+                    ColorF::white(), // Default to white for now
+                );
+             }
+        });
+    }
+}
+
+    }
+}
+
+/// Render radio button
+fn render_radio(view: &ViewHeader, dl: &mut DrawList) {
+    let rect = view.computed_rect.get();
+    let is_selected = view.value.get() > 0.5;
+
+    // Circle (Border)
+    let center = Vec2::new(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let radius = rect.w * 0.45;
+
+    // Bg
+    dl.add_circle(center, radius, view.bg_color.get());
+
+    // Border
+    if view.border_width.get() > 0.0 {
+        dl.add_circle_stroke(
+            center,
+            radius,
+            view.border_color.get(),
+            view.border_width.get()
+        );
+    }
+    
+    // Selection Dot
+    if is_selected {
+        dl.add_circle(center, radius * 0.5, view.fg_color.get());
+    }
+
+    // Label
+    if !view.text.get().is_empty() {
+        // Text to the right
+        let text_padding = 8.0;
+        let text_pos = Vec2::new(rect.x + rect.w + text_padding, rect.y + rect.h * 0.15); // Vertically align roughly
+        
+        crate::text::FONT_MANAGER.with(|fm| {
+             let mut font_manager = fm.borrow_mut();
+             if !font_manager.fonts.is_empty() {
+                font_manager.render_text(
+                    dl,
+                    &view.text.get(),
+                    text_pos,
+                    view.font_size.get(),
+                    ColorF::white(), 
+                );
+             }
+        });
+    }
+}
+
+/// Render dropdown header
+fn render_dropdown(view: &ViewHeader, dl: &mut DrawList) {
+    let rect = view.computed_rect.get();
+    let is_open = view.value.get() > 0.5;
+
+    // Background
+    dl.add_rounded_rect(
+        Vec2::new(rect.x, rect.y),
+        Vec2::new(rect.w, rect.h),
+        view.border_radius_tl.get(),
+        if is_open { view.bg_color.get().lighten(0.1) } else { view.bg_color.get() },
+    );
+
+    // Border
+    if view.border_width.get() > 0.0 {
+        dl.add_rounded_rect_stroke(
+             Vec2::new(rect.x, rect.y),
+             Vec2::new(rect.w, rect.h),
+             view.border_radius_tl.get(),
+             view.border_color.get(),
+             view.border_width.get()
+        );
+    }
+    
+    // Label
+    let text_padding = 8.0;
+    let text_pos = Vec2::new(rect.x + text_padding, rect.y + rect.h * 0.15);
+    
+    // Icon / Arrow
+    let arrow_size = 10.0;
+    let arrow_x = rect.x + rect.w - arrow_size - 8.0;
+    let arrow_y = rect.y + rect.h * 0.5 - arrow_size * 0.5;
+    
+    // Draw Arrow (Chevron)
+    let chevron_color = view.fg_color.get();
+    if is_open {
+        // Up arrow
+        dl.add_line(
+            Vec2::new(arrow_x, arrow_y + arrow_size * 0.7),
+            Vec2::new(arrow_x + arrow_size * 0.5, arrow_y + arrow_size * 0.2),
+            2.0, chevron_color
+        );
+        dl.add_line(
+            Vec2::new(arrow_x + arrow_size * 0.5, arrow_y + arrow_size * 0.2),
+            Vec2::new(arrow_x + arrow_size, arrow_y + arrow_size * 0.7),
+            2.0, chevron_color
+        );
+    } else {
+        // Down arrow
+        dl.add_line(
+            Vec2::new(arrow_x, arrow_y + arrow_size * 0.3),
+            Vec2::new(arrow_x + arrow_size * 0.5, arrow_y + arrow_size * 0.8),
+            2.0, chevron_color
+        );
+        dl.add_line(
+            Vec2::new(arrow_x + arrow_size * 0.5, arrow_y + arrow_size * 0.8),
+            Vec2::new(arrow_x + arrow_size, arrow_y + arrow_size * 0.3),
+            2.0, chevron_color
+        );
+    }
+
+    // Text (Render last so overlap ?)
+    if !view.text.get().is_empty() {
+         crate::text::FONT_MANAGER.with(|fm| {
+             let mut font_manager = fm.borrow_mut();
+             if !font_manager.fonts.is_empty() {
+                font_manager.render_text(
+                    dl,
+                    &view.text.get(),
+                    text_pos,
+                    view.font_size.get(),
+                    view.fg_color.get(), 
+                );
+             }
+        });
+    }
 }
 
 /// Render slider
@@ -628,6 +851,24 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList) {
         rect.y + (rect.h - view.font_size.get()) * 0.5,
     );
 
+    // Handle Mouse Click for Cursor Positioning
+    if interaction::is_active(view.id.get()) && interaction::is_clicked(view.id.get()) {
+         // Get mouse relative x
+         let mouse = interaction::get_mouse_pos();
+         let rel_x = mouse.x - text_pos.x;
+         
+         crate::text::FONT_MANAGER.with(|fm| {
+             let fm = fm.borrow(); // Read only
+             // Need text to measure.
+             let combined_text = view.text.get(); // Ignore IME preedit for click logic simplification? Or include it?
+             // Usually clicks happen on committed text.
+             let idx = fm.find_index_at_x(combined_text, view.font_size.get(), rel_x);
+             
+             interaction::set_cursor_idx(idx);
+             // TODO: Handle selection anchor/drag
+         });
+    }
+
     // Caret and IME
     crate::text::FONT_MANAGER.with(|fm| {
         let mut fm = fm.borrow_mut();
@@ -644,9 +885,12 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList) {
                 combined_text.push_str(&ime_preedit);
             }
 
-            // Simple caret at end of combined text
-            let text_size = fm.measure_text(&combined_text, view.font_size.get());
-            let caret_x = text_pos.x + text_size.x + 2.0;
+            // Cursor-based caret
+            let cursor_idx = interaction::get_cursor_idx();
+            let safe_cursor = cursor_idx.min(combined_text.len());
+            let text_before = &combined_text[0..safe_cursor]; 
+            let cursor_offset = fm.measure_text(text_before, view.font_size.get()).x;
+            let caret_x = text_pos.x + cursor_offset;
 
             // Update OS IME Window Position (Screen Coordinates)
             // Note: We need window position offset if we want absolute screen coords.
@@ -656,6 +900,25 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList) {
                 Vec2::new(caret_x, text_pos.y),
                 Vec2::new(2.0, view.font_size.get()),
             );
+
+            // Draw Selection Highlight (if any)
+            if let Some((start, end)) = interaction::get_selection_range() {
+                 let s = start.min(view.text.get().len());
+                 let e = end.min(view.text.get().len());
+                 if s < e {
+                     let t_start = &view.text.get()[0..s];
+                     let t_sel = &view.text.get()[s..e];
+                     
+                     let x_start = text_pos.x + fm.measure_text(t_start, view.font_size.get()).x;
+                     let width = fm.measure_text(t_sel, view.font_size.get()).x;
+                     
+                     dl.add_rect(
+                        Vec2::new(x_start, text_pos.y),
+                        Vec2::new(width, view.font_size.get() * 1.2),
+                        ColorF::new(0.2, 0.4, 0.8, 0.5) // Selection Color
+                     );
+                 }
+            }
 
             // Draw Caret
             dl.add_rounded_rect(
