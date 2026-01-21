@@ -8,7 +8,6 @@ use crate::draw::{DrawCommand, DrawList};
 use ash::vk;
 use std::ffi::CStr;
 
-
 /// Vulkan-based rendering backend
 pub struct VulkanBackend {
     _entry: ash::Entry,
@@ -23,7 +22,7 @@ pub struct VulkanBackend {
     pipeline: vk::Pipeline,
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
-    
+
     // Swapchain
     surface_loader: ash::khr::surface::Instance,
     swapchain_loader: ash::khr::swapchain::Device,
@@ -32,25 +31,25 @@ pub struct VulkanBackend {
     swapchain_images: Vec<vk::Image>,
     swapchain_image_views: Vec<vk::ImageView>,
     framebuffers: Vec<vk::Framebuffer>,
-    
+
     // Buffers
     vertex_buffer: vk::Buffer,
     vertex_memory: vk::DeviceMemory,
     uniform_buffer: vk::Buffer,
     uniform_memory: vk::DeviceMemory,
-    
+
     // Texture
     font_texture: vk::Image,
     font_texture_memory: vk::DeviceMemory,
     font_texture_view: vk::ImageView,
     sampler: vk::Sampler,
     descriptor_set: vk::DescriptorSet,
-    
+
     // Sync
     image_available_semaphore: vk::Semaphore,
     render_finished_semaphore: vk::Semaphore,
     in_flight_fence: vk::Fence,
-    
+
     width: u32,
     height: u32,
 }
@@ -91,19 +90,23 @@ struct UniformBufferObject {
 
 impl VulkanBackend {
     /// Create a new Vulkan backend
-    /// 
+    ///
     /// # Safety
     /// Requires valid window handle for surface creation
     #[cfg(target_os = "windows")]
-    pub unsafe fn new(hwnd: *mut std::ffi::c_void, hinstance: *mut std::ffi::c_void, width: u32, height: u32) -> Result<Self, String> {
+    pub unsafe fn new(
+        hwnd: *mut std::ffi::c_void,
+        hinstance: *mut std::ffi::c_void,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, String> {
         // Load Vulkan
-        let entry = ash::Entry::load()
-            .map_err(|e| format!("Failed to load Vulkan: {:?}", e))?;
+        let entry = ash::Entry::load().map_err(|e| format!("Failed to load Vulkan: {:?}", e))?;
 
         // Create instance
         let app_name = c"Fantasmagorie";
         let engine_name = c"Fantasmagorie Engine";
-        
+
         let app_info = vk::ApplicationInfo::default()
             .application_name(app_name)
             .application_version(vk::make_api_version(0, 1, 0, 0))
@@ -120,7 +123,8 @@ impl VulkanBackend {
             .application_info(&app_info)
             .enabled_extension_names(&extension_names);
 
-        let instance = entry.create_instance(&create_info, None)
+        let instance = entry
+            .create_instance(&create_info, None)
             .map_err(|e| format!("Failed to create Vulkan instance: {:?}", e))?;
 
         println!("✅ Vulkan instance created");
@@ -130,32 +134,35 @@ impl VulkanBackend {
         let surface_create_info = vk::Win32SurfaceCreateInfoKHR::default()
             .hinstance(hinstance as vk::HINSTANCE)
             .hwnd(hwnd as vk::HWND);
-        
-        let surface = win32_surface_loader.create_win32_surface(&surface_create_info, None)
+
+        let surface = win32_surface_loader
+            .create_win32_surface(&surface_create_info, None)
             .map_err(|e| format!("Failed to create Win32 surface: {:?}", e))?;
 
         let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
 
         // Select physical device
-        let physical_devices = instance.enumerate_physical_devices()
+        let physical_devices = instance
+            .enumerate_physical_devices()
             .map_err(|e| format!("Failed to enumerate physical devices: {:?}", e))?;
 
-        let physical_device = physical_devices.into_iter()
+        let physical_device = physical_devices
+            .into_iter()
             .find(|&pd| {
                 let props = instance.get_physical_device_properties(pd);
-                props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU ||
-                props.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU
+                props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
+                    || props.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU
             })
             .ok_or("No suitable GPU found")?;
 
         let props = instance.get_physical_device_properties(physical_device);
-        let device_name = CStr::from_ptr(props.device_name.as_ptr())
-            .to_string_lossy();
+        let device_name = CStr::from_ptr(props.device_name.as_ptr()).to_string_lossy();
         println!("🎮 Vulkan device: {}", device_name);
 
         // Find graphics queue family
         let queue_families = instance.get_physical_device_queue_family_properties(physical_device);
-        let graphics_family = queue_families.iter()
+        let graphics_family = queue_families
+            .iter()
             .position(|qf| qf.queue_flags.contains(vk::QueueFlags::GRAPHICS))
             .ok_or("No graphics queue family found")? as u32;
 
@@ -166,20 +173,22 @@ impl VulkanBackend {
             .queue_priorities(&queue_priorities);
 
         let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
-        
+
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_create_info))
             .enabled_extension_names(&device_extensions);
 
-        let device = instance.create_device(physical_device, &device_create_info, None)
+        let device = instance
+            .create_device(physical_device, &device_create_info, None)
             .map_err(|e| format!("Failed to create logical device: {:?}", e))?;
 
         let graphics_queue = device.get_device_queue(graphics_family, 0);
 
         // Create swapchain
         let swapchain_loader = ash::khr::swapchain::Device::new(&instance, &device);
-        
-        let surface_caps = surface_loader.get_physical_device_surface_capabilities(physical_device, surface)
+
+        let surface_caps = surface_loader
+            .get_physical_device_surface_capabilities(physical_device, surface)
             .map_err(|e| format!("Failed to get surface capabilities: {:?}", e))?;
 
         let surface_format = vk::SurfaceFormatKHR {
@@ -201,14 +210,17 @@ impl VulkanBackend {
             .present_mode(vk::PresentModeKHR::FIFO)
             .clipped(true);
 
-        let swapchain = swapchain_loader.create_swapchain(&swapchain_create_info, None)
+        let swapchain = swapchain_loader
+            .create_swapchain(&swapchain_create_info, None)
             .map_err(|e| format!("Failed to create swapchain: {:?}", e))?;
 
-        let swapchain_images = swapchain_loader.get_swapchain_images(swapchain)
+        let swapchain_images = swapchain_loader
+            .get_swapchain_images(swapchain)
             .map_err(|e| format!("Failed to get swapchain images: {:?}", e))?;
 
         // Create image views
-        let swapchain_image_views: Vec<vk::ImageView> = swapchain_images.iter()
+        let swapchain_image_views: Vec<vk::ImageView> = swapchain_images
+            .iter()
             .map(|&image| {
                 let create_info = vk::ImageViewCreateInfo::default()
                     .image(image)
@@ -254,11 +266,13 @@ impl VulkanBackend {
             .attachments(std::slice::from_ref(&attachment))
             .subpasses(std::slice::from_ref(&subpass));
 
-        let render_pass = device.create_render_pass(&render_pass_info, None)
+        let render_pass = device
+            .create_render_pass(&render_pass_info, None)
             .map_err(|e| format!("Failed to create render pass: {:?}", e))?;
 
         // Create framebuffers
-        let framebuffers: Vec<vk::Framebuffer> = swapchain_image_views.iter()
+        let framebuffers: Vec<vk::Framebuffer> = swapchain_image_views
+            .iter()
             .map(|&view| {
                 let attachments = [view];
                 let create_info = vk::FramebufferCreateInfo::default()
@@ -285,10 +299,10 @@ impl VulkanBackend {
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
 
-        let layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(&bindings);
+        let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
-        let descriptor_set_layout = device.create_descriptor_set_layout(&layout_info, None)
+        let descriptor_set_layout = device
+            .create_descriptor_set_layout(&layout_info, None)
             .map_err(|e| format!("Failed to create descriptor set layout: {:?}", e))?;
 
         // Create pipeline layout with push constants
@@ -301,7 +315,8 @@ impl VulkanBackend {
             .set_layouts(std::slice::from_ref(&descriptor_set_layout))
             .push_constant_ranges(std::slice::from_ref(&push_constant_range));
 
-        let pipeline_layout = device.create_pipeline_layout(&pipeline_layout_info, None)
+        let pipeline_layout = device
+            .create_pipeline_layout(&pipeline_layout_info, None)
             .map_err(|e| format!("Failed to create pipeline layout: {:?}", e))?;
 
         // Create command pool
@@ -309,7 +324,8 @@ impl VulkanBackend {
             .queue_family_index(graphics_family)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
 
-        let command_pool = device.create_command_pool(&pool_info, None)
+        let command_pool = device
+            .create_command_pool(&pool_info, None)
             .map_err(|e| format!("Failed to create command pool: {:?}", e))?;
 
         // Allocate command buffer
@@ -318,20 +334,23 @@ impl VulkanBackend {
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(1);
 
-        let command_buffers = device.allocate_command_buffers(&alloc_info)
+        let command_buffers = device
+            .allocate_command_buffers(&alloc_info)
             .map_err(|e| format!("Failed to allocate command buffers: {:?}", e))?;
         let command_buffer = command_buffers[0];
 
         // Create sync objects
         let semaphore_info = vk::SemaphoreCreateInfo::default();
-        let fence_info = vk::FenceCreateInfo::default()
-            .flags(vk::FenceCreateFlags::SIGNALED);
+        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-        let image_available_semaphore = device.create_semaphore(&semaphore_info, None)
+        let image_available_semaphore = device
+            .create_semaphore(&semaphore_info, None)
             .map_err(|e| format!("Failed to create semaphore: {:?}", e))?;
-        let render_finished_semaphore = device.create_semaphore(&semaphore_info, None)
+        let render_finished_semaphore = device
+            .create_semaphore(&semaphore_info, None)
             .map_err(|e| format!("Failed to create semaphore: {:?}", e))?;
-        let in_flight_fence = device.create_fence(&fence_info, None)
+        let in_flight_fence = device
+            .create_fence(&fence_info, None)
             .map_err(|e| format!("Failed to create fence: {:?}", e))?;
 
         // Create vertex buffer (dynamic, host visible)
@@ -357,13 +376,8 @@ impl VulkanBackend {
         )?;
 
         // Create font texture (placeholder 1x1 white)
-        let (font_texture, font_texture_memory, font_texture_view) = Self::create_texture(
-            &device,
-            &instance,
-            physical_device,
-            1, 1,
-            &[255u8],
-        )?;
+        let (font_texture, font_texture_memory, font_texture_view) =
+            Self::create_texture(&device, &instance, physical_device, 1, 1, &[255u8])?;
 
         // Create sampler
         let sampler_info = vk::SamplerCreateInfo::default()
@@ -373,7 +387,8 @@ impl VulkanBackend {
             .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
             .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
 
-        let sampler = device.create_sampler(&sampler_info, None)
+        let sampler = device
+            .create_sampler(&sampler_info, None)
             .map_err(|e| format!("Failed to create sampler: {:?}", e))?;
 
         // Create descriptor pool
@@ -392,7 +407,8 @@ impl VulkanBackend {
             .pool_sizes(&pool_sizes)
             .max_sets(1);
 
-        let descriptor_pool = device.create_descriptor_pool(&pool_info, None)
+        let descriptor_pool = device
+            .create_descriptor_pool(&pool_info, None)
             .map_err(|e| format!("Failed to create descriptor pool: {:?}", e))?;
 
         // Allocate descriptor set
@@ -400,7 +416,8 @@ impl VulkanBackend {
             .descriptor_pool(descriptor_pool)
             .set_layouts(std::slice::from_ref(&descriptor_set_layout));
 
-        let descriptor_sets = device.allocate_descriptor_sets(&alloc_info)
+        let descriptor_sets = device
+            .allocate_descriptor_sets(&alloc_info)
             .map_err(|e| format!("Failed to allocate descriptor sets: {:?}", e))?;
         let descriptor_set = descriptor_sets[0];
 
@@ -432,32 +449,30 @@ impl VulkanBackend {
 
         // Helper to compile GLSL to SPIR-V using Naga
         fn compile_glsl(src: &str, stage: naga::ShaderStage) -> Result<Vec<u32>, String> {
-             let mut parser = naga::front::glsl::Frontend::default();
-             let options = naga::front::glsl::Options {
-                 stage,
-                 defines: Default::default(),
-             };
-             
-             let module = parser.parse(&options, src)
-                 .map_err(|e| format!("GLSL Parse Error: {:?}", e))?;
-                 
-             let info = naga::valid::Validator::new(
-                 naga::valid::ValidationFlags::all(),
-                 naga::valid::Capabilities::all(),
-             ).validate(&module)
-                 .map_err(|e| format!("Validation Error: {:?}", e))?;
-                 
-             let mut options = naga::back::spv::Options::default();
-             options.lang_version = (1, 0); // Vulkan 1.0 compat
-             
-             let binary = naga::back::spv::write_vec(
-                 &module, 
-                 &info, 
-                 &options, 
-                 None
-             ).map_err(|e| format!("SPIR-V Write Error: {:?}", e))?;
-             
-             Ok(binary)
+            let mut parser = naga::front::glsl::Frontend::default();
+            let options = naga::front::glsl::Options {
+                stage,
+                defines: Default::default(),
+            };
+
+            let module = parser
+                .parse(&options, src)
+                .map_err(|e| format!("GLSL Parse Error: {:?}", e))?;
+
+            let info = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .map_err(|e| format!("Validation Error: {:?}", e))?;
+
+            let mut options = naga::back::spv::Options::default();
+            options.lang_version = (1, 0); // Vulkan 1.0 compat
+
+            let binary = naga::back::spv::write_vec(&module, &info, &options, None)
+                .map_err(|e| format!("SPIR-V Write Error: {:?}", e))?;
+
+            Ok(binary)
         }
 
         let shader_src = include_str!("vulkan_shader.glsl");
@@ -467,7 +482,7 @@ impl VulkanBackend {
 
         // Compile Vertex Shader
         let vert_binary = compile_glsl(vert_src, naga::ShaderStage::Vertex)?;
-        
+
         // Compile Fragment Shader
         let frag_binary = compile_glsl(frag_src, naga::ShaderStage::Fragment)?;
 
@@ -484,7 +499,7 @@ impl VulkanBackend {
             .stage(vk::ShaderStageFlags::VERTEX)
             .module(vert_module)
             .name(unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") });
-        
+
         let frag_stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .module(frag_module)
@@ -517,7 +532,7 @@ impl VulkanBackend {
                     binding: 0,
                     format: vk::Format::R32G32B32A32_SFLOAT,
                     offset: 16,
-                }
+                },
             ]);
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
@@ -542,7 +557,12 @@ impl VulkanBackend {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G | vk::ColorComponentFlags::B | vk::ColorComponentFlags::A)
+            .color_write_mask(
+                vk::ColorComponentFlags::R
+                    | vk::ColorComponentFlags::G
+                    | vk::ColorComponentFlags::B
+                    | vk::ColorComponentFlags::A,
+            )
             .blend_enable(true)
             .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
             .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
@@ -556,8 +576,8 @@ impl VulkanBackend {
             .attachments(std::slice::from_ref(&color_blend_attachment));
 
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
-            .dynamic_states(&dynamic_states);
+        let dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
@@ -572,7 +592,8 @@ impl VulkanBackend {
             .render_pass(render_pass)
             .subpass(0);
 
-        let pipelines = device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+        let pipelines = device
+            .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
             .map_err(|e| format!("Failed to create graphics pipeline: {:?}", e))?;
         let pipeline = pipelines[0];
 
@@ -620,7 +641,12 @@ impl VulkanBackend {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub unsafe fn new(_hwnd: *mut std::ffi::c_void, _hinstance: *mut std::ffi::c_void, _width: u32, _height: u32) -> Result<Self, String> {
+    pub unsafe fn new(
+        _hwnd: *mut std::ffi::c_void,
+        _hinstance: *mut std::ffi::c_void,
+        _width: u32,
+        _height: u32,
+    ) -> Result<Self, String> {
         Err("Vulkan backend Windows surface not available on this platform".to_string())
     }
 
@@ -637,7 +663,8 @@ impl VulkanBackend {
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        let buffer = device.create_buffer(&buffer_info, None)
+        let buffer = device
+            .create_buffer(&buffer_info, None)
             .map_err(|e| format!("Failed to create buffer: {:?}", e))?;
 
         let mem_requirements = device.get_buffer_memory_requirements(buffer);
@@ -653,10 +680,12 @@ impl VulkanBackend {
             .allocation_size(mem_requirements.size)
             .memory_type_index(memory_type);
 
-        let memory = device.allocate_memory(&alloc_info, None)
+        let memory = device
+            .allocate_memory(&alloc_info, None)
             .map_err(|e| format!("Failed to allocate buffer memory: {:?}", e))?;
 
-        device.bind_buffer_memory(buffer, memory, 0)
+        device
+            .bind_buffer_memory(buffer, memory, 0)
             .map_err(|e| format!("Failed to bind buffer memory: {:?}", e))?;
 
         Ok((buffer, memory))
@@ -673,7 +702,11 @@ impl VulkanBackend {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(vk::Format::R8_UNORM)
-            .extent(vk::Extent3D { width, height, depth: 1 })
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -682,7 +715,8 @@ impl VulkanBackend {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::PREINITIALIZED);
 
-        let image = device.create_image(&image_info, None)
+        let image = device
+            .create_image(&image_info, None)
             .map_err(|e| format!("Failed to create image: {:?}", e))?;
 
         let mem_requirements = device.get_image_memory_requirements(image);
@@ -698,14 +732,22 @@ impl VulkanBackend {
             .allocation_size(mem_requirements.size)
             .memory_type_index(memory_type);
 
-        let memory = device.allocate_memory(&alloc_info, None)
+        let memory = device
+            .allocate_memory(&alloc_info, None)
             .map_err(|e| format!("Failed to allocate image memory: {:?}", e))?;
 
-        device.bind_image_memory(image, memory, 0)
+        device
+            .bind_image_memory(image, memory, 0)
             .map_err(|e| format!("Failed to bind image memory: {:?}", e))?;
 
         // Upload texture data
-        let ptr = device.map_memory(memory, 0, data.len() as vk::DeviceSize, vk::MemoryMapFlags::empty())
+        let ptr = device
+            .map_memory(
+                memory,
+                0,
+                data.len() as vk::DeviceSize,
+                vk::MemoryMapFlags::empty(),
+            )
             .map_err(|e| format!("Failed to map image memory: {:?}", e))?;
         std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
         device.unmap_memory(memory);
@@ -729,7 +771,8 @@ impl VulkanBackend {
                 layer_count: 1,
             });
 
-        let view = device.create_image_view(&view_info, None)
+        let view = device
+            .create_image_view(&view_info, None)
             .map_err(|e| format!("Failed to create image view: {:?}", e))?;
 
         Ok((image, memory, view))
@@ -741,8 +784,11 @@ impl VulkanBackend {
         properties: vk::MemoryPropertyFlags,
     ) -> Result<u32, String> {
         for i in 0..mem_properties.memory_type_count {
-            if (type_filter & (1 << i)) != 0 &&
-               mem_properties.memory_types[i as usize].property_flags.contains(properties) {
+            if (type_filter & (1 << i)) != 0
+                && mem_properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(properties)
+            {
                 return Ok(i);
             }
         }
@@ -774,12 +820,36 @@ impl VulkanBackend {
         let (u0, v0, u1, v1) = (uv[0], uv[1], uv[2], uv[3]);
 
         [
-            Vertex { pos: [x0, y0], uv: [u0, v0], color: c },
-            Vertex { pos: [x0, y1], uv: [u0, v1], color: c },
-            Vertex { pos: [x1, y1], uv: [u1, v1], color: c },
-            Vertex { pos: [x0, y0], uv: [u0, v0], color: c },
-            Vertex { pos: [x1, y1], uv: [u1, v1], color: c },
-            Vertex { pos: [x1, y0], uv: [u1, v0], color: c },
+            Vertex {
+                pos: [x0, y0],
+                uv: [u0, v0],
+                color: c,
+            },
+            Vertex {
+                pos: [x0, y1],
+                uv: [u0, v1],
+                color: c,
+            },
+            Vertex {
+                pos: [x1, y1],
+                uv: [u1, v1],
+                color: c,
+            },
+            Vertex {
+                pos: [x0, y0],
+                uv: [u0, v0],
+                color: c,
+            },
+            Vertex {
+                pos: [x1, y1],
+                uv: [u1, v1],
+                color: c,
+            },
+            Vertex {
+                pos: [x1, y0],
+                uv: [u1, v0],
+                color: c,
+            },
         ]
     }
 }
@@ -792,33 +862,52 @@ impl super::Backend for VulkanBackend {
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         unsafe {
             // Wait for previous frame
-            self.device.wait_for_fences(&[self.in_flight_fence], true, u64::MAX).unwrap();
+            self.device
+                .wait_for_fences(&[self.in_flight_fence], true, u64::MAX)
+                .unwrap();
             self.device.reset_fences(&[self.in_flight_fence]).unwrap();
 
             // Acquire swapchain image
-            let (image_index, _) = self.swapchain_loader
-                .acquire_next_image(self.swapchain, u64::MAX, self.image_available_semaphore, vk::Fence::null())
+            let (image_index, _) = self
+                .swapchain_loader
+                .acquire_next_image(
+                    self.swapchain,
+                    u64::MAX,
+                    self.image_available_semaphore,
+                    vk::Fence::null(),
+                )
                 .unwrap();
 
             // Update uniform buffer
             let ubo = UniformBufferObject {
                 projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
             };
-            let ptr = self.device.map_memory(
-                self.uniform_memory, 
-                0, 
-                std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize,
-                vk::MemoryMapFlags::empty()
-            ).unwrap();
-            std::ptr::copy_nonoverlapping(&ubo as *const _ as *const u8, ptr as *mut u8, std::mem::size_of::<UniformBufferObject>());
+            let ptr = self
+                .device
+                .map_memory(
+                    self.uniform_memory,
+                    0,
+                    std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize,
+                    vk::MemoryMapFlags::empty(),
+                )
+                .unwrap();
+            std::ptr::copy_nonoverlapping(
+                &ubo as *const _ as *const u8,
+                ptr as *mut u8,
+                std::mem::size_of::<UniformBufferObject>(),
+            );
             self.device.unmap_memory(self.uniform_memory);
 
             // Reset and begin command buffer
-            self.device.reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty()).unwrap();
-            
+            self.device
+                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
+                .unwrap();
+
             let begin_info = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            self.device.begin_command_buffer(self.command_buffer, &begin_info).unwrap();
+            self.device
+                .begin_command_buffer(self.command_buffer, &begin_info)
+                .unwrap();
 
             // Begin render pass
             let clear_values = [vk::ClearValue {
@@ -832,15 +921,26 @@ impl super::Backend for VulkanBackend {
                 .framebuffer(self.framebuffers[image_index as usize])
                 .render_area(vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: vk::Extent2D { width: self.width, height: self.height },
+                    extent: vk::Extent2D {
+                        width: self.width,
+                        height: self.height,
+                    },
                 })
                 .clear_values(&clear_values);
 
-            self.device.cmd_begin_render_pass(self.command_buffer, &render_pass_info, vk::SubpassContents::INLINE);
+            self.device.cmd_begin_render_pass(
+                self.command_buffer,
+                &render_pass_info,
+                vk::SubpassContents::INLINE,
+            );
 
             // Bind pipeline and descriptors
             if self.pipeline != vk::Pipeline::null() {
-                self.device.cmd_bind_pipeline(self.command_buffer, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
+                self.device.cmd_bind_pipeline(
+                    self.command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.pipeline,
+                );
                 self.device.cmd_bind_descriptor_sets(
                     self.command_buffer,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -859,36 +959,53 @@ impl super::Backend for VulkanBackend {
                     min_depth: 0.0,
                     max_depth: 1.0,
                 };
-                self.device.cmd_set_viewport(self.command_buffer, 0, &[viewport]);
+                self.device
+                    .cmd_set_viewport(self.command_buffer, 0, &[viewport]);
 
                 let scissor = vk::Rect2D {
                     offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: vk::Extent2D { width: self.width, height: self.height },
+                    extent: vk::Extent2D {
+                        width: self.width,
+                        height: self.height,
+                    },
                 };
-                self.device.cmd_set_scissor(self.command_buffer, 0, &[scissor]);
+                self.device
+                    .cmd_set_scissor(self.command_buffer, 0, &[scissor]);
 
-            // Process draw commands
-                 let mut vb_ptr: *mut Vertex = std::ptr::null_mut();
-                 let vb_total_size = 65536 * std::mem::size_of::<Vertex>() as vk::DeviceSize;
-                 
-                 // Map buffer once
-                 let raw_ptr = self.device.map_memory(
-                     self.vertex_memory,
-                     0,
-                     vb_total_size,
-                     vk::MemoryMapFlags::empty()
-                 ).unwrap();
-                 vb_ptr = raw_ptr as *mut Vertex;
-                 
-                 let mut vertex_offset = 0;
-                 
-                 self.device.cmd_bind_vertex_buffers(self.command_buffer, 0, &[self.vertex_buffer], &[0]);
- 
-                 for cmd in dl.commands() {
-                     let mut vertices: [Vertex; 6] = [Vertex{pos:[0.0;2],uv:[0.0;2],color:[0.0;4]}; 6];
-                     let mut has_draw = false;
-                     
-                     let mut pc = PushConstants {
+                // Process draw commands
+                let mut vb_ptr: *mut Vertex = std::ptr::null_mut();
+                let vb_total_size = 65536 * std::mem::size_of::<Vertex>() as vk::DeviceSize;
+
+                // Map buffer once
+                let raw_ptr = self
+                    .device
+                    .map_memory(
+                        self.vertex_memory,
+                        0,
+                        vb_total_size,
+                        vk::MemoryMapFlags::empty(),
+                    )
+                    .unwrap();
+                vb_ptr = raw_ptr as *mut Vertex;
+
+                let mut vertex_offset = 0;
+
+                self.device.cmd_bind_vertex_buffers(
+                    self.command_buffer,
+                    0,
+                    &[self.vertex_buffer],
+                    &[0],
+                );
+
+                for cmd in dl.commands() {
+                    let mut vertices: [Vertex; 6] = [Vertex {
+                        pos: [0.0; 2],
+                        uv: [0.0; 2],
+                        color: [0.0; 4],
+                    }; 6];
+                    let mut has_draw = false;
+
+                    let mut pc = PushConstants {
                         rect: [0.0; 4],
                         radii: [0.0; 4],
                         border_color: [0.0; 4],
@@ -900,59 +1017,83 @@ impl super::Backend for VulkanBackend {
                         glow_strength: 0.0,
                         _padding: [0.0; 1],
                         _pad2: [0.0; 2],
-                     };
- 
-                     match cmd {
-                         DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, .. } => {
-                              vertices = Self::quad_vertices(*pos, *size, *color);
-                              has_draw = true;
-                              pc.rect = [pos.x, pos.y, size.x, size.y];
-                              pc.radii = *radii;
-                              pc.border_color = [border_color.r, border_color.g, border_color.b, border_color.a];
-                              pc.glow_color = [glow_color.r, glow_color.g, glow_color.b, glow_color.a];
-                              pc.mode = 2; // Shape
-                              pc.border_width = *border_width;
-                              pc.elevation = *elevation;
-                              pc.is_squircle = if *is_squircle { 1 } else { 0 };
-                              pc.glow_strength = *glow_strength;
-                         }
-                         DrawCommand::Text { pos, size, uv, color } => {
-                              vertices = Self::quad_vertices_uv(*pos, *size, *uv, *color);
-                              has_draw = true;
-                              pc.mode = 1; // Text (SDF)
-                         }
-                         _ => {}
-                     }
- 
-                     if has_draw {
-                         // Copy vertices
-                         unsafe {
-                             let dest = vb_ptr.add(vertex_offset);
-                             std::ptr::copy_nonoverlapping(vertices.as_ptr(), dest, 6);
-                         }
-                         
-                         // Push Constants
-                         let constants_bytes = std::slice::from_raw_parts(
-                             &pc as *const _ as *const u8,
-                             std::mem::size_of::<PushConstants>()
-                         );
-                         
-                         self.device.cmd_push_constants(
-                             self.command_buffer,
-                             self.pipeline_layout,
-                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                             0,
-                             constants_bytes
-                         );
- 
-                         // Draw
-                         self.device.cmd_draw(self.command_buffer, 6, 1, vertex_offset as u32, 0);
-                         
-                         vertex_offset += 6;
-                     }
-                 }
-                 
-                 self.device.unmap_memory(self.vertex_memory);
+                    };
+
+                    match cmd {
+                        DrawCommand::RoundedRect {
+                            pos,
+                            size,
+                            radii,
+                            color,
+                            elevation,
+                            is_squircle,
+                            border_width,
+                            border_color,
+                            glow_strength,
+                            glow_color,
+                            ..
+                        } => {
+                            vertices = Self::quad_vertices(*pos, *size, *color);
+                            has_draw = true;
+                            pc.rect = [pos.x, pos.y, size.x, size.y];
+                            pc.radii = *radii;
+                            pc.border_color = [
+                                border_color.r,
+                                border_color.g,
+                                border_color.b,
+                                border_color.a,
+                            ];
+                            pc.glow_color =
+                                [glow_color.r, glow_color.g, glow_color.b, glow_color.a];
+                            pc.mode = 2; // Shape
+                            pc.border_width = *border_width;
+                            pc.elevation = *elevation;
+                            pc.is_squircle = if *is_squircle { 1 } else { 0 };
+                            pc.glow_strength = *glow_strength;
+                        }
+                        DrawCommand::Text {
+                            pos,
+                            size,
+                            uv,
+                            color,
+                        } => {
+                            vertices = Self::quad_vertices_uv(*pos, *size, *uv, *color);
+                            has_draw = true;
+                            pc.mode = 1; // Text (SDF)
+                        }
+                        _ => {}
+                    }
+
+                    if has_draw {
+                        // Copy vertices
+                        unsafe {
+                            let dest = vb_ptr.add(vertex_offset);
+                            std::ptr::copy_nonoverlapping(vertices.as_ptr(), dest, 6);
+                        }
+
+                        // Push Constants
+                        let constants_bytes = std::slice::from_raw_parts(
+                            &pc as *const _ as *const u8,
+                            std::mem::size_of::<PushConstants>(),
+                        );
+
+                        self.device.cmd_push_constants(
+                            self.command_buffer,
+                            self.pipeline_layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            constants_bytes,
+                        );
+
+                        // Draw
+                        self.device
+                            .cmd_draw(self.command_buffer, 6, 1, vertex_offset as u32, 0);
+
+                        vertex_offset += 6;
+                    }
+                }
+
+                self.device.unmap_memory(self.vertex_memory);
             }
 
             self.device.cmd_end_render_pass(self.command_buffer);
@@ -970,7 +1111,9 @@ impl super::Backend for VulkanBackend {
                 .command_buffers(&command_buffers)
                 .signal_semaphores(&signal_semaphores);
 
-            self.device.queue_submit(self.graphics_queue, &[submit_info], self.in_flight_fence).unwrap();
+            self.device
+                .queue_submit(self.graphics_queue, &[submit_info], self.in_flight_fence)
+                .unwrap();
 
             // Present
             let swapchains = [self.swapchain];
@@ -980,7 +1123,9 @@ impl super::Backend for VulkanBackend {
                 .swapchains(&swapchains)
                 .image_indices(&image_indices);
 
-            let _ = self.swapchain_loader.queue_present(self.graphics_queue, &present_info);
+            let _ = self
+                .swapchain_loader
+                .queue_present(self.graphics_queue, &present_info);
         }
     }
 }
@@ -989,42 +1134,48 @@ impl Drop for VulkanBackend {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
-            
+
             self.device.destroy_fence(self.in_flight_fence, None);
-            self.device.destroy_semaphore(self.render_finished_semaphore, None);
-            self.device.destroy_semaphore(self.image_available_semaphore, None);
-            
+            self.device
+                .destroy_semaphore(self.render_finished_semaphore, None);
+            self.device
+                .destroy_semaphore(self.image_available_semaphore, None);
+
             self.device.destroy_sampler(self.sampler, None);
             self.device.destroy_image_view(self.font_texture_view, None);
             self.device.destroy_image(self.font_texture, None);
             self.device.free_memory(self.font_texture_memory, None);
-            
+
             self.device.destroy_buffer(self.uniform_buffer, None);
             self.device.free_memory(self.uniform_memory, None);
             self.device.destroy_buffer(self.vertex_buffer, None);
             self.device.free_memory(self.vertex_memory, None);
-            
-            self.device.destroy_descriptor_pool(self.descriptor_pool, None);
-            self.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-            
+
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+            self.device
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+
             if self.pipeline != vk::Pipeline::null() {
                 self.device.destroy_pipeline(self.pipeline, None);
             }
-            self.device.destroy_pipeline_layout(self.pipeline_layout, None);
-            
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+
             for &fb in &self.framebuffers {
                 self.device.destroy_framebuffer(fb, None);
             }
             self.device.destroy_render_pass(self.render_pass, None);
-            
+
             for &view in &self.swapchain_image_views {
                 self.device.destroy_image_view(view, None);
             }
-            self.swapchain_loader.destroy_swapchain(self.swapchain, None);
-            
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
+
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
-            
+
             self.surface_loader.destroy_surface(self.surface, None);
             self.instance.destroy_instance(None);
         }

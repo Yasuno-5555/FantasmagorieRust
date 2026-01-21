@@ -1,5 +1,5 @@
 //! Collapsible Container widget - Expandable panel with spring animation
-use crate::core::{ID, ColorF};
+use crate::core::{ColorF, ID};
 use crate::view::header::ViewHeader;
 
 /// Collapsible container builder

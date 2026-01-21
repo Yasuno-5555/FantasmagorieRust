@@ -41,31 +41,31 @@ impl<'a> FaderBuilder<'a> {
 
     pub fn build(self) -> &'a ViewHeader<'a> {
         let id = self.view.id.get();
-        
+
         // Handle interaction
         if crate::view::interaction::is_active(id) {
-             let (_dx, dy) = crate::view::interaction::mouse_delta();
-             if dy != 0.0 {
-                 let range = self.max - self.min;
-                 let modifiers = crate::view::interaction::modifiers();
-                 let is_shift = (modifiers & 1) != 0;
-                 
-                 let sensitivity = if is_shift { 0.1 } else { 1.0 };
-                 
-                 // Fader is vertical: Drag UP (decreasing dy) increases value
-                 // Pixel height is view.height
-                 let h = self.view.height.get().max(10.0);
-                 let delta = -dy * (range / h) * sensitivity;
-                 
-                 *self.value = (*self.value + delta).clamp(self.min, self.max);
-             }
+            let (_dx, dy) = crate::view::interaction::mouse_delta();
+            if dy != 0.0 {
+                let range = self.max - self.min;
+                let modifiers = crate::view::interaction::modifiers();
+                let is_shift = (modifiers & 1) != 0;
+
+                let sensitivity = if is_shift { 0.1 } else { 1.0 };
+
+                // Fader is vertical: Drag UP (decreasing dy) increases value
+                // Pixel height is view.height
+                let h = self.view.height.get().max(10.0);
+                let delta = -dy * (range / h) * sensitivity;
+
+                *self.value = (*self.value + delta).clamp(self.min, self.max);
+            }
         }
-        
+
         // Sync
         self.view.value.set(*self.value);
         self.view.min.set(self.min);
         self.view.max.set(self.max);
-        
+
         self.view
     }
 }

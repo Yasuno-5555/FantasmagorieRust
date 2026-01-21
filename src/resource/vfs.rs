@@ -1,8 +1,8 @@
 //! Virtual File System (VFS) and Asset Management
 //! Ported from vfs.hpp
 
-use std::collections::HashMap;
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 pub struct Vfs {
     pub files: HashMap<String, Vec<u8>>,
@@ -10,7 +10,9 @@ pub struct Vfs {
 
 impl Vfs {
     pub fn new() -> Self {
-        Self { files: HashMap::new() }
+        Self {
+            files: HashMap::new(),
+        }
     }
 
     pub fn mount(&mut self, path: &str, data: Vec<u8>) {

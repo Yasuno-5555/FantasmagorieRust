@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::cell::RefCell;
-use std::sync::atomic::{AtomicU64, Ordering};
 use image::GenericImageView;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub type TextureId = u64;
 pub mod vfs;
@@ -38,7 +38,7 @@ impl TextureManager {
 
         // Try VFS first
         let data = vfs::VFS.with(|v| v.borrow().read(path).map(|d| d.to_vec()));
-        
+
         let img = if let Some(d) = data {
             image::load_from_memory(&d).ok()?
         } else {
@@ -49,16 +49,19 @@ impl TextureManager {
         let pixels = img.to_rgba8().into_raw();
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        
-        self.textures.insert(id, TextureData {
+
+        self.textures.insert(
             id,
-            width,
-            height,
-            pixels: Some(pixels),
-            gl_texture: None,
-            dirty: true,
-        });
-        
+            TextureData {
+                id,
+                width,
+                height,
+                pixels: Some(pixels),
+                gl_texture: None,
+                dirty: true,
+            },
+        );
+
         self.path_cache.insert(path.to_string(), id);
         Some((id, width, height))
     }

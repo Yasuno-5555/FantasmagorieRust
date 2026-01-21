@@ -1,8 +1,8 @@
 //! ID type for widget identification
 //! Ported from fanta_id.h
 
-use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Unique identifier for UI elements
 /// Used for hit-testing, focus tracking, and persistent state lookup
@@ -128,18 +128,18 @@ mod tests {
     fn test_id_stack() {
         let mut stack = IDStack::new();
         let base = stack.current();
-        
+
         stack.push_str("panel");
         let panel_id = stack.current();
         assert_ne!(base, panel_id);
-        
+
         stack.push_index(0);
         let item_id = stack.current();
         assert_ne!(panel_id, item_id);
-        
+
         stack.pop();
         assert_eq!(stack.current(), panel_id);
-        
+
         stack.pop();
         assert_eq!(stack.current(), base);
     }

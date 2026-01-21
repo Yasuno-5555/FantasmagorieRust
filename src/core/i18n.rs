@@ -1,8 +1,8 @@
 //! Localization (I18n) Manager
 //! Ported from i18n.hpp
 
-use std::collections::HashMap;
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 thread_local! {
     static INSTANCE: RefCell<I18nManager> = RefCell::new(I18nManager::new());
@@ -28,7 +28,10 @@ impl I18nManager {
     pub fn add_translation(locale: &str, key: &str, value: &str) {
         INSTANCE.with(|i| {
             let mut i = i.borrow_mut();
-            let cat = i.catalogs.entry(locale.to_string()).or_insert_with(HashMap::new);
+            let cat = i
+                .catalogs
+                .entry(locale.to_string())
+                .or_insert_with(HashMap::new);
             cat.insert(key.to_string(), value.to_string());
         });
     }
@@ -44,7 +47,7 @@ impl I18nManager {
             key.to_string()
         })
     }
-    
+
     /// Translation with placeholders: t("Hello {name}", {"name": "World"})
     pub fn tf(key: &str, args: &HashMap<String, String>) -> String {
         let mut text = Self::t(key);

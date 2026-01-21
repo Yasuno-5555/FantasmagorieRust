@@ -4,7 +4,7 @@
 //! Pass 1: Measure (Bottom-Up) - Children tell parent their size
 //! Pass 2: Arrange (Top-Down) - Parent assigns positions to children
 
-use super::header::{ViewHeader, ViewType, Align, Size};
+use super::header::{Align, Size, ViewHeader, ViewType};
 use crate::core::Rectangle;
 
 /// Public entry point for layout computation
@@ -50,18 +50,22 @@ fn measure_recursive(node: &ViewHeader) {
     match node.view_type {
         ViewType::Text => {
             let measured = crate::text::FONT_MANAGER.with(|fm| {
-                 let mut fm = fm.borrow_mut();
-                 if fm.fonts.is_empty() { fm.load_system_font(); }
-                 fm.measure_text(node.text.get(), node.font_size.get())
+                let mut fm = fm.borrow_mut();
+                if fm.fonts.is_empty() {
+                    fm.load_system_font();
+                }
+                fm.measure_text(node.text.get(), node.font_size.get())
             });
             content_w = measured.x;
             content_h = measured.y;
         }
         ViewType::Button => {
             let measured = crate::text::FONT_MANAGER.with(|fm| {
-                 let mut fm = fm.borrow_mut();
-                 if fm.fonts.is_empty() { fm.load_system_font(); }
-                 fm.measure_text(node.text.get(), node.font_size.get())
+                let mut fm = fm.borrow_mut();
+                if fm.fonts.is_empty() {
+                    fm.load_system_font();
+                }
+                fm.measure_text(node.text.get(), node.font_size.get())
             });
             // Button: add padding for label
             content_w = content_w.max(measured.x + 32.0);
@@ -130,7 +134,8 @@ fn measure_recursive(node: &ViewHeader) {
 /// Parent assigns final rect to each child based on flex_grow and layout direction
 fn arrange_recursive(node: &ViewHeader, x: f32, y: f32, avail_w: f32, avail_h: f32) {
     // Set own computed rect
-    node.computed_rect.set(Rectangle::new(x, y, avail_w, avail_h));
+    node.computed_rect
+        .set(Rectangle::new(x, y, avail_w, avail_h));
 
     // No children? Done.
     let _first = match node.first_child.get() {
@@ -230,7 +235,7 @@ fn arrange_splitter(node: &ViewHeader, inner_x: f32, inner_y: f32, inner_w: f32,
         Some(c) => c,
         None => return,
     };
-    
+
     let child2_opt = children.next();
 
     let margin1 = child1.margin.get();
@@ -239,26 +244,51 @@ fn arrange_splitter(node: &ViewHeader, inner_x: f32, inner_y: f32, inner_w: f32,
         // We have 2 children
         let is_vertical = node.is_vertical.get();
         let margin2 = child2.margin.get();
-        
+
         let avail = if is_vertical { inner_h } else { inner_w };
         let size1 = (avail - handle) * ratio;
         let size2 = avail - handle - size1;
 
         if is_vertical {
-            arrange_recursive(child1, inner_x + margin1, inner_y + margin1,
-                inner_w - margin1 * 2.0, size1 - margin1 * 2.0);
-            arrange_recursive(child2, inner_x + margin2, inner_y + size1 + handle + margin2,
-                inner_w - margin2 * 2.0, size2 - margin2 * 2.0);
+            arrange_recursive(
+                child1,
+                inner_x + margin1,
+                inner_y + margin1,
+                inner_w - margin1 * 2.0,
+                size1 - margin1 * 2.0,
+            );
+            arrange_recursive(
+                child2,
+                inner_x + margin2,
+                inner_y + size1 + handle + margin2,
+                inner_w - margin2 * 2.0,
+                size2 - margin2 * 2.0,
+            );
         } else {
-            arrange_recursive(child1, inner_x + margin1, inner_y + margin1,
-                size1 - margin1 * 2.0, inner_h - margin1 * 2.0);
-            arrange_recursive(child2, inner_x + size1 + handle + margin2, inner_y + margin2,
-                size2 - margin2 * 2.0, inner_h - margin2 * 2.0);
+            arrange_recursive(
+                child1,
+                inner_x + margin1,
+                inner_y + margin1,
+                size1 - margin1 * 2.0,
+                inner_h - margin1 * 2.0,
+            );
+            arrange_recursive(
+                child2,
+                inner_x + size1 + handle + margin2,
+                inner_y + margin2,
+                size2 - margin2 * 2.0,
+                inner_h - margin2 * 2.0,
+            );
         }
     } else {
         // Just one child, fill
-        arrange_recursive(child1, inner_x + margin1, inner_y + margin1,
-            inner_w - margin1 * 2.0, inner_h - margin1 * 2.0);
+        arrange_recursive(
+            child1,
+            inner_x + margin1,
+            inner_y + margin1,
+            inner_w - margin1 * 2.0,
+            inner_h - margin1 * 2.0,
+        );
     }
 }
 
@@ -318,7 +348,7 @@ fn arrange_flex(node: &ViewHeader, inner_x: f32, inner_y: f32, inner_w: f32, inn
         let explicit_w = child.width.get();
         let explicit_h = child.height.get();
         let explicit_cross = if is_row { explicit_h } else { explicit_w };
-        
+
         let child_align = child.align.get();
         let c_cross = if explicit_cross > 0.0 {
             explicit_cross

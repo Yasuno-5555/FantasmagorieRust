@@ -7,7 +7,7 @@
 use bumpalo::Bump;
 
 /// Frame-local linear allocator
-/// 
+///
 /// Design: Fixed capacity, reset every frame. Zero allocation cost.
 /// Safety: Fail-fast on overflow (bumpalo handles this).
 pub struct FrameArena {
@@ -103,7 +103,7 @@ mod tests {
         let _ = arena.alloc_str("test");
         let used_before = arena.used();
         assert!(used_before > 0);
-        
+
         arena.reset();
         // After reset, allocations start fresh
         let _ = arena.alloc(456i32);

@@ -1,26 +1,33 @@
 //! Core types and infrastructure
 
-mod types;
-mod id;
+pub mod a11y;
 mod arena;
 mod context;
-pub mod i18n;
 pub mod gesture;
+pub mod i18n;
+mod id;
 pub mod marquee;
-pub mod wire;
 pub mod mobile;
+pub mod persistence;
+pub mod resource;
+pub mod snapping;
 pub mod theme;
-pub mod a11y;
+mod types;
 pub mod undo;
+pub mod wire;
 
-pub use types::{ColorF, Vec2, Rectangle};
-pub use id::ID;
+pub use a11y::{
+    is_high_contrast_mode, AccessibleInfo, AccessibleRole, AccessibleStore, FocusManager,
+};
 pub use arena::FrameArena;
-pub use context::{EngineContext, InputContext, PersistentState, InteractionState};
-pub use gesture::{GestureDetector, GestureType, SwipeDirection, GestureConfig};
+pub use context::{EngineContext, InputContext, InteractionState, PersistentState};
+pub use gesture::{GestureConfig, GestureDetector, GestureType, SwipeDirection};
+pub use id::ID;
 pub use marquee::{MarqueeSelection, MarqueeState, Rect, Selectable};
-pub use wire::{WireInteraction, WireState, PortId, PortType, Port, Connection, ConnectionResult};
-pub use mobile::{MobilePlatform, DesktopPlatform, ImeHint, ImeAction, ImePosition, HapticType, SafeAreaInsets};
+pub use mobile::{
+    DesktopPlatform, HapticType, ImeAction, ImeHint, ImePosition, MobilePlatform, SafeAreaInsets,
+};
 pub use theme::Theme;
-pub use a11y::{AccessibleInfo, AccessibleRole, FocusManager, AccessibleStore, is_high_contrast_mode};
-pub use undo::{Command, CommandStack, CallbackCommand, BatchCommand};
+pub use types::{ColorF, Rectangle, Vec2, Vec3, WindowID};
+pub use undo::{BatchCommand, CallbackCommand, Command, CommandStack};
+pub use wire::{Connection, ConnectionResult, Port, PortId, PortType, WireInteraction, WireState};

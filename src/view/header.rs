@@ -4,8 +4,8 @@
 //! Uses Cell<T> for layout outputs to enable interior mutability
 //! during layout pass (solving Rust borrow checker constraints)
 
+use crate::core::{ColorF, Rectangle, Vec2, ID};
 use std::cell::Cell;
-use crate::core::{ColorF, Vec2, Rectangle, ID};
 
 /// View type enum
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -44,6 +44,13 @@ pub enum ViewType {
     Collapsible,
     Toast,
     Tooltip,
+    Scene3D,
+    CurveEditor,
+    Ruler,
+    Grid,
+    TransformGizmo,
+    Math,
+
     _MAX,
 }
 
@@ -92,8 +99,8 @@ pub struct ViewHeader<'a> {
     pub first_child: Cell<Option<&'a ViewHeader<'a>>>,
 
     // --- Layout Inputs (Cell for interior mutability during build/layout) ---
-    pub width: Cell<f32>,    // 0 = Auto
-    pub height: Cell<f32>,   // 0 = Auto
+    pub width: Cell<f32>,  // 0 = Auto
+    pub height: Cell<f32>, // 0 = Auto
     pub pos_x: Cell<f32>,
     pub pos_y: Cell<f32>,
     pub padding: Cell<f32>,
@@ -108,6 +115,8 @@ pub struct ViewHeader<'a> {
     pub is_editing: Cell<bool>,
     pub clip: Cell<bool>,
     pub align: Cell<Align>,
+    pub scroll_x: Cell<bool>,
+    pub scroll_y: Cell<bool>,
 
     // --- Style Inputs (Cell for interior mutability) ---
     // Note: Cell makes them mutable via shared reference
@@ -128,18 +137,21 @@ pub struct ViewHeader<'a> {
     pub wobble_x: Cell<f32>,
     pub wobble_y: Cell<f32>,
     pub font_size: Cell<f32>,
-    
+
     // String refs are Copy (impl Copy for &str), Cell requires Copy.
     // &str is Copy.
     pub text: Cell<&'a str>,
     pub icon: Cell<&'a str>,
     pub icon_size: Cell<f32>, // 0 = same as font_size
-    
+
     // --- Slider/Toggle value ---
     pub value: Cell<f32>,
     pub min: Cell<f32>,
     pub max: Cell<f32>,
-    
+
+    // --- Text Content ---
+
+
     // --- Bezier ---
     pub points: Cell<[Vec2; 4]>,
     pub thickness: Cell<f32>,
@@ -153,17 +165,27 @@ pub struct ViewHeader<'a> {
 
     // --- Collapsible ---
     pub is_expanded: Cell<bool>,
-    pub content_height: Cell<f32>, // Target height for animation
 
     // --- ColorPicker ---
     pub color_hsv: Cell<[f32; 3]>, // H, S, V
 
     // --- Path ---
+    pub content_height: Cell<f32>, // Target height for animation
     pub path: Cell<Option<&'a crate::draw::path::Path>>,
 
     // --- Plot ---
-    pub plot_data: Cell<Option<&'a [f32]>>,
+    pub plot_data: Cell<Option<&'a crate::view::plot::PlotData<'a>>>,
 
+    // --- Scene3D ---
+    pub scene_data: Cell<Option<&'a crate::view::scene3d::Scene3DData>>,
+
+    // --- CurveEditor ---
+    pub curve_data: Cell<Option<&'a crate::view::curves::CurveEditorData>>,
+    pub ruler_data: Cell<Option<&'a crate::view::ruler::RulerData>>,
+    pub grid_data: Cell<Option<&'a crate::view::grid::GridData>>,
+    pub gizmo_data: Cell<Option<&'a crate::view::gizmo::GizmoData>>,
+
+    // --- Interaction Output ---
     // --- Layout Outputs (Cell for interior mutability) ---
     pub measured_size: Cell<Size>,
     pub content_size: Cell<Size>,
@@ -177,7 +199,7 @@ impl<'a> Default for ViewHeader<'a> {
             id: Cell::new(ID::NONE),
             next_sibling: Cell::new(None),
             first_child: Cell::new(None),
-            
+
             // Layout
             width: Cell::new(0.0),
             height: Cell::new(0.0),
@@ -195,7 +217,9 @@ impl<'a> Default for ViewHeader<'a> {
             is_editing: Cell::new(false),
             clip: Cell::new(false),
             align: Cell::new(Align::Stretch),
-            
+            scroll_x: Cell::new(false),
+            scroll_y: Cell::new(false),
+
             // Style
             bg_color: Cell::new(ColorF::TRANSPARENT),
             fg_color: Cell::new(ColorF::WHITE),
@@ -217,36 +241,47 @@ impl<'a> Default for ViewHeader<'a> {
             text: Cell::new(""),
             icon: Cell::new(""),
             icon_size: Cell::new(0.0),
-            
+
             // Values
             value: Cell::new(0.0),
             min: Cell::new(0.0),
             max: Cell::new(1.0),
-            
+
             // Bezier
             points: Cell::new([Vec2::ZERO; 4]),
-            thickness: Cell::new(2.0),
-            
+            thickness: Cell::new(1.0),
+
+
+
             // Image
             texture_id: Cell::new(None),
-            
+
             // Splitter
             ratio: Cell::new(0.5),
             is_vertical: Cell::new(false),
-            
+
             // Collapsible
             is_expanded: Cell::new(true),
             content_height: Cell::new(0.0),
-            
+
             // ColorPicker
             color_hsv: Cell::new([0.0, 1.0, 1.0]),
-            
+
             // Path
             path: Cell::new(None),
-            
+
             // Plot
             plot_data: Cell::new(None),
-            
+
+            // Scene3D
+            scene_data: Cell::new(None),
+
+            // CurveEditor
+            curve_data: Cell::new(None),
+            ruler_data: Cell::new(None),
+            grid_data: Cell::new(None),
+            gizmo_data: Cell::new(None),
+
             // Outputs
             measured_size: Cell::new(Size::ZERO),
             content_size: Cell::new(Size::ZERO),
@@ -275,7 +310,9 @@ impl<'a> ViewHeader<'a> {
 
     /// Iterate over children
     pub fn children(&self) -> ChildIter<'a> {
-        ChildIter { current: self.first_child.get() }
+        ChildIter {
+            current: self.first_child.get(),
+        }
     }
 
     /// Get computed rectangle
@@ -348,14 +385,20 @@ mod tests {
     #[test]
     fn test_add_children() {
         let arena = FrameArena::new();
-        
+
         let parent = arena.alloc(ViewHeader::default());
-        let child1 = arena.alloc(ViewHeader { id: ID::from_str("c1"), ..Default::default() });
-        let child2 = arena.alloc(ViewHeader { id: ID::from_str("c2"), ..Default::default() });
-        
+        let child1 = arena.alloc(ViewHeader {
+            id: ID::from_str("c1"),
+            ..Default::default()
+        });
+        let child2 = arena.alloc(ViewHeader {
+            id: ID::from_str("c2"),
+            ..Default::default()
+        });
+
         parent.add_child(child1);
         parent.add_child(child2);
-        
+
         let children: Vec<_> = parent.children().collect();
         assert_eq!(children.len(), 2);
         assert_eq!(children[0].id, ID::from_str("c1"));

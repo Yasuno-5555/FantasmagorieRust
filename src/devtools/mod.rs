@@ -6,9 +6,13 @@
 //! - Plugin system for extensions
 
 pub mod inspector;
-pub mod profiler;
 pub mod plugin;
+pub mod profiler;
 
-pub use inspector::{Inspector, WidgetInfo, LayoutBounds, PropertyValue, TreeItem};
-pub use profiler::{Profiler, ProfilerConfig, FrameTiming, FrameStats, PerformanceLevel, ScopeTimer};
-pub use plugin::{Plugin, PluginManager, PluginInfo, PluginState, PluginContext, PluginCapabilities};
+pub use inspector::{Inspector, LayoutBounds, PropertyValue, TreeItem, WidgetInfo};
+pub use plugin::{
+    Plugin, PluginCapabilities, PluginContext, PluginInfo, PluginManager, PluginState,
+};
+pub use profiler::{
+    FrameStats, FrameTiming, PerformanceLevel, Profiler, ProfilerConfig, ScopeTimer,
+};

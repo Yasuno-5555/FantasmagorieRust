@@ -1,8 +1,10 @@
 //! Engine context and state management
 //! Ported from context.hpp
 
+use super::{FrameArena, Rectangle, Vec2, ID};
+use crate::core::persistence::PersistenceManager;
+use crate::core::types::WindowID;
 use std::collections::HashMap;
-use super::{ID, Rectangle, Vec2, FrameArena};
 
 /// Input context - raw facts from OS
 /// Per Iron Philosophy XI: "Input は事実であれ、意味になるな"
@@ -16,8 +18,8 @@ pub struct InputContext {
     pub mouse_dy: f32,
 
     // Mouse button state (facts)
-    pub mouse_down: bool,      // Current frame: is button held?
-    pub mouse_was_down: bool,  // Previous frame: was button held?
+    pub mouse_down: bool,     // Current frame: is button held?
+    pub mouse_was_down: bool, // Previous frame: was button held?
 
     // Wheel delta (fact)
     pub mouse_wheel: f32,
@@ -143,11 +145,17 @@ impl PersistentState {
     }
 
     pub fn get_rect(&self, id: ID) -> Rectangle {
-        self.last_frame_rects.get(&id.0).copied().unwrap_or(Rectangle::ZERO)
+        self.last_frame_rects
+            .get(&id.0)
+            .copied()
+            .unwrap_or(Rectangle::ZERO)
     }
 
     pub fn get_scroll(&self, id: ID) -> Vec2 {
-        self.scroll_offsets.get(&id.0).copied().unwrap_or(Vec2::ZERO)
+        self.scroll_offsets
+            .get(&id.0)
+            .copied()
+            .unwrap_or(Vec2::ZERO)
     }
 
     pub fn set_scroll(&mut self, id: ID, offset: Vec2) {
@@ -186,41 +194,31 @@ impl FrameState {
     }
 }
 
-/// Main engine context
-pub struct EngineContext {
+/// Per-Window Context
+/// Holds all state relevant to a single OS window
+pub struct WindowContext {
+    pub id: WindowID,
     pub frame: FrameState,
     pub input: InputContext,
     pub interaction: InteractionState,
     pub persistent: PersistentState,
-    pub config: DebugConfig,
-    pub window_width: u32,
-    pub window_height: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
-impl Default for EngineContext {
-    fn default() -> Self {
+impl WindowContext {
+    pub fn new(id: WindowID, width: u32, height: u32) -> Self {
         Self {
+            id,
             frame: FrameState::default(),
             input: InputContext::default(),
             interaction: InteractionState::default(),
             persistent: PersistentState::default(),
-            config: DebugConfig::default(),
-            window_width: 1280,
-            window_height: 720,
-        }
-    }
-}
-
-impl EngineContext {
-    pub fn new(width: u32, height: u32) -> Self {
-        Self {
-            window_width: width,
-            window_height: height,
-            ..Default::default()
+            width,
+            height,
         }
     }
 
-    /// Begin a new frame
     pub fn begin_frame(&mut self, dt: f32) {
         self.frame.reset();
         self.frame.dt = dt;
@@ -228,9 +226,72 @@ impl EngineContext {
         self.interaction.reset_frame();
     }
 
-    /// End the current frame
     pub fn end_frame(&mut self) {
         self.input.advance_frame();
+    }
+}
+
+/// Main engine context
+/// Manages multiple windows and shared configuration
+pub struct EngineContext {
+    pub config: DebugConfig,
+    pub windows: HashMap<WindowID, WindowContext>,
+    pub persistence: PersistenceManager,
+    // Kept for backward compatibility/default convenience
+    // This points to the "Main" window (ID=0)
+    // NOTE: In Rust we can't easily return a ref from a getter that calculates,
+    // so we might need to change how we access the "current" window.
+    // For now, we'll auto-create window 0 on new()
+}
+
+impl Default for EngineContext {
+    fn default() -> Self {
+        let mut windows = HashMap::new();
+        windows.insert(
+            WindowID::MAIN,
+            WindowContext::new(WindowID::MAIN, 1280, 720),
+        );
+
+        Self {
+            config: DebugConfig::default(),
+            windows,
+            persistence: PersistenceManager::default(),
+        }
+    }
+}
+
+impl EngineContext {
+    pub fn new(width: u32, height: u32) -> Self {
+        let mut windows = HashMap::new();
+        windows.insert(
+            WindowID::MAIN,
+            WindowContext::new(WindowID::MAIN, width, height),
+        );
+
+        Self {
+            windows,
+            persistence: PersistenceManager::default(),
+            ..Default::default()
+        }
+    }
+
+    /// Get a window context by ID
+    pub fn get_window(&mut self, id: WindowID) -> Option<&mut WindowContext> {
+        self.windows.get_mut(&id)
+    }
+
+    /// Get the main window (ID=0) - For backward compatibility
+    pub fn main_window(&mut self) -> &mut WindowContext {
+        self.windows
+            .entry(WindowID::MAIN)
+            .or_insert_with(|| WindowContext::new(WindowID::MAIN, 1280, 720))
+    }
+
+    /// Register or ensure a window exists
+    pub fn ensure_window(&mut self, id: WindowID, width: u32, height: u32) -> &mut WindowContext {
+        self.windows
+            .entry(id)
+            .or_insert_with(|| WindowContext::new(id, width, height))
     }
 }
 
@@ -241,20 +302,20 @@ mod tests {
     #[test]
     fn test_input_mouse_events() {
         let mut input = InputContext::new();
-        
+
         // Initial state
         assert!(!input.mouse_just_pressed());
         assert!(!input.mouse_just_released());
-        
+
         // Press
         input.mouse_down = true;
         assert!(input.mouse_just_pressed());
-        
+
         // Hold
         input.advance_frame();
         input.mouse_down = true;
         assert!(!input.mouse_just_pressed());
-        
+
         // Release
         input.advance_frame();
         input.mouse_down = false;
@@ -265,16 +326,16 @@ mod tests {
     fn test_interaction_state() {
         let mut state = InteractionState::default();
         let id = ID::from_str("button1");
-        
+
         state.set_hot(id);
         assert!(state.is_hot(id));
-        
+
         state.set_active(id);
         assert!(state.is_active(id));
-        
+
         state.capture(id);
         assert!(state.is_captured(id));
-        
+
         state.release();
         assert!(!state.is_captured(id));
     }

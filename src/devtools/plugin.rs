@@ -137,7 +137,7 @@ impl PluginContext {
 pub trait Plugin: Send + Sync {
     /// Get plugin information
     fn info(&self) -> PluginInfo;
-    
+
     /// Get plugin capabilities
     fn capabilities(&self) -> PluginCapabilities {
         PluginCapabilities::default()
@@ -207,16 +207,22 @@ impl PluginManager {
         // Check dependencies
         for dep in &info.dependencies {
             if !self.plugins.contains_key(dep) {
-                return Err(format!("Plugin '{}' requires unregistered plugin '{}'", id, dep));
+                return Err(format!(
+                    "Plugin '{}' requires unregistered plugin '{}'",
+                    id, dep
+                ));
             }
         }
 
         let context = PluginContext::new(&id);
-        self.plugins.insert(id.clone(), PluginEntry {
-            plugin: Box::new(plugin),
-            state: PluginState::Registered,
-            context,
-        });
+        self.plugins.insert(
+            id.clone(),
+            PluginEntry {
+                plugin: Box::new(plugin),
+                state: PluginState::Registered,
+                context,
+            },
+        );
         self.load_order.push(id);
 
         Ok(())
@@ -224,11 +230,16 @@ impl PluginManager {
 
     /// Load a plugin
     pub fn load(&mut self, id: &str) -> Result<(), String> {
-        let entry = self.plugins.get_mut(id)
+        let entry = self
+            .plugins
+            .get_mut(id)
             .ok_or_else(|| format!("Plugin '{}' not found", id))?;
 
         if entry.state != PluginState::Registered && entry.state != PluginState::Disabled {
-            return Err(format!("Plugin '{}' cannot be loaded from state {:?}", id, entry.state));
+            return Err(format!(
+                "Plugin '{}' cannot be loaded from state {:?}",
+                id, entry.state
+            ));
         }
 
         match entry.plugin.on_load(&mut entry.context) {
@@ -245,7 +256,9 @@ impl PluginManager {
 
     /// Enable a plugin
     pub fn enable(&mut self, id: &str) -> Result<(), String> {
-        let entry = self.plugins.get_mut(id)
+        let entry = self
+            .plugins
+            .get_mut(id)
             .ok_or_else(|| format!("Plugin '{}' not found", id))?;
 
         if entry.state != PluginState::Loaded {
@@ -257,15 +270,15 @@ impl PluginManager {
                 entry.state = PluginState::Active;
                 Ok(())
             }
-            Err(e) => {
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
     /// Disable a plugin
     pub fn disable(&mut self, id: &str) -> Result<(), String> {
-        let entry = self.plugins.get_mut(id)
+        let entry = self
+            .plugins
+            .get_mut(id)
             .ok_or_else(|| format!("Plugin '{}' not found", id))?;
 
         if entry.state != PluginState::Active {
@@ -279,7 +292,9 @@ impl PluginManager {
 
     /// Unload a plugin
     pub fn unload(&mut self, id: &str) -> Result<(), String> {
-        let entry = self.plugins.get_mut(id)
+        let entry = self
+            .plugins
+            .get_mut(id)
             .ok_or_else(|| format!("Plugin '{}' not found", id))?;
 
         if entry.state == PluginState::Active {
@@ -327,7 +342,8 @@ impl PluginManager {
 
     /// List all plugins
     pub fn list(&self) -> Vec<PluginInfo> {
-        self.load_order.iter()
+        self.load_order
+            .iter()
             .filter_map(|id| self.plugins.get(id))
             .map(|e| e.plugin.info())
             .collect()
@@ -335,9 +351,11 @@ impl PluginManager {
 
     /// List active plugins
     pub fn active(&self) -> Vec<&str> {
-        self.load_order.iter()
+        self.load_order
+            .iter()
             .filter(|id| {
-                self.plugins.get(*id)
+                self.plugins
+                    .get(*id)
                     .map(|e| e.state == PluginState::Active)
                     .unwrap_or(false)
             })
@@ -363,7 +381,10 @@ mod tests {
 
     impl TestPlugin {
         fn new() -> Self {
-            Self { loaded: false, enabled: false }
+            Self {
+                loaded: false,
+                enabled: false,
+            }
         }
     }
 
@@ -386,7 +407,7 @@ mod tests {
     #[test]
     fn test_plugin_lifecycle() {
         let mut manager = PluginManager::new();
-        
+
         manager.register(TestPlugin::new()).unwrap();
         assert_eq!(manager.state("test"), Some(PluginState::Registered));
 
