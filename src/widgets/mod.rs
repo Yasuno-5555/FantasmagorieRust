@@ -17,9 +17,14 @@ pub mod math;
 pub mod micro_interactions;
 pub mod node;
 pub mod plot;
+pub mod checkbox;
+pub mod dropdown;
+pub mod layout_grid;
+pub mod radio;
 pub mod prelude;
 pub mod ruler;
 pub mod scene3d;
+pub mod toggle;
 pub mod virtual_list;
 
 use crate::core::persistence::PersistenceManager;
@@ -449,6 +454,48 @@ impl<'a> UIContext<'a> {
             max,
             label: None,
         }
+    }
+
+    /// Create toggle switch
+    pub fn toggle(
+        &mut self,
+        value: &'a mut bool,
+    ) -> crate::widgets::toggle::ToggleBuilder<'a> {
+        crate::widgets::toggle::ToggleBuilder::new(self, value)
+    }
+
+    /// Create checkbox
+    pub fn checkbox(
+        &mut self,
+        value: &'a mut bool,
+    ) -> crate::widgets::checkbox::CheckboxBuilder<'a> {
+        crate::widgets::checkbox::CheckboxBuilder::new(self, value)
+    }
+
+    /// Create radio button
+    pub fn radio(
+        &mut self,
+        value: &'a mut i32,
+        my_value: i32,
+    ) -> crate::widgets::radio::RadioBuilder<'a> {
+        crate::widgets::radio::RadioBuilder::new(self, value, my_value)
+    }
+
+    /// Create dropdown
+    pub fn dropdown(
+        &mut self,
+        items: Vec<String>,
+        index: &'a mut usize,
+    ) -> crate::widgets::dropdown::DropdownBuilder<'a> {
+        crate::widgets::dropdown::DropdownBuilder::new(self, items, index)
+    }
+
+    /// Create layout grid
+    pub fn grid(
+        &mut self,
+        cols: usize,
+    ) -> crate::widgets::layout_grid::LayoutGridBuilder<'a> {
+        crate::widgets::layout_grid::LayoutGridBuilder::new(self, cols)
     }
 
     /// Create fader

@@ -126,6 +126,28 @@ impl FontManager {
         Vec2::new(width, line_height)
     }
 
+    /// Find character index at given X offset
+    pub fn find_index_at_x(&self, text: &str, size: f32, target_x: f32) -> usize {
+        if self.fonts.is_empty() { return 0; }
+        
+        let font = &self.fonts[0];
+        let mut current_x = 0.0;
+        
+        for (i, c) in text.chars().enumerate() {
+            let metrics = font.metrics(c, size);
+            let advance = metrics.advance_width;
+            
+            // Check if target_x is within this char's width (or closer to center)
+            if target_x < current_x + advance * 0.5 {
+                return i;
+            }
+            
+            current_x += advance;
+        }
+        
+        text.chars().count() // End
+    }
+
     /// Get vertical metrics (ascent, descent, line_gap)
     pub fn vertical_metrics(&self, size: f32) -> Option<(f32, f32, f32)> {
         if self.fonts.is_empty() { return None; }

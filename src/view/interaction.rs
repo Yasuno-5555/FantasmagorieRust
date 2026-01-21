@@ -68,6 +68,10 @@ struct InteractionContext {
     ime_cursor_range: Option<(usize, usize)>,
     ime_cursor_area: Vec2,
     focused_text_input: Option<ID>,
+
+    // Text Selection
+    pub cursor_idx: usize,
+    pub selection_anchor: Option<usize>,
 }
 
 impl Default for InteractionContext {
@@ -104,6 +108,9 @@ impl Default for InteractionContext {
             active_menu_id: None,
             popup_position: Vec2::ZERO,
             popup_screen_size: Vec2::new(1920.0, 1080.0),
+            
+            cursor_idx: 0,
+            selection_anchor: None,
 
             screenshot_requested: None,
             ime_enabled: false,
@@ -630,4 +637,127 @@ pub fn set_focused_text_input(id: Option<ID>) {
 
 pub fn get_focused_text_input() -> Option<ID> {
     CTX.with(|ctx| ctx.borrow().focused_text_input)
+}
+
+pub fn get_cursor_idx() -> usize {
+    CTX.with(|ctx| ctx.borrow().cursor_idx)
+}
+
+pub fn set_cursor_idx(idx: usize) {
+    CTX.with(|ctx| ctx.borrow_mut().cursor_idx = idx);
+}
+
+pub fn get_selection_range() -> Option<(usize, usize)> {
+    CTX.with(|ctx| {
+        let ctx = ctx.borrow();
+        if let Some(anchor) = ctx.selection_anchor {
+            let start = anchor.min(ctx.cursor_idx);
+            let end = anchor.max(ctx.cursor_idx);
+            Some((start, end))
+        } else {
+            None
+        }
+    })
+}
+
+/// Handle text input logic for a specific widget ID
+/// Returns true if changed
+pub fn handle_text_input(id: ID, buffer: &mut String) -> bool {
+    let mut changed = false;
+    CTX.with(|ctx| {
+        let mut ctx = ctx.borrow_mut();
+        
+        // Only handle if active
+        if ctx.active_id != id { return; }
+        
+        // 1. Appending chars
+        if !ctx.input_buffer.is_empty() {
+            // Insert at cursor
+            let cursor = ctx.cursor_idx.min(buffer.len());
+            buffer.insert_str(cursor, &ctx.input_buffer);
+            ctx.cursor_idx += ctx.input_buffer.len();
+            ctx.input_buffer.clear();
+            changed = true;
+        }
+        
+        // 2. Handle specific keys (Backspace, Delete, Arrows)
+        // Simplified: Just check keys_pressed (once per press)
+        use winit::keyboard::KeyCode;
+        
+        if ctx.keys_pressed.contains(&KeyCode::Backspace) {
+             if let Some(anchor) = ctx.selection_anchor {
+                 // Delete range
+                 let start = anchor.min(ctx.cursor_idx);
+                 let end = anchor.max(ctx.cursor_idx);
+                 if start < buffer.len() {
+                     let end_clamped = end.min(buffer.len());
+                     if start < end_clamped {
+                        buffer.replace_range(start..end_clamped, "");
+                        ctx.cursor_idx = start;
+                        ctx.selection_anchor = None;
+                        changed = true;
+                     }
+                 }
+             } else {
+                 // Delete one char before cursor
+                 if ctx.cursor_idx > 0 && ctx.cursor_idx <= buffer.len() {
+                     if let Some((idx, _)) = buffer.char_indices().rev().find(|(i, _)| *i < ctx.cursor_idx) {
+                         buffer.remove(idx);
+                         ctx.cursor_idx = idx;
+                         changed = true;
+                     }
+                 }
+             }
+        }
+        
+        if ctx.keys_pressed.contains(&KeyCode::Delete) {
+             if let Some(anchor) = ctx.selection_anchor {
+                  let start = anchor.min(ctx.cursor_idx);
+                  let end = anchor.max(ctx.cursor_idx);
+                  if start < buffer.len() {
+                     let end_clamped = end.min(buffer.len());
+                     if start < end_clamped {
+                        buffer.replace_range(start..end_clamped, "");
+                        ctx.cursor_idx = start;
+                        ctx.selection_anchor = None;
+                        changed = true;
+                     }
+                  }
+             } else {
+                 if ctx.cursor_idx < buffer.len() {
+                     // Need to handle UTF-8?
+                     // remove() panics if not char boundary.
+                     // buffer.remove(ctx.cursor_idx) is risky if next isn't clear.
+                     // Better find char at cursor.
+                     if let Some((_, c)) = buffer.char_indices().find(|(i, _)| *i == ctx.cursor_idx) {
+                          buffer.remove(ctx.cursor_idx);
+                          changed = true;
+                     }
+                 }
+             }
+        }
+        
+        if ctx.keys_pressed.contains(&KeyCode::ArrowLeft) {
+            if ctx.cursor_idx > 0 {
+                if let Some((idx, _)) = buffer.char_indices().rev().find(|(i, _)| *i < ctx.cursor_idx) {
+                    ctx.cursor_idx = idx;
+                } else {
+                    ctx.cursor_idx = 0;
+                }
+            }
+            ctx.selection_anchor = None; // Reset selection for now
+        }
+        
+        if ctx.keys_pressed.contains(&KeyCode::ArrowRight) {
+             if ctx.cursor_idx < buffer.len() {
+                  if let Some((idx, _)) = buffer.char_indices().find(|(i, _)| *i > ctx.cursor_idx) {
+                      ctx.cursor_idx = idx;
+                  } else {
+                      ctx.cursor_idx = buffer.len();
+                  }
+             }
+             ctx.selection_anchor = None;
+        }
+    });
+    changed
 }
