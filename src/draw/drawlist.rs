@@ -38,7 +38,9 @@ pub enum DrawCommand {
         pos: Vec2,
         size: Vec2,
         radii: [f32; 4],
+        color: ColorF,
         sigma: f32,
+        is_squircle: bool,
     },
 
     /// Bezier curve
@@ -146,6 +148,12 @@ pub enum DrawCommand {
         lut_id: u64,
         lut_intensity: f32,
     },
+
+    /// Aurora background
+    Aurora {
+        pos: Vec2,
+        size: Vec2,
+    },
 }
 
 /// Draw list - accumulates commands for a frame
@@ -171,6 +179,11 @@ impl DrawList {
     /// Get commands slice
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
+    }
+
+    /// Add rectangle (no rounding)
+    pub fn add_rect(&mut self, pos: Vec2, size: Vec2, color: ColorF) {
+        self.add_rounded_rect(pos, size, 0.0, color);
     }
 
     /// Add rounded rectangle
@@ -249,6 +262,30 @@ impl DrawList {
         });
     }
 
+    pub fn add_rounded_rect_stroke(
+        &mut self,
+        pos: Vec2,
+        size: Vec2,
+        radius: f32,
+        color: ColorF,
+        thickness: f32,
+    ) {
+        // Implementation using add_rect_ex with transparent fill and colored border
+        self.add_rect_ex(
+            pos,
+            size,
+            [radius, radius, radius, radius],
+            ColorF::transparent(), // Fill
+            0.0,
+            false,
+            thickness, // Border Width
+            color,     // Border Color
+            Vec2::ZERO,
+            0.0,
+            ColorF::transparent(),
+        );
+    }
+
     /// Add text glyph
     pub fn add_text(&mut self, pos: Vec2, size: Vec2, uv: [f32; 4], color: ColorF) {
         self.commands.push(DrawCommand::Text {
@@ -265,7 +302,9 @@ impl DrawList {
             pos,
             size,
             radii: [radius, radius, radius, radius],
+            color: ColorF::white(),
             sigma,
+            is_squircle: false,
         });
     }
 
@@ -274,7 +313,9 @@ impl DrawList {
             pos,
             size,
             radii,
+            color: ColorF::white(),
             sigma,
+            is_squircle: false,
         });
     }
 
@@ -316,6 +357,11 @@ impl DrawList {
             color,
             filled,
         });
+    }
+
+    pub fn add_circle_stroke(&mut self, center: Vec2, radius: f32, color: ColorF, thickness: f32) {
+        // Use Arc for stroked circle (0 to 2PI)
+        self.add_arc(center, radius, 0.0, std::f32::consts::PI * 2.0, thickness, color);
     }
 
     /// Add image
@@ -446,6 +492,11 @@ impl DrawList {
             min,
             max,
         });
+    }
+
+    /// Add Aurora background
+    pub fn add_aurora(&mut self, pos: Vec2, size: Vec2) {
+        self.commands.push(DrawCommand::Aurora { pos, size });
     }
 
     /// Add 3D viewport

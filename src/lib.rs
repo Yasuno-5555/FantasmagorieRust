@@ -1,15 +1,24 @@
-//! Fantasmagorie V5 Crystal - High-performance stateless UI framework
+//! # Fantasmagorie Engine (Project Crystal)
 //!
-//! # Architecture
-//! - **Stateless AST**: Views rebuilt each frame on FrameArena
-//! - **2-Pass Flexbox**: Measure (bottom-up) → Arrange (top-down)
-//! - **SDF Rendering**: Signed Distance Field text/shapes
+//! **The Dual-Persona Engine** - A 2D-first, GPU-native rendering engine.
 //!
-//! # Philosophy
+//! ## Profiles
+//! - **Lite (Sanity Mode):** "It runs on a toaster." - Embedded, Android, business apps.
+//! - **Cinema (Insanity Mode):** "It melts your GPU." - Games, films, high-end demos.
+//!
+//! ## Architecture
+//! - **Layer 1 (User API):** Fluent API / Builder pattern (The Friendly Lie)
+//! - **Layer 2 (Tracea):** Optimization, compute, meaning interpretation (The Brain)
+//! - **Layer 3 (Renderer):** Abstraction and translation (The Boundary)
+//! - **Layer 4 (Backend):** GPU command execution (The Muscle)
+//!
+//! ## Philosophy
 //! - The Friendly Lie (Builders) → The Strict Truth (POD AST)
 //! - State lives in Rust, Logic lives in user code
 
+pub mod config;
 pub mod animation;
+pub mod audio;
 pub mod core;
 pub mod devtools;
 pub mod draw;
@@ -17,6 +26,8 @@ pub mod resource;
 pub mod text;
 pub mod view;
 pub mod widgets;
+pub mod renderer;
+pub mod tracea;
 
 #[cfg(any(
     feature = "opengl",
@@ -31,10 +42,17 @@ pub mod python;
 
 /// Convenient re-exports for common usage
 pub mod prelude {
+    // Core types
     pub use crate::core::{ColorF, FrameArena, Rectangle, Theme, Vec2, ID};
     pub use crate::draw::DrawList;
     pub use crate::view::{Align, ViewHeader, ViewType};
     pub use crate::widgets::{BoxBuilder, ButtonBuilder, TextBuilder, UIContext};
+    
+    // Engine configuration (The Soul)
+    pub use crate::config::{EngineConfig, Profile, ColorSpace, Pipeline, EngineConfigBuilder};
+    
+    // Renderer (The Boundary)
+    pub use crate::renderer::Renderer;
 }
 
 // Also re-export at top level for convenience

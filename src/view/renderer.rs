@@ -22,14 +22,14 @@ pub fn render_ui(
     interaction::begin_interaction_pass();
 
     // Compute layout
-    layout_ui(root, width, height);
+    layout_ui(root, width, height, fm);
 
     // Render tree
     render_view_recursive(root, dl, 0, fm);
 }
 
-fn layout_ui(root: &ViewHeader, width: f32, height: f32) {
-    crate::view::layout::compute_flex_layout(root, width, height);
+fn layout_ui(root: &ViewHeader, width: f32, height: f32, fm: &mut crate::text::FontManager) {
+    crate::view::layout::compute_flex_layout(root, width, height, fm);
 }
 
 /// Recursive view renderer
@@ -57,6 +57,10 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
     let elevation = view.elevation.get();
     let border_width = view.border_width.get();
 
+    if view.aurora.get() {
+        dl.add_aurora(Vec2::new(rect.x, rect.y), Vec2::new(rect.w, rect.h));
+    }
+
     if bg_color.a > 0.0 || elevation > 0.0 || border_width > 0.0 {
         dl.add_rect_ex(
             Vec2::new(rect.x, rect.y),
@@ -80,13 +84,13 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
     // 3. Type-specific rendering
     match view.view_type {
         ViewType::Box => {
-            render_label_and_icon_at(Vec2::new(rect.x, rect.y), view, dl, false);
+            render_label_and_icon_at(Vec2::new(rect.x, rect.y), view, dl, false, fm);
         }
         ViewType::Text => {
-            render_label_and_icon_at(Vec2::new(rect.x, rect.y), view, dl, false);
+            render_label_and_icon_at(Vec2::new(rect.x, rect.y), view, dl, false, fm);
         }
         ViewType::Button => {
-            render_button(view, dl);
+            render_button(view, dl, fm);
         }
         ViewType::Toggle => {
             render_toggle(view, dl);
@@ -99,7 +103,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             return; // Scroll handles its own children
         }
         ViewType::TextInput => {
-            render_text_input(view, dl);
+            render_text_input(view, dl, fm);
         }
         ViewType::Bezier => {
             let points = view.points.get();
@@ -131,7 +135,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             render_color_picker(view, dl);
         }
         ViewType::Markdown => {
-            render_markdown(view, dl);
+            render_markdown(view, dl, fm);
         }
         ViewType::Path => {
             if let Some(path) = view.path.get() {
@@ -139,13 +143,13 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             }
         }
         ViewType::Checkbox => {
-            render_checkbox(view, dl);
+            render_checkbox(view, dl, fm);
         }
         ViewType::Radio => {
-             render_radio(view, dl);
+             render_radio(view, dl, fm);
         }
         ViewType::Dropdown => {
-             render_dropdown(view, dl);
+             render_dropdown(view, dl, fm);
              // Recursion handled below? No, must check structure.
         }
         ViewType::Knob => {
@@ -155,7 +159,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             render_fader(view, dl);
         }
         ViewType::ValueDragger => {
-            render_value_dragger(view, dl);
+            render_value_dragger(view, dl, fm);
         }
         ViewType::Plot => render_plot(view, dl),
         ViewType::Scene3D => {
@@ -211,7 +215,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
 
 /// Render button with hover/active states
 /// Render button with hover/active states
-fn render_button(view: &ViewHeader, dl: &mut DrawList) {
+fn render_button(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let is_hot = interaction::is_hot(view.id.get());
     let is_active = interaction::is_active(view.id.get());
@@ -252,10 +256,10 @@ fn render_button(view: &ViewHeader, dl: &mut DrawList) {
     );
 
     // Render Label and Icon (Centered)
-    render_label_and_icon_at(Vec2::ZERO, view, dl, true);
+    render_label_and_icon_at(Vec2::ZERO, view, dl, true, fm);
 }
 
-fn render_label_and_icon_at(pos: Vec2, view: &ViewHeader, dl: &mut DrawList, centered: bool) {
+fn render_label_and_icon_at(pos: Vec2, view: &ViewHeader, dl: &mut DrawList, centered: bool, fm: &mut FontManager) {
     let icon = view.icon.get();
     let text = view.text.get();
     let has_icon = !icon.is_empty();
@@ -269,95 +273,69 @@ fn render_label_and_icon_at(pos: Vec2, view: &ViewHeader, dl: &mut DrawList, cen
         };
         let gap = 8.0;
 
-        crate::text::FONT_MANAGER.with(|fm| {
-            let mut fm = fm.borrow_mut();
-            let icon_sz = if has_icon {
-                fm.measure_text(icon, i_size)
+        let icon_sz = if has_icon {
+            fm.measure_text(icon, i_size)
+        } else {
+            Vec2::ZERO
+        };
+
+        let text_sz = if has_text {
+            fm.measure_text(text, view.font_size.get())
+        } else {
+            Vec2::ZERO
+        };
+
+        let total_w = icon_sz.x + (if has_icon && has_text { gap } else { 0.0 }) + text_sz.x;
+
+        let start_x = if centered {
+            let rect = view.computed_rect.get();
+            rect.x + (rect.w - total_w) * 0.5
+        } else {
+            pos.x
+        };
+
+        let start_y = if centered {
+            let rect = view.computed_rect.get();
+            // Visual Centering based on Cap Height approximation (Ascent + Descent)
+            if let Some((ascent, descent, _gap)) = fm.vertical_metrics(view.font_size.get()) {
+                rect.y + rect.h * 0.5 + (ascent + descent) * 0.5 - ascent
             } else {
-                Vec2::ZERO
-            };
-            let text_sz = if has_text {
-                fm.measure_text(text, view.font_size.get())
-            } else {
-                Vec2::ZERO
-            };
-
-            let total_w = icon_sz.x + (if has_icon && has_text { gap } else { 0.0 }) + text_sz.x;
-
-            let start_x = if centered {
-                let rect = view.computed_rect.get();
-                rect.x + (rect.w - total_w) * 0.5
-            } else {
-                pos.x
-            };
-
-            let start_y = if centered {
-                let rect = view.computed_rect.get();
-                // Visual Centering based on Cap Height approximation (Ascent + Descent)
-                if let Some((ascent, descent, _gap)) = fm.vertical_metrics(view.font_size.get()) {
-                    // Center roughly around middle of cap height:
-                    // Text Height = ascent - descent (since descent is negative usually?)
-                    // If descent is negative, then total height is ascent + abs(descent).
-                    // Visual middle is baseline - (ascent + descent)/2
-                    // Rect Middle is y + h/2.
-                    // baseline - middle = y + h/2
-                    // baseline = y + h/2 + (ascent + descent)/2 - desc_offset?
-                    // Simpler:
-                    // height of text body ~= ascent + descent (e.g. 10 + (-3) = 7)
-                    // We want to center that body.
-                    // top = baseline - ascent
-                    // bottom = baseline - descent
-                    // mid = (top + bottom) / 2 = baseline - (ascent + descent)/2
-                    // We want mid = rect.cy
-                    // baseline = rect.cy + (ascent + descent)/2
-
-                    rect.y + rect.h * 0.5 + (ascent + descent) * 0.5 - ascent // Wait, render_text_at expects pos.y to be top-left?
-                                                                              // No, render_text_at uses `baseline = pos.y + ascent`
-                                                                              // So pos.y IS top-left used for calculation.
-                                                                              // If we pass `start_y`, render_text will do `baseline = start_y + ascent`.
-                                                                              // So we want `start_y + ascent = rect.cy + (ascent + descent)/2`
-                                                                              // start_y = rect.cy + (ascent + descent)/2 - ascent
-                                                                              //         = rect.cy + ascent/2 + descent/2 - ascent
-                                                                              //         = rect.cy + descent/2 - ascent/2
-                                                                              //         = rect.cy - (ascent - descent)/2
-                } else {
-                    // Fallback
-                    let total_h = icon_sz.y.max(text_sz.y);
-                    rect.y + (rect.h - total_h) * 0.5
-                }
-            } else {
-                pos.y
-            };
-
-            let mut cur_x = start_x;
-
-            if has_icon {
-                // Render icon (Font index 1 if available, else 0)
-                let f_idx = if fm.fonts.len() > 1 { 1 } else { 0 };
-                render_text_at_special(
-                    &mut *fm,
-                    Vec2::new(cur_x, start_y),
-                    icon,
-                    i_size,
-                    view.fg_color.get(),
-                    f_idx,
-                    dl,
-                );
-                cur_x += icon_sz.x + gap;
+                // Fallback
+                let total_h = icon_sz.y.max(text_sz.y);
+                rect.y + (rect.h - total_h) * 0.5
             }
+        } else {
+            pos.y
+        };
 
-            if has_text {
-                render_text_at_special(
-                    &mut *fm,
-                    Vec2::new(cur_x, start_y),
-                    text,
-                    view.font_size.get(),
-                    view.fg_color.get(),
-                    0,
-                    dl,
-                );
-            }
-        });
+        let mut cur_x = start_x;
+
+        if has_icon {
+            // Render icon (Font index 1 if available, else 0)
+            let f_idx = if fm.fonts.len() > 1 { 1 } else { 0 };
+            render_text_at_special(
+                fm,
+                Vec2::new(cur_x, start_y),
+                icon,
+                i_size,
+                view.fg_color.get(),
+                f_idx,
+                dl,
+            );
+            cur_x += icon_sz.x + gap;
+        }
+
+        if has_text {
+            render_text_at_special(
+                fm,
+                Vec2::new(cur_x, start_y),
+                text,
+                view.font_size.get(),
+                view.fg_color.get(),
+                0,
+                dl,
+            );
+        }
     }
 }
 
@@ -468,7 +446,7 @@ fn render_text_at(
     }
 }
 
-fn render_markdown(view: &ViewHeader, dl: &mut DrawList) {
+fn render_markdown(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let text = view.text.get();
     if text.is_empty() {
@@ -514,19 +492,16 @@ fn render_markdown(view: &ViewHeader, dl: &mut DrawList) {
             }
             Event::Text(t) => {
                 // In a real impl, we'd use is_bold/is_italic to select different fonts
-                crate::text::FONT_MANAGER.with(|fm| {
-                    let mut fm = fm.borrow_mut();
-                    render_text_at(
-                        &mut fm,
-                        Vec2::new(x, y),
-                        &t,
-                        current_font_size,
-                        view.fg_color.get(),
-                        dl,
-                    );
-                    let text_size = fm.measure_text(&t, current_font_size);
-                    x += text_size.x;
-                });
+                render_text_at(
+                    fm,
+                    Vec2::new(x, y),
+                    &t,
+                    current_font_size,
+                    view.fg_color.get(),
+                    dl,
+                );
+                let text_size = fm.measure_text(&t, current_font_size);
+                x += text_size.x;
             }
             Event::SoftBreak | Event::HardBreak => {
                 y += line_height;
@@ -568,7 +543,7 @@ fn render_toggle(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render checkbox
-fn render_checkbox(view: &ViewHeader, dl: &mut DrawList) {
+fn render_checkbox(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let is_checked = view.value.get() > 0.5;
 
@@ -624,35 +599,25 @@ fn render_checkbox(view: &ViewHeader, dl: &mut DrawList) {
         // Draw text to the right of the box
         let text_padding = 8.0;
         let text_pos = Vec2::new(rect.x + rect.w + text_padding, rect.y + rect.h * 0.15); // Vertically align roughly
-        // We need access to FontManager. It is passed to generic render functions via UIContext usually, 
-        // but here render_checkbox signature only has DrawList.
-        // Wait, `render_text_input` doesn't take FM either? 
-        // Ah, `render_text_input` uses `crate::text::FONT_MANAGER.with(...)`.
         
-        crate::text::FONT_MANAGER.with(|fm| {
-             let mut font_manager = fm.borrow_mut();
-             if !font_manager.fonts.is_empty() {
-                // Determine color
-                let color = view.fg_color.get(); // Or theme text color? 
-                // Using fg_color for checkbox fill might make text same color as fill if we aren't careful.
-                // But typically checkbox fg is accent. Text might be label color.
-                // Let's use a standard text color if we can access theme, but we can't here easily.
-                // For now use white/black or same as fg.
-                
-                font_manager.render_text(
-                    dl,
-                    &view.text.get(),
-                    text_pos,
-                    view.font_size.get(),
-                    ColorF::white(), // Default to white for now
-                );
-             }
-        });
+        if !fm.fonts.is_empty() {
+           // Determine color
+           let _color = view.fg_color.get(); 
+           
+           render_text_at(
+               fm,
+               text_pos,
+               &view.text.get(),
+               view.font_size.get(),
+               ColorF::white(), // Default to white for now
+               dl,
+           );
+        }
     }
 }
 
 /// Render radio button
-fn render_radio(view: &ViewHeader, dl: &mut DrawList) {
+fn render_radio(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let is_selected = view.value.get() > 0.5;
 
@@ -661,7 +626,7 @@ fn render_radio(view: &ViewHeader, dl: &mut DrawList) {
     let radius = rect.w * 0.45;
 
     // Bg
-    dl.add_circle(center, radius, view.bg_color.get());
+    dl.add_circle(center, radius, view.bg_color.get(), true);
 
     // Border
     if view.border_width.get() > 0.0 {
@@ -675,7 +640,7 @@ fn render_radio(view: &ViewHeader, dl: &mut DrawList) {
     
     // Selection Dot
     if is_selected {
-        dl.add_circle(center, radius * 0.5, view.fg_color.get());
+        dl.add_circle(center, radius * 0.5, view.fg_color.get(), true);
     }
 
     // Label
@@ -684,23 +649,21 @@ fn render_radio(view: &ViewHeader, dl: &mut DrawList) {
         let text_padding = 8.0;
         let text_pos = Vec2::new(rect.x + rect.w + text_padding, rect.y + rect.h * 0.15); // Vertically align roughly
         
-        crate::text::FONT_MANAGER.with(|fm| {
-             let mut font_manager = fm.borrow_mut();
-             if !font_manager.fonts.is_empty() {
-                font_manager.render_text(
-                    dl,
-                    &view.text.get(),
-                    text_pos,
-                    view.font_size.get(),
-                    ColorF::white(), 
-                );
-             }
-        });
+        if !fm.fonts.is_empty() {
+           render_text_at(
+               fm,
+               text_pos,
+               &view.text.get(),
+               view.font_size.get(),
+               ColorF::white(),
+               dl,
+           );
+        }
     }
 }
 
 /// Render dropdown header
-fn render_dropdown(view: &ViewHeader, dl: &mut DrawList) {
+fn render_dropdown(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let is_open = view.value.get() > 0.5;
 
@@ -762,18 +725,16 @@ fn render_dropdown(view: &ViewHeader, dl: &mut DrawList) {
 
     // Text (Render last so overlap ?)
     if !view.text.get().is_empty() {
-         crate::text::FONT_MANAGER.with(|fm| {
-             let mut font_manager = fm.borrow_mut();
-             if !font_manager.fonts.is_empty() {
-                font_manager.render_text(
-                    dl,
-                    &view.text.get(),
-                    text_pos,
-                    view.font_size.get(),
-                    view.fg_color.get(), 
-                );
-             }
-        });
+        if !fm.fonts.is_empty() {
+           render_text_at(
+               fm,
+               text_pos,
+               &view.text.get(),
+               view.font_size.get(),
+               ColorF::white(),
+               dl,
+           );
+        }
     }
 }
 
@@ -818,7 +779,7 @@ fn render_slider(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render text input
-fn render_text_input(view: &ViewHeader, dl: &mut DrawList) {
+fn render_text_input(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let is_focused = interaction::is_focused(view.id.get());
 
@@ -848,116 +809,101 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList) {
 
     // Handle Mouse Click for Cursor Positioning
     if interaction::is_active(view.id.get()) && interaction::is_clicked(view.id.get()) {
-         // Get mouse relative x
-         let mouse = interaction::get_mouse_pos();
-         let rel_x = mouse.x - text_pos.x;
-         
-         crate::text::FONT_MANAGER.with(|fm| {
-             let fm = fm.borrow(); // Read only
-             // Need text to measure.
-             let combined_text = view.text.get(); // Ignore IME preedit for click logic simplification? Or include it?
-             // Usually clicks happen on committed text.
-             let idx = fm.find_index_at_x(combined_text, view.font_size.get(), rel_x);
-             
-             interaction::set_cursor_idx(idx);
-             // TODO: Handle selection anchor/drag
-         });
+        // Get mouse relative x
+        let mouse = interaction::get_mouse_pos();
+        let rel_x = mouse.x - text_pos.x;
+
+        let combined_text = view.text.get();
+        let idx = fm.find_index_at_x(combined_text, view.font_size.get(), rel_x);
+
+        interaction::set_cursor_idx(idx);
     }
 
     // Caret and IME
-    crate::text::FONT_MANAGER.with(|fm| {
-        let mut fm = fm.borrow_mut();
+    let mut combined_text = view.text.get().to_string();
+    let ime_preedit = interaction::get_ime_preedit();
 
-        let mut combined_text = view.text.get().to_string();
-        let ime_preedit = interaction::get_ime_preedit();
+    // If focused and has IME composition, inject it
+    if is_focused {
+        interaction::set_focused_text_input(Some(view.id.get()));
 
-        // If focused and has IME composition, inject it
-        // If focused and has IME composition, inject it
-        if is_focused {
-            interaction::set_focused_text_input(Some(view.id.get()));
-            
-            let original_len = combined_text.len();
-            if !ime_preedit.is_empty() {
-                combined_text.push_str(&ime_preedit);
-            }
-            
-            // Handle Caret Positioning
-            let ime_range = interaction::get_ime_cursor_range();
-            let caret_pos_in_stream = if let Some((start, _end)) = ime_range {
-                // start is byte offset within preedit string
-                original_len + start
-            } else {
-                combined_text.len()
-            };
+        let original_len = combined_text.len();
+        if !ime_preedit.is_empty() {
+            combined_text.push_str(&ime_preedit);
+        }
 
-            // Let's decide which caret to use. 
-            // If IME preedit is active, we use the IME provided range.
-            // Otherwise we use the interaction system's cursor_idx.
-            let caret_x = if !ime_preedit.is_empty() {
-                let text_up_to_caret = &combined_text[..caret_pos_in_stream];
-                text_pos.x + fm.measure_text(text_up_to_caret, view.font_size.get()).x
-            } else {
-                let cursor_idx = interaction::get_cursor_idx();
-                let safe_cursor = cursor_idx.min(combined_text.len());
-                let text_before = &combined_text[..safe_cursor]; 
-                text_pos.x + fm.measure_text(text_before, view.font_size.get()).x
-            };
+        // Handle Caret Positioning
+        let ime_range = interaction::get_ime_cursor_range();
+        let caret_pos_in_stream = if let Some((start, _end)) = ime_range {
+            original_len + start
+        } else {
+            combined_text.len()
+        };
 
-            // Update OS IME Window Position (Screen Coordinates)
-            interaction::set_ime_cursor_area(Vec2::new(caret_x, text_pos.y + view.font_size.get())); // Bottom of caret
+        let caret_x = if !ime_preedit.is_empty() {
+            let text_up_to_caret = &combined_text[..caret_pos_in_stream];
+            text_pos.x + fm.measure_text(text_up_to_caret, view.font_size.get()).x
+        } else {
+            let cursor_idx = interaction::get_cursor_idx();
+            let safe_cursor = cursor_idx.min(combined_text.len());
+            let text_before = &combined_text[..safe_cursor];
+            text_pos.x + fm.measure_text(text_before, view.font_size.get()).x
+        };
 
-            // Draw Selection Highlight (if any)
-            if let Some((start, end)) = interaction::get_selection_range() {
-                 let s = start.min(view.text.get().len());
-                 let e = end.min(view.text.get().len());
-                 if s < e {
-                     let t_start = &view.text.get()[0..s];
-                     let t_sel = &view.text.get()[s..e];
-                     
-                     let x_start = text_pos.x + fm.measure_text(t_start, view.font_size.get()).x;
-                     let width = fm.measure_text(t_sel, view.font_size.get()).x;
-                     
-                     dl.add_rect(
-                        Vec2::new(x_start, text_pos.y),
-                        Vec2::new(width, view.font_size.get() * 1.2),
-                        ColorF::new(0.2, 0.4, 0.8, 0.5) // Selection Color
-                     );
-                 }
-            }
+        // Update OS IME Window Position (Screen Coordinates)
+        interaction::set_ime_cursor_area(Vec2::new(caret_x, text_pos.y + view.font_size.get())); // Bottom of caret
 
-            // Draw Caret
-            dl.add_rounded_rect(
-                Vec2::new(caret_x, text_pos.y),
-                Vec2::new(2.0, view.font_size.get()),
-                0.0,
-                ColorF::white(),
-            );
+        // Draw Selection Highlight (if any)
+        if let Some((start, end)) = interaction::get_selection_range() {
+            let s = start.min(view.text.get().len());
+            let e = end.min(view.text.get().len());
+            if s < e {
+                let t_start = &view.text.get()[0..s];
+                let t_sel = &view.text.get()[s..e];
 
-            // Draw Underline for Preedit
-            if !ime_preedit.is_empty() {
-                let original_size = fm.measure_text(view.text.get(), view.font_size.get());
-                let preedit_size = fm.measure_text(&ime_preedit, view.font_size.get());
-                let ul_start = text_pos.x + original_size.x;
-                let ul_end = ul_start + preedit_size.x;
+                let x_start = text_pos.x + fm.measure_text(t_start, view.font_size.get()).x;
+                let width = fm.measure_text(t_sel, view.font_size.get()).x;
 
-                dl.add_line(
-                    Vec2::new(ul_start, text_pos.y + view.font_size.get() + 2.0),
-                    Vec2::new(ul_end, text_pos.y + view.font_size.get() + 2.0),
-                    1.0,
-                    ColorF::new(1.0, 1.0, 1.0, 0.8),
+                dl.add_rect(
+                    Vec2::new(x_start, text_pos.y),
+                    Vec2::new(width, view.font_size.get() * 1.2),
+                    ColorF::new(0.2, 0.4, 0.8, 0.5), // Selection Color
                 );
             }
         }
 
-        render_text_at(
-            &mut fm,
-            text_pos,
-            &combined_text,
-            view.font_size.get(),
-            view.fg_color.get(),
-            dl,
+        // Draw Caret
+        dl.add_rounded_rect(
+            Vec2::new(caret_x, text_pos.y),
+            Vec2::new(2.0, view.font_size.get()),
+            0.0,
+            ColorF::white(),
         );
-    });
+
+        // Draw Underline for Preedit
+        if !ime_preedit.is_empty() {
+            let original_size = fm.measure_text(view.text.get(), view.font_size.get());
+            let preedit_size = fm.measure_text(&ime_preedit, view.font_size.get());
+            let ul_start = text_pos.x + original_size.x;
+            let ul_end = ul_start + preedit_size.x;
+
+            dl.add_line(
+                Vec2::new(ul_start, text_pos.y + view.font_size.get() + 2.0),
+                Vec2::new(ul_end, text_pos.y + view.font_size.get() + 2.0),
+                1.0,
+                ColorF::new(1.0, 1.0, 1.0, 0.8),
+            );
+        }
+    }
+
+    render_text_at(
+        fm,
+        text_pos,
+        &combined_text,
+        view.font_size.get(),
+        view.fg_color.get(),
+        dl,
+    );
 }
 
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> ColorF {
@@ -1499,7 +1445,7 @@ fn render_fader(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render value dragger (numeric input)
-fn render_value_dragger(view: &ViewHeader, dl: &mut DrawList) {
+fn render_value_dragger(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let is_editing = view.is_editing.get();
 
@@ -1507,7 +1453,7 @@ fn render_value_dragger(view: &ViewHeader, dl: &mut DrawList) {
 
     if is_editing {
         // Render as TextInput
-        render_text_input(view, dl);
+        render_text_input(view, dl, fm);
     } else {
         // Render as Draggable Label
         let val = view.value.get();

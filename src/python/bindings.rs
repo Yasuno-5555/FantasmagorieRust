@@ -2003,42 +2003,6 @@ fn py_bezier(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)) -> 
         })
     })
 }
-        // So `py_bezier` expects absolute coordinates.
-        // This is fine for connecting nodes.
-        
-        let points = [
-            crate::core::Vec2::new(p0.0, p0.1),
-            crate::core::Vec2::new(p1.0, p1.1),
-            crate::core::Vec2::new(p2.0, p2.1),
-            crate::core::Vec2::new(p3.0, p3.1),
-        ];
-
-        let view = inner.arena.alloc(ViewHeader {
-             view_type: ViewType::Bezier,
-             id,
-             points,
-             thickness: 2.0,
-             fg_color: ColorF::white(),
-             // Layout: 0 size so it doesn't disrupt flow?
-             // Or max bounds?
-             width: 0.0,
-             height: 0.0,
-             ..Default::default()
-        });
-
-        let ptr = view as *mut ViewHeader;
-        inner.views.insert(view_id, unsafe { std::mem::transmute(ptr) });
-
-        if let Some(&parent_id) = inner.parent_stack.last() {
-            if let Some(&parent_ptr) = inner.views.get(&parent_id) {
-                unsafe { (*parent_ptr).add_child(&*ptr); }
-            }
-        }
-
-        Ok(PyBezierBuilder { view_id })
-    })
-}
-
 
 
 /// Splitter builder

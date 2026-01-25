@@ -1,6 +1,6 @@
 //! Node Editor Demo - showcases Canvas, Node, and Socket widgets
 
-use fanta_rust::backend::{Backend, OpenGLBackend};
+use fanta_rust::backend::{GraphicsBackend, OpenGLBackend};
 use fanta_rust::prelude::*;
 
 use winit::dpi::LogicalSize;
@@ -262,12 +262,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Layout & Render
                 let root = ctx.root().unwrap();
                 let mut draw_list = fanta_rust::DrawList::new();
-                fanta_rust::view::renderer::render_ui(
-                    root,
-                    current_width as f32,
-                    current_height as f32,
-                    &mut draw_list,
-                );
+                fanta_rust::text::FONT_MANAGER.with(|fm| {
+                    fanta_rust::view::renderer::render_ui(
+                        root,
+                        current_width as f32,
+                        current_height as f32,
+                        &mut draw_list,
+                        &mut fm.borrow_mut(),
+                    );
+                });
 
                 backend.render(&draw_list, current_width, current_height);
 

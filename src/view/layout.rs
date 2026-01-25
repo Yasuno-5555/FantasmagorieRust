@@ -8,14 +8,14 @@ use super::header::{Align, Size, ViewHeader, ViewType};
 use crate::core::Rectangle;
 
 /// Public entry point for layout computation
-pub fn compute_flex_layout(root: &ViewHeader, screen_w: f32, screen_h: f32) {
-    measure_recursive(root);
+pub fn compute_flex_layout(root: &ViewHeader, screen_w: f32, screen_h: f32, fm: &mut crate::text::FontManager) {
+    measure_recursive(root, fm);
     arrange_recursive(root, 0.0, 0.0, screen_w, screen_h);
 }
 
 /// Pass 1: Measure (Bottom-Up)
 /// Each node determines its "intrinsic" or "desired" size
-fn measure_recursive(node: &ViewHeader) {
+fn measure_recursive(node: &ViewHeader, fm: &mut crate::text::FontManager) {
     let mut content_w: f32 = 0.0;
     let mut content_h: f32 = 0.0;
 
@@ -24,7 +24,7 @@ fn measure_recursive(node: &ViewHeader) {
 
     // Measure children first (bottom-up)
     for child in node.children() {
-        measure_recursive(child);
+        measure_recursive(child, fm);
 
         let measured = child.measured_size.get();
         let child_margin = child.margin.get();
@@ -61,24 +61,18 @@ fn measure_recursive(node: &ViewHeader) {
     // Type-specific sizing
     match node.view_type {
         ViewType::Text => {
-            let measured = crate::text::FONT_MANAGER.with(|fm| {
-                let mut fm = fm.borrow_mut();
-                if fm.fonts.is_empty() {
-                    fm.load_system_font();
-                }
-                fm.measure_text(node.text.get(), node.font_size.get())
-            });
+            if fm.fonts.is_empty() {
+                fm.load_system_font();
+            }
+            let measured = fm.measure_text(node.text.get(), node.font_size.get());
             content_w = measured.x;
             content_h = measured.y;
         }
         ViewType::Button => {
-            let measured = crate::text::FONT_MANAGER.with(|fm| {
-                let mut fm = fm.borrow_mut();
-                if fm.fonts.is_empty() {
-                    fm.load_system_font();
-                }
-                fm.measure_text(node.text.get(), node.font_size.get())
-            });
+            if fm.fonts.is_empty() {
+                fm.load_system_font();
+            }
+            let measured = fm.measure_text(node.text.get(), node.font_size.get());
             // Button: add padding for label
             content_w = content_w.max(measured.x + 32.0);
             content_h = content_h.max(measured.y + 16.0);
@@ -501,7 +495,8 @@ mod tests {
         root.add_child(child1);
         root.add_child(child2);
 
-        compute_flex_layout(root, 100.0, 200.0);
+        let mut fm = crate::text::FontManager::new();
+        compute_flex_layout(root, 100.0, 200.0, &mut fm);
 
         let r1 = child1.computed_rect.get();
         let r2 = child2.computed_rect.get();

@@ -35,6 +35,8 @@ impl Vertex {
 pub struct WgpuBackend {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
@@ -47,9 +49,12 @@ pub struct WgpuBackend {
     font_texture: Option<wgpu::Texture>,
     font_bind_group: Option<wgpu::BindGroup>,
     sampler: wgpu::Sampler,
+    
+    // Animation timing
+    start_time: std::time::Instant,
 }
 
-/// Uniform data for shaders
+/// Uniform data for shaders (matches wgpu_shader.wgsl)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -57,24 +62,24 @@ struct Uniforms {
     rect: [f32; 4],  // x, y, w, h
     radii: [f32; 4], // tl, tr, br, bl
     border_color: [f32; 4],
-    glow_color: [f32; 4], // Added
+    glow_color: [f32; 4],
 
     mode: i32,
     border_width: f32,
     elevation: f32,
-    is_squircle: i32, // Added
+    is_squircle: i32,
 
-    glow_strength: f32, // Added
-    start_angle: f32,   // Added for Arc
-    end_angle: f32,     // Added for Arc
-    _pad3: f32,
+    glow_strength: f32,
+    start_angle: f32,
+    end_angle: f32,
+    time: f32,  // For aurora animation
 }
 
 impl WgpuBackend {
     /// Create a new WGPU backend
     pub async fn new_async(
         instance: &wgpu::Instance,
-        surface: &wgpu::Surface<'_>,
+        surface: wgpu::Surface<'static>,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
@@ -82,7 +87,7 @@ impl WgpuBackend {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(surface),
+                compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
             .await
@@ -115,7 +120,7 @@ impl WgpuBackend {
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
-        let config = wgpu::SurfaceConfiguration {
+        let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width,
@@ -125,7 +130,7 @@ impl WgpuBackend {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &config);
+        surface.configure(&device, &surface_config);
 
         // Create shader module
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -242,6 +247,8 @@ impl WgpuBackend {
         Ok(Self {
             device,
             queue,
+            surface,
+            surface_config,
             pipeline,
             bind_group_layout,
             uniform_buffer,
@@ -250,6 +257,7 @@ impl WgpuBackend {
             font_texture: None,
             font_bind_group: None,
             sampler,
+            start_time: std::time::Instant::now(),
         })
     }
 
@@ -380,18 +388,17 @@ impl WgpuBackend {
         });
     }
 
-    /// Render to a surface
-    pub fn render_to_surface(
+    /// Render to the stored surface
+    pub fn render_to_stored_surface(
         &mut self,
         dl: &DrawList,
-        surface: &wgpu::Surface,
         width: u32,
         height: u32,
     ) {
         use wgpu::util::DeviceExt;
         self.update_font_texture();
 
-        let output = match surface.get_current_texture() {
+        let output = match self.surface.get_current_texture() {
             Ok(t) => t,
             Err(_) => return,
         };
@@ -464,29 +471,6 @@ impl WgpuBackend {
             });
         };
 
-        // 1. Aurora
-        let aurora_uniforms = Uniforms {
-            projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
-            rect: [0.0, 0.0, width as f32, height as f32],
-            radii: [0.0; 4],
-            border_color: [0.0; 4],
-            glow_color: [0.0; 4],
-            mode: 5,
-            border_width: 0.0,
-            elevation: 0.0,
-            is_squircle: 0,
-            glow_strength: 0.0,
-            start_angle: 0.0,
-            end_angle: 0.0,
-            _pad3: 0.0,
-        };
-        let aurora_verts = Self::quad_vertices(
-            Vec2::ZERO,
-            Vec2::new(width as f32, height as f32),
-            ColorF::white(),
-        );
-        prepare(aurora_uniforms, &aurora_verts, "Aurora");
-
         // 2. Commands
         for cmd in dl.commands() {
             match cmd {
@@ -503,6 +487,11 @@ impl WgpuBackend {
                     glow_strength,
                     glow_color,
                 } => {
+                    let pad = if *elevation > 0.0 || *glow_strength > 0.0 {
+                        100.0
+                    } else {
+                        0.0
+                    };
                     let uniforms = Uniforms {
                         projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
                         rect: [pos.x, pos.y, size.x, size.y],
@@ -521,9 +510,13 @@ impl WgpuBackend {
                         glow_strength: *glow_strength,
                         start_angle: 0.0,
                         end_angle: 0.0,
-                        _pad3: 0.0,
+                        time: self.start_time.elapsed().as_secs_f32(),
                     };
-                    let verts = Self::quad_vertices(*pos, *size, *color);
+                    let verts = Self::quad_vertices(
+                        Vec2::new(pos.x - pad, pos.y - pad),
+                        Vec2::new(size.x + pad * 2.0, size.y + pad * 2.0),
+                        *color,
+                    );
                     prepare(uniforms, &verts, "RoundedRect");
                 }
                 DrawCommand::Text {
@@ -545,7 +538,7 @@ impl WgpuBackend {
                         glow_strength: 0.0,
                         start_angle: 0.0,
                         end_angle: 0.0,
-                        _pad3: 0.0,
+                        time: 0.0,
                     };
                     let verts = Self::quad_vertices_uv(*pos, *size, *uv, *color);
                     prepare(uniforms, &verts, "Text");
@@ -573,7 +566,7 @@ impl WgpuBackend {
                         glow_strength: 0.0,
                         start_angle: *start_angle,
                         end_angle: *end_angle,
-                        _pad3: 0.0,
+                        time: 0.0,
                     };
                     let verts = Self::quad_vertices(pos, Vec2::new(s, s), *color);
                     prepare(uniforms, &verts, "Arc");
@@ -601,7 +594,7 @@ impl WgpuBackend {
                         glow_strength: 0.0,
                         start_angle: 0.0,
                         end_angle: 0.0,
-                        _pad3: 0.0,
+                        time: 0.0,
                     };
                     let mut verts = Vec::with_capacity(points.len() * 12);
                     for i in 0..points.len() - 1 {
@@ -685,6 +678,79 @@ impl WgpuBackend {
                     }
                     prepare(uniforms, &verts, "Plot");
                 }
+                DrawCommand::Aurora { pos, size } => {
+                    let uniforms = Uniforms {
+                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
+                        rect: [pos.x, pos.y, size.x, size.y],
+                        radii: [0.0; 4],
+                        border_color: [0.0; 4],
+                        glow_color: [0.0; 4],
+                        mode: 9, // Aurora
+                        border_width: 0.0,
+                        elevation: 0.0,
+                        is_squircle: 0,
+                        glow_strength: 0.0,
+                        start_angle: 0.0,
+                        end_angle: 0.0,
+                        time: self.start_time.elapsed().as_secs_f32(),
+                    };
+                    let verts = Self::quad_vertices(*pos, *size, ColorF::white());
+                    prepare(uniforms, &verts, "Aurora");
+                }
+                DrawCommand::BlurRect {
+                    pos,
+                    size,
+                    radii,
+                    color,
+                    sigma,
+                    is_squircle,
+                } => {
+                    let uniforms = Uniforms {
+                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
+                        rect: [pos.x, pos.y, size.x, size.y],
+                        radii: *radii,
+                        border_color: [0.0; 4],
+                        glow_color: [0.0; 4],
+                        mode: 4, // Blur
+                        border_width: sigma.clamp(0.0, 5.0), // LOD level
+                        elevation: 0.0,
+                        is_squircle: if *is_squircle { 1 } else { 0 },
+                        glow_strength: 0.0,
+                        start_angle: 0.0,
+                        end_angle: 0.0,
+                        time: 0.0,
+                    };
+                    let verts = Self::quad_vertices(*pos, *size, *color);
+                    prepare(uniforms, &verts, "BlurRect");
+                }
+                DrawCommand::Heatmap {
+                    pos,
+                    size,
+                    data: _,
+                    width: _,
+                    height: _,
+                    colormap: _,
+                    min,
+                    max,
+                } => {
+                    let uniforms = Uniforms {
+                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
+                        rect: [pos.x, pos.y, size.x, size.y],
+                        radii: [0.0; 4],
+                        border_color: [0.0; 4],
+                        glow_color: [0.0; 4],
+                        mode: 8, // Heatmap
+                        border_width: 0.0,
+                        elevation: *min,
+                        is_squircle: 0,
+                        glow_strength: *max,
+                        start_angle: 0.0,
+                        end_angle: 0.0,
+                        time: 0.0,
+                    };
+                    let verts = Self::quad_vertices(*pos, *size, ColorF::white());
+                    prepare(uniforms, &verts, "Heatmap");
+                }
                 _ => {}
             }
         }
@@ -729,11 +795,43 @@ impl WgpuBackend {
     }
 }
 
-impl super::Backend for WgpuBackend {
+impl super::GraphicsBackend for WgpuBackend {
     fn name(&self) -> &str {
         "WGPU"
     }
-    fn render(&mut self, _dl: &DrawList, _width: u32, _height: u32) {
-        eprintln!("WGPU: Use render_to_surface() for proper rendering");
+
+    fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
+        // Reconfigure surface if size changed
+        if width != self.surface_config.width || height != self.surface_config.height {
+            self.surface_config.width = width;
+            self.surface_config.height = height;
+            self.surface.configure(&self.device, &self.surface_config);
+        }
+
+        self.render_to_stored_surface(dl, width, height);
+    }
+
+    fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
+        if let Some(texture) = &self.font_texture {
+            self.queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data,
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 }

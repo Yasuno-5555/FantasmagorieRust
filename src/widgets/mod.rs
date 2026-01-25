@@ -144,6 +144,11 @@ impl<'a> BoxBuilder<'a> {
         self
     }
 
+    pub fn aurora(self) -> Self {
+        self.view.aurora.set(true);
+        self
+    }
+
     pub fn build(self) -> &'a ViewHeader<'a> {
         self.view
     }
@@ -460,7 +465,7 @@ impl<'a> UIContext<'a> {
     pub fn toggle(
         &mut self,
         value: &'a mut bool,
-    ) -> crate::widgets::toggle::ToggleBuilder<'a> {
+    ) -> crate::widgets::toggle::ToggleBuilder<'_, 'a> {
         crate::widgets::toggle::ToggleBuilder::new(self, value)
     }
 
@@ -468,7 +473,7 @@ impl<'a> UIContext<'a> {
     pub fn checkbox(
         &mut self,
         value: &'a mut bool,
-    ) -> crate::widgets::checkbox::CheckboxBuilder<'a> {
+    ) -> crate::widgets::checkbox::CheckboxBuilder<'_, 'a> {
         crate::widgets::checkbox::CheckboxBuilder::new(self, value)
     }
 
@@ -477,7 +482,7 @@ impl<'a> UIContext<'a> {
         &mut self,
         value: &'a mut i32,
         my_value: i32,
-    ) -> crate::widgets::radio::RadioBuilder<'a> {
+    ) -> crate::widgets::radio::RadioBuilder<'_, 'a> {
         crate::widgets::radio::RadioBuilder::new(self, value, my_value)
     }
 
@@ -486,15 +491,15 @@ impl<'a> UIContext<'a> {
         &mut self,
         items: Vec<String>,
         index: &'a mut usize,
-    ) -> crate::widgets::dropdown::DropdownBuilder<'a> {
+    ) -> crate::widgets::dropdown::DropdownBuilder<'_, 'a> {
         crate::widgets::dropdown::DropdownBuilder::new(self, items, index)
     }
 
     /// Create layout grid
-    pub fn grid(
+    pub fn layout_grid(
         &mut self,
         cols: usize,
-    ) -> crate::widgets::layout_grid::LayoutGridBuilder<'a> {
+    ) -> crate::widgets::layout_grid::LayoutGridBuilder<'_, 'a> {
         crate::widgets::layout_grid::LayoutGridBuilder::new(self, cols)
     }
 

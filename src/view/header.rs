@@ -144,6 +144,7 @@ pub struct ViewHeader<'a> {
 
     // String refs are Copy (impl Copy for &str), Cell requires Copy.
     // &str is Copy.
+    pub aurora: Cell<bool>,
     pub text: Cell<&'a str>,
     pub icon: Cell<&'a str>,
     pub icon_size: Cell<f32>, // 0 = same as font_size
@@ -242,6 +243,7 @@ impl<'a> Default for ViewHeader<'a> {
             wobble_x: Cell::new(0.0),
             wobble_y: Cell::new(0.0),
             font_size: Cell::new(14.0),
+            aurora: Cell::new(false),
             text: Cell::new(""),
             icon: Cell::new(""),
             icon_size: Cell::new(0.0),

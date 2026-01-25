@@ -637,11 +637,7 @@ impl Dx12Backend {
     }
 }
 
-impl super::Backend for Dx12Backend {
-    fn name(&self) -> &str {
-        "DirectX 12"
-    }
-
+impl super::GraphicsBackend for Dx12Backend {
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         unsafe {
             let frame_idx = self.frame_index.get();
@@ -741,6 +737,9 @@ impl super::Backend for Dx12Backend {
                     };
 
                     match cmd {
+            DrawCommand::Aurora { .. } => {
+                // DX12 implementation placeholder
+            }
                         DrawCommand::RoundedRect {
                             pos,
                             size,

@@ -1,6 +1,6 @@
 //! Windowed demo to show off Visual Revolution features
 
-use fanta_rust::backend::{Backend, OpenGLBackend};
+use fanta_rust::backend::{GraphicsBackend, OpenGLBackend};
 use fanta_rust::prelude::*;
 
 use winit::dpi::LogicalSize;
@@ -219,12 +219,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Layout & Render
                 if let Some(root) = ui.root() {
                     let mut dl = fanta_rust::DrawList::new();
-                    fanta_rust::view::render_ui(
-                        root,
-                        current_width as f32,
-                        current_height as f32,
-                        &mut dl,
-                    );
+                    fanta_rust::text::FONT_MANAGER.with(|fm| {
+                        fanta_rust::view::render_ui(
+                            root,
+                            current_width as f32,
+                            current_height as f32,
+                            &mut dl,
+                            &mut fm.borrow_mut(),
+                        );
+                    });
 
                     backend.render(&dl, current_width, current_height);
                 }

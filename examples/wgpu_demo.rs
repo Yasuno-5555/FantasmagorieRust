@@ -1,4 +1,4 @@
-use fanta_rust::backend::{Backend, WgpuBackend};
+use fanta_rust::backend::{GraphicsBackend, WgpuBackend};
 use fanta_rust::prelude::*;
 use std::sync::Arc;
 use winit::dpi::LogicalSize;
@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let size = window.inner_size();
     let mut backend = pollster::block_on(WgpuBackend::new_async(
         &instance,
-        &surface,
+        surface,
         size.width,
         size.height,
     ))
@@ -151,15 +151,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let Some(root) = ui.root() {
                     let mut dl = fanta_rust::DrawList::new();
-                    fanta_rust::view::render_ui(
-                        root,
-                        current_width as f32,
-                        current_height as f32,
-                        &mut dl,
-                    );
+                    fanta_rust::text::FONT_MANAGER.with(|fm| {
+                        fanta_rust::view::render_ui(
+                            root,
+                            current_width as f32,
+                            current_height as f32,
+                            &mut dl,
+                            &mut fm.borrow_mut(),
+                        );
+                    });
 
-                    // Use specific WGPU method
-                    backend.render_to_surface(&dl, &surface, current_width, current_height);
+                    // Use generic render method
+                    backend.render(&dl, current_width, current_height);
                 }
             }
             _ => {}

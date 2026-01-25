@@ -16,7 +16,7 @@ impl<'b, 'a> DropdownBuilder<'b, 'a> {
         // 1. Check persistence for Open state
         let mut is_open = false;
         if let Some(pm) = &ui.persistence {
-            if let Some(state) = pm.borrow().load::<bool>(id) {
+            if let Some(state) = pm.load::<bool>(id) {
                 is_open = state;
             }
         }
@@ -100,7 +100,7 @@ impl<'b, 'a> DropdownBuilder<'b, 'a> {
         
         // Save new state if changed (or just always save)
         if let Some(pm) = &ui.persistence {
-            pm.borrow().save(id, &is_open);
+            pm.save(id, &is_open);
         }
         
         // Update view value in case it changed this frame

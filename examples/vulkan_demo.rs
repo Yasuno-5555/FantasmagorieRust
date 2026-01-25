@@ -1,5 +1,7 @@
-use fanta_rust::backend::{Backend, VulkanBackend};
+use fanta_rust::backend::VulkanBackend;
 use fanta_rust::prelude::*;
+use fanta_rust::core::{Vec2, ColorF, FrameArena};
+use fanta_rust::widgets::UIContext;
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -33,11 +35,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let size = window.inner_size();
 
+    // Initialize fonts
+    fanta_rust::text::FONT_MANAGER.with(|fm| {
+        fm.borrow_mut().init_fonts();
+    });
+
     // Initialize Vulkan Backend
     let mut backend = unsafe { VulkanBackend::new(hwnd, hinstance, size.width, size.height)? };
 
     let mut current_width = size.width;
     let mut current_height = size.height;
+    let mut frame_count = 0;
 
     let mut cursor_x = 0.0;
     let mut cursor_y = 0.0;
@@ -114,10 +122,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let panel = ui
                     .column()
                     .size(500.0, 400.0)
-                    // Aurora mesh gradient (Mode 5) triggers via special style or manually
-                    // For now, let's use a standard panel and see if new features work
+                    .aurora() // Use the new Aurora mesh gradient
                     .bg(ColorF::new(0.0, 0.0, 0.2, 0.5))
                     .squircle(24.0)
+                    .backdrop_blur(20.0) // Test glassmorphism (handled in renderer -> BlurRect)
                     .border(2.0, ColorF::new(0.5, 0.8, 1.0, 0.5))
                     .elevation(20.0)
                     .padding(20.0)
@@ -129,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .font_size(24.0)
                     .fg(ColorF::white());
 
-                ui.text("GLSL -> SPIR-V (Runtime) via Shaderc.")
+                ui.text("GLSL -> SPIR-V (Runtime) via Naga.")
                     .font_size(16.0)
                     .fg(ColorF::new(0.8, 0.8, 0.8, 1.0))
                     .layout_margin(10.0);
@@ -146,14 +154,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.end();
 
                 if let Some(root) = ui.root() {
-                    let mut dl = fanta_rust::DrawList::new();
-                    fanta_rust::view::render_ui(
-                        root,
-                        current_width as f32,
-                        current_height as f32,
-                        &mut dl,
-                    );
+                    let mut dl = fanta_rust::draw::DrawList::new();
+                    fanta_rust::text::FONT_MANAGER.with(|fm| {
+                        let mut fm = fm.borrow_mut();
+                        
+                        fanta_rust::view::renderer::render_ui(
+                            root,
+                            current_width as f32,
+                            current_height as f32,
+                            &mut dl,
+                            &mut fm,
+                        );
+
+                        // Sync font texture if dirty (AFTER render_ui so we have new glyphs)
+                        if fm.texture_dirty {
+                            let w = fm.atlas.width;
+                            let h = fm.atlas.height;
+                            let data = &fm.atlas.texture_data;
+                            backend.update_font_texture(w, h, data);
+                            fm.texture_dirty = false;
+                        }
+                    });
+                    
+                    use fanta_rust::backend::GraphicsBackend;
                     backend.render(&dl, current_width, current_height);
+                    
+                    frame_count += 1;
+                    if frame_count == 100 {
+                        backend.capture_screenshot("vulkan_screenshot.png");
+                        println!("✨ Screenshot captured for visual verification!");
+                    }
                 }
             }
             _ => {}
