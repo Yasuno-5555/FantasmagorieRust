@@ -29,6 +29,11 @@ impl<'a> NodeBuilder<'a> {
         self
     }
 
+    pub fn flex_grow(self, grow: f32) -> Self {
+        self.view.flex_grow.set(grow);
+        self
+    }
+
     pub fn persist_pos(mut self) -> Self {
         self.should_persist = true;
         // Try to load position if ID is set and persistence is available

@@ -26,6 +26,7 @@ pub mod ruler;
 pub mod scene3d;
 pub mod toggle;
 pub mod virtual_list;
+pub mod splitter;
 
 use crate::core::persistence::PersistenceManager;
 use crate::core::{ColorF, FrameArena, Theme, ID};
@@ -60,6 +61,11 @@ impl<'a> BoxBuilder<'a> {
 
     pub fn padding(self, p: f32) -> Self {
         self.view.padding.set(p);
+        self
+    }
+
+    pub fn spacing(self, s: f32) -> Self {
+        self.view.spacing.set(s);
         self
     }
 
@@ -176,7 +182,7 @@ impl<'a> TextBuilder<'a> {
         self
     }
 
-    pub fn layout_margin(self, m: f32) -> Self {
+    pub fn margin(self, m: f32) -> Self {
         self.view.margin.set(m);
         self
     }
@@ -239,23 +245,38 @@ impl<'a> ButtonBuilder<'a> {
         self
     }
 
+    pub fn margin(self, m: f32) -> Self {
+        self.view.margin.set(m);
+        self
+    }
+
+    pub fn font_size(self, size: f32) -> Self {
+        self.view.font_size.set(size);
+        self
+    }
+
     pub fn build(self) -> &'a ViewHeader<'a> {
         self.view.text.set(self.label);
         self.view
     }
 
-    /// Check if clicked (convenience for immediate mode)
     pub fn clicked(&self) -> bool {
         crate::view::interaction::is_clicked(self.view.id.get())
     }
+
+    pub fn changed(&self) -> bool {
+        crate::view::interaction::is_changed(self.view.id.get())
+    }
 }
 
-/// UI context for building views
+/// UIContext is the primary entry point for building immediate-mode UI.
+/// It provides a fluent builder API for constructing various widgets.
 pub struct UIContext<'a> {
     pub arena: &'a FrameArena,
     parent_stack: Vec<&'a ViewHeader<'a>>,
     root: Option<&'a ViewHeader<'a>>,
-    pub theme: Theme,
+    pub theme: crate::core::theme::Theme,
+    pub style: crate::core::theme::Style,
     next_id: u64,
     pub persistence: Option<&'a PersistenceManager>,
 }
@@ -266,10 +287,21 @@ impl<'a> UIContext<'a> {
             arena,
             parent_stack: Vec::new(),
             root: None,
-            theme: Theme::default(),
+            theme: crate::core::theme::Theme::default(),
+            style: crate::core::theme::Style::default(),
             next_id: 1,
             persistence: None,
         }
+    }
+
+    pub fn with_theme(mut self, theme: crate::core::theme::Theme) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    pub fn with_style(mut self, style: crate::core::theme::Style) -> Self {
+        self.style = style;
+        self
     }
 
     pub fn with_persistence(mut self, p: &'a PersistenceManager) -> Self {
@@ -303,8 +335,14 @@ impl<'a> UIContext<'a> {
             ..Default::default()
         });
 
-        // Apply default colors via Cell
+        // Apply default colors and layout via Cell
         view.bg_color.set(self.theme.panel);
+        view.border_radius_tl.set(self.style.rounding);
+        view.border_radius_tr.set(self.style.rounding);
+        view.border_radius_br.set(self.style.rounding);
+        view.border_radius_bl.set(self.style.rounding);
+        view.padding.set(self.style.padding);
+        view.margin.set(self.style.margin);
 
         self.push_child(view);
 
@@ -323,6 +361,11 @@ impl<'a> UIContext<'a> {
 
         view.is_row.set(true);
         view.bg_color.set(ColorF::TRANSPARENT);
+        
+        // Defaults from Style
+        view.padding.set(self.style.padding);
+        view.margin.set(self.style.margin);
+        view.spacing.set(self.style.spacing);
 
         self.push_child(view);
 
@@ -342,6 +385,11 @@ impl<'a> UIContext<'a> {
         view.is_row.set(false);
         view.bg_color.set(ColorF::TRANSPARENT);
 
+        // Defaults from Style
+        view.padding.set(self.style.padding);
+        view.margin.set(self.style.margin);
+        view.spacing.set(self.style.spacing);
+
         self.push_child(view);
 
         BoxBuilder { view }
@@ -356,7 +404,10 @@ impl<'a> UIContext<'a> {
             id: std::cell::Cell::new(id),
             ..Default::default()
         });
+        
         view.fg_color.set(self.theme.text);
+        view.font_size.set(self.style.font_size);
+        view.margin.set(self.style.margin);
 
         self.push_child(view);
 
@@ -373,18 +424,21 @@ impl<'a> UIContext<'a> {
             ..Default::default()
         });
 
-        // Defaults
+        // Defaults from Style/Theme
         view.bg_color.set(self.theme.panel);
-        view.elevation.set(2.0);
-        view.border_radius_tl.set(6.0);
-        view.border_radius_tr.set(6.0);
-        view.border_radius_br.set(6.0);
-        view.border_radius_bl.set(6.0);
+        view.fg_color.set(self.theme.text);
+        view.font_size.set(self.style.font_size);
+        view.elevation.set(self.style.elevation);
+        view.border_radius_tl.set(self.style.rounding);
+        view.border_radius_tr.set(self.style.rounding);
+        view.border_radius_br.set(self.style.rounding);
+        view.border_radius_bl.set(self.style.rounding);
+        view.padding.set(self.style.padding);
+        view.margin.set(self.style.margin);
+        view.border_width.set(self.style.border_width);
+        view.border_color.set(self.theme.border);
 
         // Button hover/active from theme
-        // We can derive hover/active from accent or panel
-        // For Cyberpunk: panel is dark, accent is Cyan
-        // Let's use accent for active, and a lighter panel for hover
         view.bg_hover.set(Some(self.theme.panel.lighten(0.1)));
         view.bg_active.set(Some(self.theme.accent.with_alpha(0.3)));
 
@@ -442,7 +496,7 @@ impl<'a> UIContext<'a> {
         view.bg_color.set(self.theme.panel);
         view.fg_color.set(self.theme.accent); // Active arc color
         view.border_color.set(self.theme.border);
-        view.border_width.set(2.0);
+        view.border_width.set(self.style.border_width);
         view.is_squircle.set(true); // Base shape
         view.border_radius_tl.set(25.0); // Circle by default
 
@@ -524,11 +578,11 @@ impl<'a> UIContext<'a> {
         view.bg_color.set(self.theme.panel.darken(0.2)); // Trough color
         view.fg_color.set(self.theme.accent);
         view.border_color.set(self.theme.border);
-        view.border_width.set(1.0);
-        view.border_radius_tl.set(4.0);
-        view.border_radius_tr.set(4.0);
-        view.border_radius_br.set(4.0);
-        view.border_radius_bl.set(4.0);
+        view.border_width.set(self.style.border_width);
+        view.border_radius_tl.set(self.style.rounding);
+        view.border_radius_tr.set(self.style.rounding);
+        view.border_radius_br.set(self.style.rounding);
+        view.border_radius_bl.set(self.style.rounding);
 
         self.push_child(view);
 
@@ -541,6 +595,18 @@ impl<'a> UIContext<'a> {
     }
 
     /// Create value dragger
+    pub fn splitter(&mut self) -> splitter::SplitterBuilder<'a> {
+        let id = ID::from_u64(self.next_id);
+        self.next_id += 1;
+        let view = self.arena.alloc(ViewHeader {
+            view_type: ViewType::Splitter,
+            id: std::cell::Cell::new(id),
+            ..Default::default()
+        });
+        self.push_child(view);
+        splitter::SplitterBuilder { view }
+    }
+
     pub fn value_dragger(
         &mut self,
         value: &'a mut f32,
@@ -561,11 +627,11 @@ impl<'a> UIContext<'a> {
         view.bg_color.set(self.theme.panel);
         view.fg_color.set(self.theme.text);
         view.border_color.set(self.theme.border);
-        view.border_width.set(1.0);
-        view.border_radius_tl.set(2.0);
-        view.border_radius_tr.set(2.0);
-        view.border_radius_br.set(2.0);
-        view.border_radius_bl.set(2.0);
+        view.border_width.set(self.style.border_width);
+        view.border_radius_tl.set(self.style.rounding * 0.5);
+        view.border_radius_tr.set(self.style.rounding * 0.5);
+        view.border_radius_br.set(self.style.rounding * 0.5);
+        view.border_radius_bl.set(self.style.rounding * 0.5);
 
         self.push_child(view);
 
@@ -598,6 +664,16 @@ impl<'a> UIContext<'a> {
             id: std::cell::Cell::new(id),
             ..Default::default()
         });
+
+        view.bg_color.set(self.theme.panel);
+        view.border_color.set(self.theme.accent);
+        view.border_width.set(self.style.border_width);
+        view.elevation.set(self.style.elevation * 2.0);
+        view.border_radius_tl.set(self.style.rounding);
+        view.border_radius_tr.set(self.style.rounding);
+        view.border_radius_br.set(self.style.rounding);
+        view.border_radius_bl.set(self.style.rounding);
+
         self.push_child(view);
         // Pass shared persistence reference
         node::NodeBuilder {
@@ -616,6 +692,10 @@ impl<'a> UIContext<'a> {
             id: std::cell::Cell::new(id),
             ..Default::default()
         });
+        
+        view.fg_color.set(self.theme.accent);
+        view.border_color.set(self.theme.border);
+
         self.push_child(view);
         node::SocketBuilder {
             view,
@@ -642,13 +722,13 @@ impl<'a> UIContext<'a> {
         // Context menu default style
         view.bg_color.set(self.theme.panel.with_alpha(0.95));
         view.border_color.set(self.theme.border);
-        view.border_width.set(1.0);
-        view.border_radius_tl.set(8.0);
-        view.border_radius_tr.set(8.0);
-        view.border_radius_br.set(8.0);
-        view.border_radius_bl.set(8.0);
+        view.border_width.set(self.style.border_width);
+        view.border_radius_tl.set(self.style.rounding);
+        view.border_radius_tr.set(self.style.rounding);
+        view.border_radius_br.set(self.style.rounding);
+        view.border_radius_bl.set(self.style.rounding);
         view.backdrop_blur.set(20.0);
-        view.elevation.set(10.0);
+        view.elevation.set(self.style.elevation * 4.0);
 
         self.push_child(view);
         context_menu::ContextMenuBuilder { view }

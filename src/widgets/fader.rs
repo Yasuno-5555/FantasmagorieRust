@@ -68,4 +68,8 @@ impl<'a> FaderBuilder<'a> {
 
         self.view
     }
+
+    pub fn changed(&self) -> bool {
+        crate::view::interaction::is_changed(self.view.id.get())
+    }
 }

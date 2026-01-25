@@ -28,6 +28,7 @@ pub mod view;
 pub mod widgets;
 pub mod renderer;
 pub mod tracea;
+pub mod game;
 
 #[cfg(any(
     feature = "opengl",
@@ -43,22 +44,30 @@ pub mod python;
 /// Convenient re-exports for common usage
 pub mod prelude {
     // Core types
-    pub use crate::core::{ColorF, FrameArena, Rectangle, Theme, Vec2, ID};
+    pub use crate::core::{ColorF, FrameArena, Rectangle, Theme, Style, Vec2, ID};
     pub use crate::draw::DrawList;
     pub use crate::view::{Align, ViewHeader, ViewType};
     pub use crate::widgets::{BoxBuilder, ButtonBuilder, TextBuilder, UIContext};
     
-    // Engine configuration (The Soul)
+    // Engine configuration
     pub use crate::config::{EngineConfig, Profile, ColorSpace, Pipeline, EngineConfigBuilder};
     
-    // Renderer (The Boundary)
+    // Renderer
     pub use crate::renderer::Renderer;
+
+    // Interaction shortcuts
+    pub use crate::view::interaction::{
+        is_active, is_focused, is_hot, is_clicked, is_changed,
+        get_mouse_pos, get_mouse_delta, get_scroll_delta
+    };
 }
 
-// Also re-export at top level for convenience
+// Top-level re-exports
 pub use crate::core::{ColorF, Rectangle, Vec2, ID};
 pub use crate::draw::DrawList;
 pub use crate::view::{Align, ViewHeader, ViewType};
+pub use crate::widgets::UIContext;
+pub use crate::core::theme::{Theme, Style};
 
 // ============================================================================
 // PyO3 Module Entry Point

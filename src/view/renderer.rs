@@ -79,7 +79,12 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
 
     // 2. Register for interaction
     let id = view.id.get();
-    interaction::register_interactive(id, rect);
+    if view.view_type == ViewType::Splitter {
+        let handle_rect = get_splitter_handle_rect(view, rect);
+        interaction::register_interactive(id, handle_rect);
+    } else {
+        interaction::register_interactive(id, rect);
+    }
 
     // 3. Type-specific rendering
     match view.view_type {
@@ -1007,20 +1012,7 @@ fn render_color_picker(view: &ViewHeader, dl: &mut DrawList) {
 /// Render splitter handle
 fn render_splitter(view: &ViewHeader, dl: &mut DrawList) {
     let rect = view.computed_rect.get();
-    let handle_size = 8.0;
-
-    // Calculate handle position matching layout.rs
-    let ratio = view.ratio.get().clamp(0.0, 1.0);
-
-    let handle_rect = if view.is_vertical.get() {
-        let avail = rect.h;
-        let size1 = (avail - handle_size) * ratio;
-        crate::core::Rectangle::new(rect.x, rect.y + size1, rect.w, handle_size)
-    } else {
-        let avail = rect.w;
-        let size1 = (avail - handle_size) * ratio;
-        crate::core::Rectangle::new(rect.x + size1, rect.y, handle_size, rect.h)
-    };
+    let handle_rect = get_splitter_handle_rect(view, rect);
 
     // Draw handle visual (centered line or small rect)
     let is_hot = interaction::is_hot(view.id.get());
@@ -1040,6 +1032,21 @@ fn render_splitter(view: &ViewHeader, dl: &mut DrawList) {
         2.0,
         color,
     );
+}
+
+fn get_splitter_handle_rect(view: &ViewHeader, rect: crate::core::Rectangle) -> crate::core::Rectangle {
+    let handle_size = 8.0;
+    let ratio = view.ratio.get().clamp(0.0, 1.0);
+
+    if view.is_vertical.get() {
+        let avail = rect.h;
+        let size1 = (avail - handle_size) * ratio;
+        crate::core::Rectangle::new(rect.x, rect.y + size1, rect.w, handle_size)
+    } else {
+        let avail = rect.w;
+        let size1 = (avail - handle_size) * ratio;
+        crate::core::Rectangle::new(rect.x + size1, rect.y, handle_size, rect.h)
+    }
 }
 
 /// Render scroll container
@@ -1538,40 +1545,15 @@ fn render_canvas(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut Font
         view.bg_color.get(),
     );
 
-    // 2. Grid (Transformed)
-    // We draw grid in the transformed space for simplicity, or just static grid?
-    // Let's do static grid for now to avoid complexity in grid math.
-    let grid_size = 50.0 * zoom;
-    let grid_color = view.border_color.get().with_alpha(0.1);
+    // 2. Grid (Dynamic shader-based)
+    let grid_color = view.border_color.get().with_alpha(0.05);
+    dl.add_grid(Vec2::new(rect.x, rect.y), Vec2::new(rect.w, rect.h), zoom, grid_color);
 
-    let ox = offset.x % grid_size;
-    let oy = offset.y % grid_size;
-
-    for i in -1..=(rect.w / grid_size) as i32 + 1 {
-        let x = rect.x + i as f32 * grid_size + ox;
-        dl.add_line(
-            Vec2::new(x, rect.y),
-            Vec2::new(x, rect.y + rect.h),
-            1.0,
-            grid_color,
-        );
-    }
-
-    for i in -1..=(rect.h / grid_size) as i32 + 1 {
-        let y = rect.y + i as f32 * grid_size + oy;
-        dl.add_line(
-            Vec2::new(rect.x, y),
-            Vec2::new(rect.x + rect.w, y),
-            1.0,
-            grid_color,
-        );
-    }
-
-    // 3. Transformation Phase
+    // 3. Transform for content
     dl.push_clip(Vec2::new(rect.x, rect.y), Vec2::new(rect.w, rect.h));
-    dl.push_transform(Vec2::new(rect.x + offset.x, rect.y + offset.y), zoom);
+    dl.push_transform(offset, zoom);
 
-    // 4. Render Nodes & Sub-widgets
+    // Render children
     for child in view.children() {
         render_view_recursive(child, dl, depth + 1, fm);
     }
@@ -1674,6 +1656,14 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, _fm: &mut Font
             render_text_at(&mut fm, pos, title, size, view.fg_color.get(), dl);
         });
     }
+
+    // 4. Content (Children)
+    // Sockets and inputs should be children of the node.
+    // We render them relative to the node.
+    // Note: Node is NOT a push_transform by default, but we should maybe push clip.
+    for child in view.children() {
+        render_view_recursive(child, dl, _depth + 1, _fm);
+    }
 }
 
 /// Render interactive socket
@@ -1693,11 +1683,15 @@ fn render_socket(view: &ViewHeader, dl: &mut DrawList) {
 
     // Glow on interaction
     if is_active || is_hot {
-        dl.add_circle(center, radius + 2.0, color.with_alpha(0.3), true);
+        dl.add_circle(center, radius + 3.0, color.with_alpha(0.2), true);
     }
 
     dl.add_circle(center, radius, color, true);
-    dl.add_circle(center, radius, view.border_color.get(), false);
+    
+    // Inner dot for better readability
+    dl.add_circle(center, radius * 0.4, ColorF::new(0.0, 0.0, 0.0, 0.5), true);
+    
+    dl.add_circle(center, radius, view.border_color.get().with_alpha(0.8), false);
 }
 
 /// Render connection wire (Bezier)

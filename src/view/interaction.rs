@@ -72,6 +72,9 @@ struct InteractionContext {
     // Text Selection
     pub cursor_idx: usize,
     pub selection_anchor: Option<usize>,
+
+    // Drag & Drop
+    pub dropped_files: Vec<std::path::PathBuf>,
 }
 
 impl Default for InteractionContext {
@@ -118,6 +121,7 @@ impl Default for InteractionContext {
             ime_cursor_range: None,
             ime_cursor_area: Vec2::ZERO,
             focused_text_input: None,
+            dropped_files: Vec::new(),
         }
     }
 }
@@ -161,6 +165,8 @@ pub fn begin_interaction_pass() {
         ctx.scroll_delta_y = 0.0;
         ctx.cursor_requested = None;
         // Don't clear virtual_list_ranges, they need to persist across frames
+        // Clear dropped files from previous frame
+        ctx.dropped_files.clear();
     });
 }
 
@@ -222,6 +228,18 @@ pub fn animate_ex(
     })
 }
 
+/// Handle file drop event from backend
+pub fn on_files_dropped(files: Vec<std::path::PathBuf>) {
+    CTX.with(|ctx| {
+        ctx.borrow_mut().dropped_files = files;
+    });
+}
+
+/// Get files dropped this frame
+pub fn get_dropped_files() -> Vec<std::path::PathBuf> {
+    CTX.with(|ctx| ctx.borrow().dropped_files.clone())
+}
+
 /// Update input state
 pub fn update_input(
     mouse_x: f32,
@@ -232,26 +250,89 @@ pub fn update_input(
 ) {
     CTX.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-
-        if !ctx.initialized {
-            ctx.mouse_x = mouse_x;
-            ctx.mouse_y = mouse_y;
-            ctx.initialized = true;
-        }
-
-        let dx = mouse_x - ctx.mouse_x;
-        let dy = mouse_y - ctx.mouse_y;
-
-        ctx.mouse_delta_x = dx;
-        ctx.mouse_delta_y = dy;
-
-        ctx.mouse_was_down = ctx.mouse_down;
+        ctx.mouse_delta_x = mouse_x - ctx.mouse_x;
+        ctx.mouse_delta_y = mouse_y - ctx.mouse_y;
         ctx.mouse_x = mouse_x;
         ctx.mouse_y = mouse_y;
+        ctx.mouse_was_down = ctx.mouse_down;
         ctx.mouse_down = mouse_down;
         ctx.right_mouse_down = right_mouse_down;
         ctx.middle_mouse_down = middle_mouse_down;
+        ctx.initialized = true;
     });
+}
+
+/// Handle winit window event for seamless integration
+pub fn handle_event(event: &winit::event::WindowEvent) {
+    use winit::event::{WindowEvent, MouseButton, ElementState};
+    match event {
+        WindowEvent::CursorMoved { position, .. } => {
+             CTX.with(|ctx| {
+                 let mut ctx = ctx.borrow_mut();
+                 let mx = position.x as f32;
+                 let my = position.y as f32;
+                 ctx.mouse_delta_x = mx - ctx.mouse_x;
+                 ctx.mouse_delta_y = my - ctx.mouse_y;
+                 ctx.mouse_x = mx;
+                 ctx.mouse_y = my;
+             });
+        }
+        WindowEvent::MouseInput { state, button, .. } => {
+            let pressed = *state == ElementState::Pressed;
+            CTX.with(|ctx| {
+                let mut ctx = ctx.borrow_mut();
+                match button {
+                    MouseButton::Left => {
+                        ctx.mouse_was_down = ctx.mouse_down;
+                        ctx.mouse_down = pressed;
+                    }
+                    MouseButton::Right => ctx.right_mouse_down = pressed,
+                    MouseButton::Middle => ctx.middle_mouse_down = pressed,
+                    _ => {}
+                }
+            });
+        }
+        WindowEvent::MouseWheel { delta, .. } => {
+            use winit::event::MouseScrollDelta;
+            let (dx, dy) = match delta {
+                MouseScrollDelta::LineDelta(x, y) => (*x * 20.0, *y * 20.0),
+                MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+            };
+            CTX.with(|ctx| {
+                let mut ctx = ctx.borrow_mut();
+                ctx.scroll_delta_x = dx;
+                ctx.scroll_delta_y = dy;
+            });
+        }
+        WindowEvent::DroppedFile(path) => {
+            CTX.with(|ctx| {
+                ctx.borrow_mut().dropped_files.push(path.clone());
+            });
+        }
+        WindowEvent::KeyboardInput { event: key_event, .. } => {
+            if let winit::keyboard::PhysicalKey::Code(code) = key_event.physical_key {
+                let pressed = key_event.state == ElementState::Pressed;
+                CTX.with(|ctx| {
+                    let mut ctx = ctx.borrow_mut();
+                    if pressed {
+                        ctx.keys_down.insert(code);
+                        ctx.keys_pressed.insert(code);
+                    } else {
+                        ctx.keys_down.remove(&code);
+                    }
+                });
+            }
+        }
+        WindowEvent::ModifiersChanged(mods) => {
+            let mut m = 0u32;
+            if mods.state().shift_key() { m |= 1; }
+            if mods.state().control_key() { m |= 2; }
+            if mods.state().alt_key() { m |= 4; }
+            if mods.state().super_key() { m |= 8; }
+            CTX.with(|ctx| ctx.borrow_mut().modifiers = m);
+        }
+        _ => {}
+    }
 }
 
 pub fn is_mouse_down() -> bool {
@@ -349,6 +430,15 @@ pub fn is_right_clicked(id: ID) -> bool {
         && CTX.with(|ctx| {
             let ctx = ctx.borrow();
             ctx.hot_id == id && ctx.right_mouse_down && ctx.mouse_was_down // Simple approximation
+        })
+}
+
+/// Check if widget's value changed this frame
+pub fn is_changed(id: ID) -> bool {
+    id != ID::NONE
+        && CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            ctx.active_id == id && (ctx.mouse_delta_x != 0.0 || ctx.mouse_delta_y != 0.0)
         })
 }
 

@@ -16,6 +16,7 @@ pub struct DrawBuilder<'a> {
     glow: Option<Glow>,
     elevation: f32,
     is_squircle: bool,
+    morph: f32,
 }
 
 impl<'a> DrawBuilder<'a> {
@@ -29,6 +30,7 @@ impl<'a> DrawBuilder<'a> {
             glow: None,
             elevation: 0.0,
             is_squircle: false,
+            morph: 0.0,
         }
     }
 
@@ -68,6 +70,12 @@ impl<'a> DrawBuilder<'a> {
         self
     }
 
+    /// Set the motion morph weight (0.0 to 1.0).
+    pub fn morph(mut self, weight: f32) -> Self {
+        self.morph = weight;
+        self
+    }
+
     /// Submit the command to the frame.
     ///
     /// This consumes the builder and pushes a `RenderCommand::DrawShape` 
@@ -81,6 +89,7 @@ impl<'a> DrawBuilder<'a> {
             glow: self.glow,
             elevation: self.elevation,
             is_squircle: self.is_squircle,
+            morph: self.morph,
         });
     }
 }

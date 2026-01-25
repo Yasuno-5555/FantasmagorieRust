@@ -154,6 +154,14 @@ pub enum DrawCommand {
         pos: Vec2,
         size: Vec2,
     },
+
+    /// Dynamic Grid
+    Grid {
+        pos: Vec2,
+        size: Vec2,
+        color: ColorF,
+        zoom: f32,
+    },
 }
 
 /// Draw list - accumulates commands for a frame
@@ -497,6 +505,16 @@ impl DrawList {
     /// Add Aurora background
     pub fn add_aurora(&mut self, pos: Vec2, size: Vec2) {
         self.commands.push(DrawCommand::Aurora { pos, size });
+    }
+
+    /// Add Grid background
+    pub fn add_grid(&mut self, pos: Vec2, size: Vec2, zoom: f32, color: ColorF) {
+        self.commands.push(DrawCommand::Grid {
+            pos,
+            size,
+            color,
+            zoom,
+        });
     }
 
     /// Add 3D viewport

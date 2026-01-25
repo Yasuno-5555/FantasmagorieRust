@@ -84,12 +84,10 @@ impl Size {
     }
 }
 
-/// Common header for all views
-/// Universal Masquerade: All common properties live here.
-///
-/// Uses Cell<T> for layout outputs to enable interior mutability.
-/// This allows the layout engine to write computed values while
-/// holding shared references to the tree.
+/// ViewHeader is the core node of the UI tree.
+/// It contains all common properties such as layout, colors, and visibility.
+/// 
+/// Uses `Cell<T>` for layout outputs to enable interior mutability during the layout pass.
 #[derive(Clone)]
 pub struct ViewHeader<'a> {
     // --- Identity ---
@@ -109,6 +107,7 @@ pub struct ViewHeader<'a> {
     pub pos_y: Cell<f32>,
     pub padding: Cell<f32>,
     pub margin: Cell<f32>,
+    pub spacing: Cell<f32>,
     pub flex_grow: Cell<f32>,
     pub flex_shrink: Cell<f32>,
     pub is_row: Cell<bool>,
@@ -212,6 +211,7 @@ impl<'a> Default for ViewHeader<'a> {
             pos_y: Cell::new(0.0),
             padding: Cell::new(0.0),
             margin: Cell::new(0.0),
+            spacing: Cell::new(0.0),
             flex_grow: Cell::new(0.0),
             flex_shrink: Cell::new(1.0),
             is_row: Cell::new(false),

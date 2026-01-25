@@ -25,6 +25,11 @@ impl<'a> CanvasBuilder<'a> {
         self
     }
 
+    pub fn flex_grow(self, grow: f32) -> Self {
+        self.view.flex_grow.set(grow);
+        self
+    }
+
     pub fn border_color(self, color: crate::core::ColorF) -> Self {
         self.view.border_color.set(color);
         self

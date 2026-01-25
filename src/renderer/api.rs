@@ -1,3 +1,4 @@
+use crate::core::Vec2;
 use crate::backend::GraphicsBackend;
 use crate::config::{EngineConfig, Profile, Pipeline};
 use super::frame::{FrameDescription, RenderCommand};
@@ -124,17 +125,36 @@ impl Renderer {
     /// Convert high-level RenderCommands into backend-friendly DrawCommands.
     fn transmute_to_drawlist(&self, frame: &FrameDescription, dl: &mut crate::draw::DrawList) {
         use crate::draw::DrawCommand;
+        let mut active_camera: Option<&super::camera::Camera> = None;
 
         for cmd in &frame.commands {
             match cmd {
-                RenderCommand::DrawQuad { rect, color } => {
-                    dl.add_rect(rect.pos(), rect.size(), *color);
+                RenderCommand::BeginWorld(cam) => {
+                    active_camera = Some(cam);
                 }
-                RenderCommand::DrawTexturedQuad { rect, uv, texture: _ } => {
-                    // Note: texture handle is ignored here as stage 0 backends
-                    // usually use a single font atlas or global texture.
-                    // This will be refined as we move to Stage 2 (Sprite Sorting).
-                    dl.add_image(rect.pos(), rect.size(), 0, [uv.u, uv.v, uv.u + uv.w, uv.v + uv.h], crate::core::ColorF::white());
+                RenderCommand::EndWorld => {
+                    active_camera = None;
+                }
+                RenderCommand::DrawQuad { rect, color } => {
+                    let (pos, size) = if let Some(cam) = active_camera {
+                        let p = cam.world_to_screen(rect.pos());
+                        let s = rect.size() * cam.zoom;
+                        (Vec2::new(p.x - s.x * 0.5, p.y - s.y * 0.5), s)
+                    } else {
+                        (rect.pos(), rect.size())
+                    };
+                    dl.add_rect(pos, size, *color);
+                }
+                RenderCommand::DrawTexturedQuad { rect, uv, texture: t } => {
+                    let (pos, size) = if let Some(cam) = active_camera {
+                        let p = cam.world_to_screen(rect.pos());
+                        let s = rect.size() * cam.zoom;
+                        (Vec2::new(p.x - s.x * 0.5, p.y - s.y * 0.5), s)
+                    } else {
+                        (rect.pos(), rect.size())
+                    };
+                    // Use the handle's value as u64 for DrawList
+                    dl.add_image(pos, size, t.0 as u64, [uv.u, uv.v, uv.u + uv.w, uv.v + uv.h], crate::core::ColorF::white());
                 }
                 RenderCommand::DrawShape {
                     rect,
@@ -144,6 +164,7 @@ impl Renderer {
                     glow,
                     elevation,
                     is_squircle,
+                    morph,
                 } => {
                     let (bw, bc) = border.map(|b| (b.width, b.color)).unwrap_or((0.0, crate::core::ColorF::transparent()));
                     let (gs, gc) = glow.map(|g| (g.strength, g.color)).unwrap_or((0.0, crate::core::ColorF::transparent()));
@@ -270,5 +291,15 @@ impl FrameContext {
 
     pub fn draw_mesh(&mut self, mesh: MeshHandle) {
         self.description.commands.push(RenderCommand::DrawMesh(mesh));
+    }
+
+    // --- Game Engine API ---
+
+    pub fn begin_world(&mut self, camera: &super::camera::Camera) {
+        self.description.commands.push(RenderCommand::BeginWorld(camera.clone()));
+    }
+
+    pub fn end_world(&mut self) {
+        self.description.commands.push(RenderCommand::EndWorld);
     }
 }

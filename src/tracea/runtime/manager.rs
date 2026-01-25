@@ -1,4 +1,5 @@
 ﻿use std::sync::{Arc, Mutex};
+#[cfg(feature = "vulkan")]
 use ash::vk;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -8,6 +9,7 @@ use std::ffi::c_void;
 use std::io::Write;
 use serde::{Serialize, Deserialize};
 use crate::tracea::doctor::{BackendKind, JitResultInfo, AssemblerResultInfo, KernelLaunchInfo, ModuleLoadInfo};
+#[cfg(feature = "vulkan")]
 use crate::backend::vulkan::VulkanContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,6 +40,7 @@ pub enum DeviceBackend {
 pub enum DeviceBuffer {
     Cuda(CudaSlice<u8>),
     Rocm(RocmBuffer), 
+    #[cfg(feature = "vulkan")]
     Vulkan(vk::Buffer, vk::DeviceMemory),
     External(u64),
 }
@@ -70,6 +73,7 @@ pub struct RecordedKernel {
 pub struct DeviceHandle {
     pub backend: DeviceBackend,
     pub cuda_dev: Option<Arc<CudaDevice>>,
+    #[cfg(feature = "vulkan")]
     pub vulkan_ctx: Option<Arc<VulkanContext>>,
     pub arch: String,
 }
@@ -84,6 +88,7 @@ pub struct RuntimeManager {
     pub next_buffer_id: Mutex<u64>,
     pub compatibility_log: Mutex<Vec<String>>,
     pub doctor: Arc<crate::tracea::doctor::Doctor>,
+    #[cfg(feature = "vulkan")]
     pub vulkan_ctx: Option<Arc<VulkanContext>>,
 }
 
@@ -92,6 +97,7 @@ static INSTANCE: Mutex<Option<Arc<RuntimeManager>>> = Mutex::new(None);
 impl RuntimeManager {
     pub fn init(
         pref_backend: Option<DeviceBackend>,
+        #[cfg(feature = "vulkan")]
         vulkan_ctx: Option<Arc<VulkanContext>>,
     ) -> Result<Arc<Self>, String> {
         let mut cache = INSTANCE.lock().map_err(|_| "Global Instance Lock Poisoned".to_string())?;
@@ -106,6 +112,7 @@ impl RuntimeManager {
             devices.insert(DeviceBackend::Cuda, DeviceHandle {
                 backend: DeviceBackend::Cuda,
                 cuda_dev: Some(dev),
+                #[cfg(feature = "vulkan")]
                 vulkan_ctx: None,
                 arch: format!("sm_{}{}", major, minor),
             });
@@ -116,12 +123,14 @@ impl RuntimeManager {
              devices.insert(DeviceBackend::Rocm, DeviceHandle {
                  backend: DeviceBackend::Rocm,
                  cuda_dev: None,
+                 #[cfg(feature = "vulkan")]
                  vulkan_ctx: None,
                  arch: "gfx90a".to_string(),
              });
              println!("[Doctor] 泙 ROCm Backend Registered.");
         }
 
+        #[cfg(feature = "vulkan")]
         if let Some(ctx) = &vulkan_ctx {
             devices.insert(DeviceBackend::Vulkan, DeviceHandle {
                 backend: DeviceBackend::Vulkan,
@@ -144,18 +153,27 @@ impl RuntimeManager {
             next_buffer_id: Mutex::new(0),
             compatibility_log: Mutex::new(Vec::new()),
             doctor,
+            #[cfg(feature = "vulkan")]
             vulkan_ctx: vulkan_ctx.clone(),
         });
         *cache = Some(Arc::clone(&instance));
         Ok(instance)
     }
 
+    #[cfg(feature = "vulkan")]
     pub fn init_vulkan(context: Arc<VulkanContext>) -> Result<Arc<Self>, String> {
         Self::init(Some(DeviceBackend::Vulkan), Some(context))
     }
 
     pub fn new() -> Arc<Self> {
-        Self::init(None, None).expect("Failed to initialize RuntimeManager")
+        #[cfg(feature = "vulkan")]
+        {
+             Self::init(None, None).expect("Failed to initialize RuntimeManager")
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+             Self::init(None).expect("Failed to initialize RuntimeManager")
+        }
     }
 
     pub fn compile(&self, source: &str, kernel_name: &str, backend: DeviceBackend) -> Result<KernelId, String> {
@@ -525,6 +543,7 @@ impl RuntimeManager {
             DeviceBuffer::Cuda(slice) => Ok(*slice.device_ptr()),
             DeviceBuffer::Rocm(buf) => Ok(buf.ptr),
             DeviceBuffer::External(ptr) => Ok(*ptr),
+            #[cfg(feature = "vulkan")]
             DeviceBuffer::Vulkan(_, _) => Err("Direct Vulkan pointer access not implemented yet".into()),
         }
     }

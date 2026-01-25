@@ -40,20 +40,6 @@ impl<'a> KnobBuilder<'a> {
     }
 
     pub fn build(self) -> &'a ViewHeader<'a> {
-        // Here we might need to store min/max somewhere if renderer needs normalization?
-        // But renderer just draws. Interaction logic happens in UIContext or specialized logic.
-        // Wait, Knob needs interaction logic.
-        // Usually `view.view_type` triggers specific interaction handling in `interaction.rs`.
-        // We'll add ViewType::Knob later.
-        // For now, let's reuse Slider logic or just define properties?
-        // Actually, we need to store value, min, max references or state.
-        // ViewHeader is for layout/render properties.
-        // Logic usually lives in user code (immediate mode), but `binding.rs` needs to handle it.
-        // Since this is immediate mode, the interaction logic is:
-        // 1. Detect drag.
-        // 2. Update value.
-        // 3. Render returns.
-
         let id = self.view.id.get();
 
         // Handle interaction (Immediate Mode Logic)
@@ -79,5 +65,9 @@ impl<'a> KnobBuilder<'a> {
         self.view.max.set(self.max);
 
         self.view
+    }
+
+    pub fn changed(&self) -> bool {
+        crate::view::interaction::is_changed(self.view.id.get())
     }
 }

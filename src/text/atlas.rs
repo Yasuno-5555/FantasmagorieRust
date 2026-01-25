@@ -24,7 +24,7 @@ pub struct FontAtlas {
 impl FontAtlas {
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            texture_data: vec![0; (width * height) as usize], // Single channel (A8)
+            texture_data: vec![0; (width * height * 3) as usize], // Triple channel (RGB8)
             width,
             height,
             glyphs: HashMap::new(),
@@ -64,16 +64,19 @@ impl FontAtlas {
             return None;
         }
 
-        // Copy bitmap to texture
+        // Copy bitmap to texture (RGB)
         for y in 0..h {
             for x in 0..w {
                 let src_idx = (y * w + x) as usize;
                 let dest_x = self.current_x + padding + x;
                 let dest_y = self.current_y + padding + y;
-                let dest_idx = (dest_y * self.width + dest_x) as usize;
+                let dest_idx = ((dest_y * self.width + dest_x) * 3) as usize;
 
-                if src_idx < bitmap.len() && dest_idx < self.texture_data.len() {
-                    self.texture_data[dest_idx] = bitmap[src_idx];
+                if src_idx < bitmap.len() && dest_idx + 2 < self.texture_data.len() {
+                    let val = bitmap[src_idx];
+                    self.texture_data[dest_idx] = val;     // R
+                    self.texture_data[dest_idx + 1] = val; // G
+                    self.texture_data[dest_idx + 2] = val; // B
                 }
             }
         }

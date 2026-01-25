@@ -20,6 +20,11 @@ pub enum RenderCommand {
     SetTexture { slot: u32, handle: TextureHandle },
     SetTransform(Transform2D),
     SetScissor(Rect),
+
+    /// Start of World-space rendering layer.
+    BeginWorld(super::camera::Camera),
+    /// End of World-space rendering layer.
+    EndWorld,
     
     DrawQuad { rect: Rect, color: Color },
     DrawTexturedQuad { rect: Rect, uv: UVRect, texture: TextureHandle },
@@ -35,5 +40,7 @@ pub enum RenderCommand {
         glow: Option<Glow>,
         elevation: f32,
         is_squircle: bool,
+        /// Motion Morphing weight (0.0 to 1.0)
+        morph: f32,
     },
 }
