@@ -1,4 +1,4 @@
-﻿use crate::tracea::backend::Backend;
+use crate::tracea::backend::Backend;
 
 pub mod primitives;
 

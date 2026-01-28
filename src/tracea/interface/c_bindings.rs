@@ -1,4 +1,4 @@
-﻿use std::ffi::CString;
+use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 use crate::tracea::runtime::manager::{RuntimeManager, DeviceBackend, KernelArg};

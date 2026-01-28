@@ -17,6 +17,7 @@ impl VisibilityKernel {
         match self.backend {
             DeviceBackend::Cuda => self.cuda_source(),
             DeviceBackend::Metal => self.metal_source(),
+            DeviceBackend::Vulkan => self.vulkan_source(),
             _ => String::new(),
         }
     }
@@ -86,6 +87,47 @@ kernel void k8_visibility_culling(
 ) {
     if (idx >= num_instances) return;
     // ... same logic ...
+}
+"#.to_string()
+    }
+
+    fn vulkan_source(&self) -> String {
+        r#"#version 450
+#extension GL_KHR_shader_subgroup_basic : enable
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct InstanceData {
+    vec4 rect;
+    float depth;
+    int id;
+};
+
+layout(set = 0, binding = 0) buffer InstanceBuffer { InstanceData instances[]; };
+layout(set = 0, binding = 1) buffer VisibleIndices { uint visible_indices[]; };
+layout(set = 0, binding = 2) buffer VisibleCounter { uint visible_counter; };
+layout(set = 0, binding = 3) uniform sampler2D hzb_texture;
+
+layout(push_constant) uniform Params {
+    int num_instances;
+} p;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= p.num_instances) return;
+
+    InstanceData inst = instances[idx];
+    
+    bool visible = true;
+    if (inst.rect.x + inst.rect.z < -1.0 || inst.rect.x > 1.0 ||
+        inst.rect.y + inst.rect.w < -1.0 || inst.rect.y > 1.0) {
+        visible = false;
+    }
+
+    if (visible) {
+        uint out_idx = atomicAdd(visible_counter, 1);
+        visible_indices[out_idx] = idx;
+    }
 }
 "#.to_string()
     }

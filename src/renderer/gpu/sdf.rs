@@ -16,6 +16,7 @@ impl SDFKernel {
     pub fn generate_source(&self) -> String {
         match self.backend {
             DeviceBackend::Cuda => self.cuda_source(),
+            DeviceBackend::Vulkan => self.vulkan_source(),
             _ => String::new(),
         }
     }
@@ -80,6 +81,58 @@ extern "C" __global__ void k5_sdf_final(
     float2 s = seeds[y * width + x];
     float dist = sqrtf((s.x - x) * (s.x - x) + (s.y - y) * (s.y - y));
     sdf_buffer[y * width + x] = dist;
+}
+"#.to_string()
+    }
+
+    fn vulkan_source(&self) -> String {
+        r#"#version 450
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) buffer InputSeeds { vec2 input_seeds[]; };
+layout(set = 0, binding = 1) buffer OutputSeeds { vec2 output_seeds[]; };
+
+layout(push_constant) uniform Params {
+    int width, height, step;
+} p;
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int y = int(gl_GlobalInvocationID.y);
+    if (x >= p.width || y >= p.height) return;
+
+    vec2 best_seed = input_seeds[y * p.width + x];
+    float best_dist = 1e10;
+    
+    if (best_seed.x >= 0.0) {
+        float dx = best_seed.x - float(x);
+        float dy = best_seed.y - float(y);
+        best_dist = dx*dx + dy*dy;
+    }
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            int nx = x + dx * p.step;
+            int ny = y + dy * p.step;
+            
+            if (nx >= 0 && nx < p.width && ny >= 0 && ny < p.height) {
+                vec2 s = input_seeds[ny * p.width + nx];
+                if (s.x >= 0.0) {
+                    float ds_x = s.x - float(x);
+                    float ds_y = s.y - float(y);
+                    float d = ds_x*ds_x + ds_y*ds_y;
+                    if (d < best_dist) {
+                        best_dist = d;
+                        best_seed = s;
+                    }
+                }
+            }
+        }
+    }
+
+    output_seeds[y * p.width + x] = best_seed;
 }
 "#.to_string()
     }

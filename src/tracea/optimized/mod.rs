@@ -1,2 +1,2 @@
-﻿// Optimized IR module definition
+// Optimized IR module definition
 pub mod config;

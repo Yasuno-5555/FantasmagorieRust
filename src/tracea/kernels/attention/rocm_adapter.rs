@@ -1,4 +1,4 @@
-﻿use crate::tracea::core::tuning::{TunableKernel, SearchSpace};
+use crate::tracea::core::tuning::{TunableKernel, SearchSpace};
 use crate::tracea::core::config::{PipelineConfig, SwizzleMode, SpecializedInstruction};
 use crate::tracea::emitter::rocm::ROCMEmitter;
 use crate::tracea::runtime::manager::{RuntimeManager, DeviceBackend, KernelArg};

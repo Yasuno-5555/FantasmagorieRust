@@ -1,6 +1,6 @@
 //! Windowed demo to show off Visual Revolution features
 
-use fanta_rust::backend::{Backend, OpenGLBackend};
+use fanta_rust::backend::{GraphicsBackend, OpenGLBackend};
 use fanta_rust::prelude::*;
 
 use winit::dpi::LogicalSize;
@@ -86,6 +86,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create OpenGL backend
     let mut backend = unsafe { OpenGLBackend::new(gl)? };
+
+    // Initialize fonts
+    fanta_rust::text::FONT_MANAGER.with(|fm| {
+        fm.borrow_mut().init_fonts();
+    });
 
     // State
     let mut theme_idx = 0;
@@ -289,7 +294,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .fg(ctx.theme.text)
                     .build();
                 ctx.r#box().height(10.0).build();
-                ctx.plot(&data, -1.0, 1.0).size(300.0, 150.0).build();
+                let accent = ctx.theme.accent;
+                ctx.plot()
+                    .fast_line(&data, 0.0, 0.01, accent)
+                    .y_range(-1.0, 1.0)
+                    .height(150.0)
+                    .build();
                 ctx.end();
                 ctx.end();
                 ctx.end();
@@ -297,12 +307,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Layout & Render
                 if let Some(root) = ctx.root() {
                     let mut dl = fanta_rust::DrawList::new();
-                    fanta_rust::view::renderer::render_ui(
-                        root,
-                        current_width as f32,
-                        current_height as f32,
-                        &mut dl,
-                    );
+                    fanta_rust::text::FONT_MANAGER.with(|fm| {
+                        let mut fm = fm.borrow_mut();
+                        fanta_rust::view::renderer::render_ui(
+                            root,
+                            current_width as f32,
+                            current_height as f32,
+                            &mut dl,
+                            &mut fm,
+                        );
+                        if fm.texture_dirty {
+                            backend.update_font_texture(
+                                fm.atlas.width as u32,
+                                fm.atlas.height as u32,
+                                &fm.atlas.texture_data,
+                            );
+                            fm.texture_dirty = false;
+                        }
+                    });
                     backend.render(&dl, current_width, current_height);
                 }
 

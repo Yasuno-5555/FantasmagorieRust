@@ -44,71 +44,36 @@ fn ign(v: vec2<f32>) -> f32 {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let coords = vec2<i32>(id.xy);
     let dims = textureDimensions(t_output);
-    let f_dims = vec2<f32>(dims);
-    let uv = vec2<f32>(coords) / f_dims;
     
     if (id.x >= dims.x || id.y >= dims.y) {
         return;
     }
 
-    // 1. Audio-Driven Chromatic Aberration
-    let shift_amount = i32(audio.high * 20.0);
-    let r_coord = coords + vec2<i32>(shift_amount, 0);
-    let b_coord = coords - vec2<i32>(shift_amount, 0);
+    // Load base color (HDR Linear)
+    var color = textureLoad(t_base_color, coords, 0).rgb;
     
-    let r = textureLoad(t_base_color, r_coord, 0).r;
-    let g = textureLoad(t_base_color, coords, 0).g;
-    let b = textureLoad(t_base_color, b_coord, 0).b;
-    let color_raw = vec3<f32>(r, g, b);
-    
-    // 2. Load SDF
-    let dist = textureLoad(t_sdf, coords, 0).r;
+    // 1. Exposure adjustment
+    color *= pc.exposure;
 
-    // 3. Compute Direct Lighting (Bass Driven Pulse)
-    let base_decay = 0.05;
-    let pulse_decay = base_decay / (1.0 + audio.bass * 2.0);
-    let pulse_intensity = 2.0 * (1.0 + audio.bass * 4.0);
-    
-    let direct_light = exp(-abs(dist) * pulse_decay) * pulse_intensity; 
+    // 2. Simple Cinematic Fog
+    // Masked by SDF to keep foreground sharp
+    let sdf_val = textureLoad(t_sdf, coords, 0).r;
+    let fog_factor = 1.0 - exp(-(sdf_val * 0.1) * pc.fog_density);
+    let fog_color = vec3<f32>(0.1, 0.1, 0.12);
+    color = mix(color, fog_color, clamp(fog_factor, 0.0, 0.8));
 
-    // 4. Volumetric Fog (Raymarching towards center)
-    var fog_accum = 0.0;
-    let light_pos = f_dims * 0.5; // Light at center
-    let ray_start = vec2<f32>(coords);
-    let ray_dir = normalize(light_pos - ray_start);
-    let ray_len = distance(ray_start, light_pos);
-    
-    // Dithering to prevent banding
-    let dither = ign(vec2<f32>(coords));
-    
-    let steps = 16.0;
-    let step_size = ray_len / steps;
-    
-    for (var i = 0.0; i < steps; i += 1.0) {
-        let p = ray_start + ray_dir * (i + dither) * step_size;
-        let p_i = vec2<i32>(p);
-        
-        if (p_i.x < 0 || p_i.x >= i32(dims.x) || p_i.y < 0 || p_i.y >= i32(dims.y)) {
-             continue;
-        }
+    // 3. Audio Reactivity (Bass-driven bloom/glow)
+    color += audio.bass * vec3<f32>(0.05, 0.02, 0.08) * max(0.0, 1.0 - sdf_val * 0.05);
 
-        let s_dist = textureLoad(t_sdf, p_i, 0).r;
-        let s_light = exp(-abs(s_dist) * (pulse_decay * 1.5)) * pulse_intensity;
-        
-        // Attenuate based on march distance
-        let falloff = exp(-i * step_size * 0.001); 
-        fog_accum += s_light * falloff;
-    }
-    
-    let fog_final = (fog_accum / steps) * pc.fog_density * 5.0;
+    // 4. ACES Film Tone Mapping
+    var final_color = aces_film(color);
 
-    // 5. Composite
-    var final_color = color_raw + vec3<f32>(direct_light * 0.2) + vec3<f32>(fog_final);
-
-    // 6. Tone Mapping & Gamma
-    final_color = aces_film(final_color * pc.exposure);
+    // 5. Gamma Correction (Linear -> sRGB approximation)
     final_color = pow(final_color, vec3<f32>(1.0 / pc.gamma));
 
-    // 7. Store
+    // 6. Interleaved Gradient Noise Dithering (fixes banding in dark areas)
+    let noise = (ign(vec2<f32>(coords)) - 0.5) / 255.0;
+    final_color += noise;
+
     textureStore(t_output, coords, vec4<f32>(final_color, 1.0));
 }

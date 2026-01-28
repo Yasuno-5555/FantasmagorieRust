@@ -17,6 +17,7 @@ impl ResolverKernel {
         match self.backend {
             DeviceBackend::Cuda => self.cuda_source(),
             DeviceBackend::Metal => self.metal_source(),
+            DeviceBackend::Vulkan => self.vulkan_source(),
             _ => String::new(),
         }
     }
@@ -81,6 +82,41 @@ kernel void k4_cinematic_resolver(
     float4 color = base_color.read(gid);
     // ... fusion ...
     output.write(color, gid);
+}
+"#.to_string()
+    }
+
+    fn vulkan_source(&self) -> String {
+        r#"#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) buffer BaseColor { vec3 base_color[]; };
+layout(set = 0, binding = 1) buffer SDFBuffer { float sdf_buffer[]; };
+layout(set = 0, binding = 2) buffer OutputColor { vec3 output_color[]; };
+
+layout(push_constant) uniform Params {
+    int width, height;
+    float audio_bass;
+} p;
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x);
+    int y = int(gl_GlobalInvocationID.y);
+    if (x >= p.width || y >= p.height) return;
+
+    int idx = y * p.width + x;
+    vec3 color = base_color[idx];
+
+    // Subgroup wave sharing
+    float dist = sdf_buffer[idx];
+    float avg_dist = subgroupAdd(dist) / float(gl_SubgroupSize);
+
+    // Audio reactive
+    color.r *= (1.0 + p.audio_bass * 0.3);
+
+    output_color[idx] = color;
 }
 "#.to_string()
     }

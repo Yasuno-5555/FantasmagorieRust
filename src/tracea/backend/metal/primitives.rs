@@ -1,4 +1,4 @@
-﻿
+
 pub struct MetalPrimitives;
 
 impl MetalPrimitives {

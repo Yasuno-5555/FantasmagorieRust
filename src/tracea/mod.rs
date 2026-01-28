@@ -1,7 +1,8 @@
-﻿#![allow(unused_unsafe)]
+#![allow(unused_unsafe)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-//! # Tracea: Universal GPU Kernel Optimization Framework 鋤・・//!
+//! # Tracea: Universal GPU Kernel Optimization Framework 🏛️
+//!
 //! Tracea is a research-grade compiler and runtime for generating mathematically verified, 
 //! high-performance CUDA kernels. It bridges the gap between high-level graph definitions
 //! and low-level hardware instructions (PTX/SASS).
@@ -29,6 +30,7 @@ pub mod runtime;
 pub mod backend;
 pub mod optimizer;
 pub mod doctor;
+pub mod policy;
 
 pub use crate::tracea::core::op::GemmOp;
 pub use crate::tracea::core::config::{PipelineConfig, SwizzleMode, SoftmaxGranularity, BarrierMode};

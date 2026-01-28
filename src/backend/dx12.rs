@@ -151,15 +151,17 @@ impl Dx12Backend {
             device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
         // Create Render Targets
-        let mut render_targets: [ID3D12Resource; FRAME_COUNT] = std::mem::zeroed();
+        // Create Render Targets
         let mut rtv_handle = rtv_heap.GetCPUDescriptorHandleForHeapStart();
+        let mut resources = Vec::with_capacity(FRAME_COUNT);
 
         for i in 0..FRAME_COUNT {
             let resource: ID3D12Resource = swap_chain.GetBuffer(i as u32)?;
             device.CreateRenderTargetView(&resource, None, rtv_handle);
-            render_targets[i] = resource;
+            resources.push(resource);
             rtv_handle.ptr += rtv_descriptor_size as usize;
         }
+        let render_targets: [ID3D12Resource; FRAME_COUNT] = resources.try_into().map_err(|_| Error::from(E_FAIL))?;
 
         // Create Command Allocators
         let command_allocators: [ID3D12CommandAllocator; FRAME_COUNT] = [
@@ -638,6 +640,14 @@ impl Dx12Backend {
 }
 
 impl super::GraphicsBackend for Dx12Backend {
+    fn name(&self) -> &str {
+        "DirectX 12"
+    }
+
+    fn update_font_texture(&mut self, _width: u32, _height: u32, _data: &[u8]) {
+        // Placeholder
+    }
+
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         unsafe {
             let frame_idx = self.frame_index.get();

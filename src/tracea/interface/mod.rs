@@ -1,4 +1,4 @@
-﻿// Expose the new C-API bindings
+// Expose the new C-API bindings
 #[cfg(feature = "cpp")]
 pub mod c_bindings;
 

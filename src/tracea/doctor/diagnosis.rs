@@ -1,4 +1,4 @@
-﻿use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::fs;
 use serde::{Serialize, Deserialize};
@@ -219,7 +219,7 @@ impl Doctor {
                 artifacts,
             };
 
-            eprintln!("[Doctor] 閥 JIT Failure: {}", report.message);
+            eprintln!("[Doctor] 🔴 JIT Failure: {}", report.message);
             self.log_persistent("JIT_FAIL", &format!("Kernel: {}, Msg: {}", info.kernel_name, report.suggestion));
             self.state.lock().unwrap().last_error = Some(report);
         }
@@ -254,7 +254,7 @@ impl Doctor {
                 suggestion: if suggest.is_empty() { "Check asm log".to_string() } else { suggest },
                 artifacts,
             };
-            eprintln!("[Doctor] 閥 Assembler Failure: {}", report.message);
+            eprintln!("[Doctor] 🔴 Assembler Failure: {}", report.message);
             self.state.lock().unwrap().last_error = Some(report);
         }
     }
@@ -276,7 +276,7 @@ impl Doctor {
                 suggestion: if suggest.is_empty() { "Verify GPU arch compatibility".to_string() } else { suggest },
                 artifacts: DoctorArtifacts::default(),
             };
-            eprintln!("[Doctor] 閥 Module Load Failure: {}", report.message);
+            eprintln!("[Doctor] 🔴 Module Load Failure: {}", report.message);
             self.state.lock().unwrap().last_error = Some(report);
         }
     }
@@ -319,7 +319,7 @@ impl Doctor {
                 suggestion: if suggest.is_empty() { "Check kernel resource usage".to_string() } else { suggest },
                 artifacts: DoctorArtifacts::default(),
              };
-             eprintln!("[Doctor] 閥 Kernel Launch Failure: {}", report.message);
+             eprintln!("[Doctor] 🔴 Kernel Launch Failure: {}", report.message);
              self.log_persistent("LAUNCH_FAIL", &format!("Kernel: {}, Msg: {}", info.kernel_name, report.message));
              self.state.lock().unwrap().last_error = Some(report);
         }

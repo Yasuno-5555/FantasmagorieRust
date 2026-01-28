@@ -44,8 +44,8 @@ fn main() {
                         if let Some(range) = e.location(&source) {
                              println!("  At character range: {:?}", range);
                              // Print context
-                             let start = range.start.min(source.len());
-                             let end = range.end.min(source.len());
+                             let start = range.offset as usize;
+                             let end = (range.offset + range.length) as usize;
                              // Show some context around it
                              let context_start = start.saturating_sub(50);
                              let context_end = (end + 50).min(source.len());

@@ -1,4 +1,4 @@
-﻿use crate::tracea::PipelineConfig;
+use crate::tracea::PipelineConfig;
 use crate::tracea::optimizer::HardwareProfile;
 use crate::tracea::optimizer::problem::{ProblemDescriptor, LayerType, HeroConfig, ArchHint, Fa2Variant};
 use crate::tracea::core::backend::Device;
@@ -478,6 +478,7 @@ impl PolicyFactory {
             (_, LayerType::Gemm) => Box::new(GemmPolicy::new(problem)),
             (_, LayerType::Conv2d(_)) => Box::new(Conv2dPolicy::new(problem)),
             (_, LayerType::FlashAttention(v)) => Box::new(Fa2Policy::new(problem, v)),
+            (Device::Vulkan, _) | (Device::Wgpu, _) => Box::new(GemmPolicy::new(problem)), // Fallback to GEMM policy for now
         }
     }
 }

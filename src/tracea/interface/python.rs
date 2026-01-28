@@ -1,4 +1,4 @@
-﻿#![allow(unused)]
+#![allow(unused)]
 use pyo3::prelude::*;
 use std::sync::Arc;
 use crate::tracea::runtime::manager::{RuntimeManager, DeviceBackend, KernelArg};
@@ -179,8 +179,8 @@ impl PyContext {
         let kernel_id = match ctx.runtime.compile(&source, "flash_attention_v2_kernel", backend) {
             Ok(id) => id,
             Err(e) => {
-                eprintln!("[Tracea Min] 笶・Compile Error: {}", e);
-                eprintln!("[Tracea Min] 糖 Generated Source:\n{}\n", source);
+                eprintln!("[Tracea Min] ❌ Compile Error: {}", e);
+                eprintln!("[Tracea Min] 📜 Generated Source:\n{}\n", source);
                 return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Compilation Failed: {}", e)));
             }
         };
@@ -564,7 +564,7 @@ impl PyContext {
     pub fn optimize_graph(&self, graph: &Bound<'_, PyGraph>, iterations: usize) -> PyResult<()> {
         let rust_graph = &graph.borrow_mut().inner;
         
-        eprintln!("[Tracea] 噫 Optimizing Graph ({} nodes, {} iterations)", rust_graph.nodes.len(), iterations);
+        eprintln!("[Tracea] 🚀 Optimizing Graph ({} nodes, {} iterations)", rust_graph.nodes.len(), iterations);
         
         for node in &rust_graph.nodes {
             match &node.op {
@@ -573,10 +573,10 @@ impl PyContext {
                     
                     // Crucial: Use op.dh (Head Dim) for Fa2Problem.d
                     let problem = Fa2Problem {
-                        b: op.b as usize,
-                        s: op.s as usize,
-                        h: op.h as usize,
-                        d: op.dh as usize, // Correct field
+                        b: op.b.as_static().unwrap_or(1) as usize,
+                        s: op.s.as_static().unwrap_or(1024) as usize,
+                        h: op.h.as_static().unwrap_or(8) as usize,
+                        d: op.dh.as_static().unwrap_or(128) as usize, 
                         is_causal: op.causal,
                     };
                     
@@ -750,6 +750,9 @@ impl PyTuner {
             has_specialized_units: true,
             compute_capability: Some((8, 6)),
             supported_intrinsic_shapes: vec![],
+            max_threadgroup_memory: 0,
+            preferred_tile_shape: [128, 128, 32],
+            simd_width: 32,
         };
         let tuner = AutoTuner::new(gpu);
         Self { inner: Arc::new(Mutex::new(tuner)) }

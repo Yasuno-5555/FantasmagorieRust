@@ -1,4 +1,4 @@
-﻿use pyo3::prelude::*;
+use pyo3::prelude::*;
 use crate::tracea::interface::python::{PyGraph, PyEpilogueOp, PyEpilogueType};
 use crate::tracea::core::op::EpilogueOp;
 
@@ -51,6 +51,7 @@ impl Linear {
     fn __call__(&self, graph: &mut PyGraph, input_node: usize) -> PyResult<usize> {
         // In the future, we might infer shapes or check inputs here.
         let id = graph.inner.add_linear(
+            crate::tracea::core::op::DimExpr::Symbol("B".to_string()),
             self.in_features, 
             self.out_features, 
             self.bias, 

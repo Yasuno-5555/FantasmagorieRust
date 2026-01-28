@@ -1,4 +1,4 @@
-﻿use crate::tracea::emitter::traits::{Emitter, UnifiedOpIR, UnifiedOpType};
+use crate::tracea::emitter::traits::{Emitter, UnifiedOpIR, UnifiedOpType};
 use crate::tracea::semantic::transition::SyncRequirement;
 use crate::tracea::emitter::rocm_driver::*;
 
@@ -192,6 +192,12 @@ impl Emitter for ROCMEmitter {
             }
             UnifiedOpType::ConvTranspose2d { .. } => {
                 "// ROCm ConvTranspose2d not yet implemented - fallback to CPU\n".to_string()
+            }
+            UnifiedOpType::MatrixCore { .. } => {
+                panic!("MatrixCore Ops not supported on ROCm yet.");
+            }
+            UnifiedOpType::LowRankMlp { .. } => {
+                panic!("LowRankMlp not supported on ROCm yet.");
             }
         }
     }

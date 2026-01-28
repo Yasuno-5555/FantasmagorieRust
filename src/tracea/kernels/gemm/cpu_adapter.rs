@@ -1,4 +1,4 @@
-﻿use crate::tracea::core::tuning::{TunableKernel, SearchSpace};
+use crate::tracea::core::tuning::{TunableKernel, SearchSpace};
 use crate::tracea::backend::cpu::CpuBackend;
 use crate::tracea::backend::Backend;
 use serde::{Serialize, Deserialize};
@@ -16,8 +16,6 @@ impl GemmProblem {
     }
 }
 
-// Helper for raw pointer access to C to allow parallel writes to disjoint slices
-
 /// Configuration for CPU GEMM execution.
 /// Unlike PipelineConfig (which is GPU focused), this is CPU specific.
 /// Or we could try to reuse PipelineConfig if we map concepts?
@@ -30,6 +28,11 @@ pub struct CpuGemmConfig {
     pub num_threads: usize, 
     pub vector_width: usize, // e.g. 8 for AVX2 (f32), 16 for AVX512
 }
+
+#[derive(Copy, Clone)]
+struct UnsafeSlice(*mut f32);
+unsafe impl Send for UnsafeSlice {}
+unsafe impl Sync for UnsafeSlice {}
 
 pub struct GemmAdapter {
     pub backend: CpuBackend,
@@ -114,14 +117,12 @@ impl TunableKernel for GemmAdapter {
         // we will use crossbeam or just spawn and join on chunks if we can moved data. 
         // OR, simply unsafe wrap for C.
         
-        // Helper for raw pointer access to C to allow parallel writes to disjoint slices
-        // We cast to usize to bypass Send check for *mut f32.
-        let c_ptr_addr = c.as_mut_ptr() as usize;
+        let c_raw_ptr = c.as_mut_ptr() as usize;
 
         let handles: Vec<_> = (0..num_threads).map(|tid| {
             let a = a.clone();
             let b = b.clone();
-            let c_ptr_addr = c_ptr_addr;
+            let c_raw_ptr = c_raw_ptr;
             let m_block = cfg.m_block;
             let n_block = cfg.n_block;
             let k_block = cfg.k_block;
@@ -133,7 +134,7 @@ impl TunableKernel for GemmAdapter {
                 if m_start >= m_end { return; }
 
                 unsafe {
-                    let c_raw = c_ptr_addr as *mut f32;
+                    let c_raw = c_raw_ptr as *mut f32;
                     // Tiled Loop
                     for i_blk in (m_start..m_end).step_by(m_block) {
                         let i_end = std::cmp::min(i_blk + m_block, m_end);

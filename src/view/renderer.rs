@@ -158,7 +158,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
              // Recursion handled below? No, must check structure.
         }
         ViewType::Knob => {
-            render_knob(view, dl);
+            render_knob(view, dl, fm);
         }
         ViewType::Fader => {
             render_fader(view, dl);
@@ -189,13 +189,13 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
         ViewType::Socket => render_socket(view, dl),
         ViewType::Wire => render_wire(view, dl),
         ViewType::ContextMenu => render_context_menu(view, dl, depth, fm),
-        ViewType::MenuItem => render_menu_item(view, dl),
+        ViewType::MenuItem => render_menu_item(view, dl, fm),
         ViewType::Collapsible => {
             render_collapsible(view, dl, depth, fm);
             return; // Collapsible handles its own child recursion
         }
-        ViewType::Toast => render_toast(view, dl),
-        ViewType::Tooltip => render_tooltip(view, dl),
+        ViewType::Toast => render_toast(view, dl, fm),
+        ViewType::Tooltip => render_tooltip(view, dl, fm),
         ViewType::CurveEditor => render_curve_editor(view, dl),
         ViewType::Ruler => render_ruler(view, dl),
         ViewType::Grid => render_grid(view, dl),
@@ -1274,7 +1274,7 @@ fn render_curve_editor(view: &ViewHeader, dl: &mut DrawList) {
 }
 
 /// Render rotary knob
-fn render_knob(view: &ViewHeader, dl: &mut DrawList) {
+fn render_knob(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
     let center = rect.center();
     let radius = rect.w.min(rect.h) * 0.4; // 80% diameter covers area
@@ -1328,13 +1328,10 @@ fn render_knob(view: &ViewHeader, dl: &mut DrawList) {
     if !text.is_empty() {
         let size = view.font_size.get() * 0.8;
         if size > 0.0 {
-            crate::text::FONT_MANAGER.with(|fm| {
-                let mut fm = fm.borrow_mut();
-                let text_sz = fm.measure_text(text, size);
-                // Position below knob
-                let text_pos = Vec2::new(center.x - text_sz.x * 0.5, center.y + radius + 10.0);
-                render_text_at(&mut fm, text_pos, text, size, view.fg_color.get(), dl);
-            });
+            let text_sz = fm.measure_text(text, size);
+            // Position below knob
+            let text_pos = Vec2::new(center.x - text_sz.x * 0.5, center.y + radius + 10.0);
+            render_text_at(fm, text_pos, text, size, view.fg_color.get(), dl);
         }
     }
 }
@@ -1473,22 +1470,19 @@ fn render_value_dragger(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManag
         };
 
         // Use centering logic from render_label_and_icon_at but simplified
-        crate::text::FONT_MANAGER.with(|fm| {
-            let mut fm = fm.borrow_mut();
-            let size = if view.font_size.get() > 0.0 {
-                view.font_size.get()
-            } else {
-                12.0
-            };
-            let text_sz = fm.measure_text(&text, size);
+        let size = if view.font_size.get() > 0.0 {
+            view.font_size.get()
+        } else {
+            12.0
+        };
+        let text_sz = fm.measure_text(&text, size);
 
-            let pos = Vec2::new(
-                rect.x + (rect.w - text_sz.x) * 0.5,
-                rect.y + (rect.h - size) * 0.5,
-            );
+        let pos = Vec2::new(
+            rect.x + (rect.w - text_sz.x) * 0.5,
+            rect.y + (rect.h - size) * 0.5,
+        );
 
-            render_text_at(&mut fm, pos, &text, size, color, dl);
-        });
+        render_text_at(fm, pos, &text, size, color, dl);
 
         // Draw blue underline if hot to indicate draggability
         if interaction::is_active(view.id.get()) {
@@ -1586,7 +1580,7 @@ fn render_canvas(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut Font
 }
 
 /// Render draggable node
-fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, _fm: &mut FontManager) {
+fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
 
     // Register for hit testing
@@ -1645,16 +1639,13 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, _fm: &mut Font
     // 3. Title
     let title = view.text.get();
     if !title.is_empty() {
-        crate::text::FONT_MANAGER.with(|fm| {
-            let mut fm = fm.borrow_mut();
-            let size = 12.0;
-            let text_sz = fm.measure_text(title, size);
-            let pos = Vec2::new(
-                rect.x + (rect.w - text_sz.x) * 0.5,
-                rect.y + (header_h - size) * 0.5,
-            );
-            render_text_at(&mut fm, pos, title, size, view.fg_color.get(), dl);
-        });
+        let size = 12.0;
+        let text_sz = fm.measure_text(title, size);
+        let pos = Vec2::new(
+            rect.x + (rect.w - text_sz.x) * 0.5,
+            rect.y + (header_h - size) * 0.5,
+        );
+        render_text_at(fm, pos, title, size, view.fg_color.get(), dl);
     }
 
     // 4. Content (Children)
@@ -1662,7 +1653,7 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, _fm: &mut Font
     // We render them relative to the node.
     // Note: Node is NOT a push_transform by default, but we should maybe push clip.
     for child in view.children() {
-        render_view_recursive(child, dl, _depth + 1, _fm);
+        render_view_recursive(child, dl, _depth + 1, fm);
     }
 }
 
@@ -1771,7 +1762,7 @@ fn render_context_menu(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mu
 }
 
 /// Render menu item
-fn render_menu_item(view: &ViewHeader, dl: &mut DrawList) {
+fn render_menu_item(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
 
     // Register for hit testing
@@ -1794,14 +1785,11 @@ fn render_menu_item(view: &ViewHeader, dl: &mut DrawList) {
     // 2. Text
     let text = view.text.get();
     if !text.is_empty() {
-        crate::text::FONT_MANAGER.with(|fm| {
-            let mut fm = fm.borrow_mut();
-            let size = view.font_size.get().max(14.0);
-            let text_sz = fm.measure_text(text, size);
-            let padding = view.padding.get();
-            let pos = Vec2::new(rect.x + padding, rect.y + (rect.h - text_sz.y) * 0.5);
-            render_text_at(&mut fm, pos, text, size, view.fg_color.get(), dl);
-        });
+        let size = view.font_size.get().max(14.0);
+        let text_sz = fm.measure_text(text, size);
+        let padding = view.padding.get();
+        let pos = Vec2::new(rect.x + padding, rect.y + (rect.h - text_sz.y) * 0.5);
+        render_text_at(fm, pos, text, size, view.fg_color.get(), dl);
     }
 
     // 3. Handle click
@@ -1938,7 +1926,7 @@ fn render_collapsible(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut
 }
 
 /// Render glass toast notification with slide animation
-fn render_toast(view: &ViewHeader, dl: &mut DrawList) {
+fn render_toast(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
 
     // Animate slide-in from right
@@ -1977,29 +1965,26 @@ fn render_toast(view: &ViewHeader, dl: &mut DrawList) {
     // Text
     let text = view.text.get();
     if !text.is_empty() {
-        crate::text::FONT_MANAGER.with(|fm| {
-            let mut fm = fm.borrow_mut();
-            let size = view.font_size.get().max(14.0);
-            let text_sz = fm.measure_text(text, size);
-            let padding = view.padding.get();
-            let pos = Vec2::new(
-                actual_x + padding + indicator_w,
-                rect.y + (rect.h - text_sz.y) * 0.5,
-            );
-            render_text_at(
-                &mut fm,
-                pos,
-                text,
-                size,
-                view.fg_color.get().with_alpha(alpha),
-                dl,
-            );
-        });
+        let size = view.font_size.get().max(14.0);
+        let text_sz = fm.measure_text(text, size);
+        let padding = view.padding.get();
+        let pos = Vec2::new(
+            actual_x + padding + indicator_w,
+            rect.y + (rect.h - text_sz.y) * 0.5,
+        );
+        render_text_at(
+            fm,
+            pos,
+            text,
+            size,
+            view.fg_color.get().with_alpha(alpha),
+            dl,
+        );
     }
 }
 
 /// Render laser tooltip with glow effect
-fn render_tooltip(view: &ViewHeader, dl: &mut DrawList) {
+fn render_tooltip(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
     let rect = view.computed_rect.get();
 
     // Animate fade-in
@@ -2043,21 +2028,18 @@ fn render_tooltip(view: &ViewHeader, dl: &mut DrawList) {
     // Text
     let text = view.text.get();
     if !text.is_empty() {
-        crate::text::FONT_MANAGER.with(|fm| {
-            let mut fm = fm.borrow_mut();
-            let size = view.font_size.get().max(12.0);
-            let text_sz = fm.measure_text(text, size);
-            let padding = view.padding.get();
-            let pos = Vec2::new(rect.x + padding, rect.y + (rect.h - text_sz.y) * 0.5);
-            render_text_at(
-                &mut fm,
-                pos,
-                text,
-                size,
-                view.fg_color.get().with_alpha(alpha),
-                dl,
-            );
-        });
+        let size = view.font_size.get().max(12.0);
+        let text_sz = fm.measure_text(text, size);
+        let padding = view.padding.get();
+        let pos = Vec2::new(rect.x + padding, rect.y + (rect.h - text_sz.y) * 0.5);
+        render_text_at(
+            fm,
+            pos,
+            text,
+            size,
+            view.fg_color.get().with_alpha(alpha),
+            dl,
+        );
     }
 }
 
@@ -2555,13 +2537,14 @@ mod tests {
 
         let root = arena.alloc(ViewHeader {
             id: std::cell::Cell::new(ID::from_str("root")),
-            bg_color: ColorF::new(0.1, 0.1, 0.1, 1.0),
-            width: 800.0,
-            height: 600.0,
+            bg_color: std::cell::Cell::new(ColorF::new(0.1, 0.1, 0.1, 1.0)),
+            width: std::cell::Cell::new(800.0),
+            height: std::cell::Cell::new(600.0),
             ..Default::default()
         });
 
-        render_ui(root, 800.0, 600.0, &mut dl);
+        let mut fm = crate::text::FontManager::new();
+        render_ui(root, 800.0, 600.0, &mut dl, &mut fm);
 
         assert!(!dl.is_empty());
     }

@@ -1,4 +1,4 @@
-﻿use crate::tracea::backend::Backend;
+use crate::tracea::backend::Backend;
 use cudarc::driver::{CudaDevice, DriverError};
 use std::sync::Arc;
 

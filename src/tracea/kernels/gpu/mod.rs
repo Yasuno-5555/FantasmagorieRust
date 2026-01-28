@@ -1,4 +1,4 @@
-﻿pub mod gpu_dispatch;
+pub mod gpu_dispatch;
 
 #[cfg(feature = "cpp")]
 pub mod cuda_bindings {

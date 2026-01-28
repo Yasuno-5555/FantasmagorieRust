@@ -1,4 +1,4 @@
-﻿use crate::tracea::core::op::ElementwiseType;
+use crate::tracea::core::op::ElementwiseType;
 use crate::tracea::emitter::traits::{UnifiedOpIR, UnifiedOpType};
 
 pub fn generate_elementwise(ir: &UnifiedOpIR) -> String {

@@ -1,4 +1,4 @@
-﻿use std::ffi::CStr;
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::sync::Arc;
 use crate::tracea::emitter::jit::JITCompiler;

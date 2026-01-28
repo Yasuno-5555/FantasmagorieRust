@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]  # Python extension + Rust library
 default = ["opengl"]
 opengl = ["glow", "glutin", "glutin-winit", "raw-window-handle"]
 wgpu = ["dep:wgpu"]
-vulkan = ["dep:ash", "dep:ash-window", "dep:naga"]
+vulkan = ["dep:ash", "dep:ash-window", "dep:naga", "dep:gpu-allocator", "dep:shaderc"]
 dx12 = ["dep:windows"]
 python = ["pyo3"]
 cpp = []
@@ -22,6 +22,7 @@ cpp = []
 # Core
 bumpalo = "3.14"
 hashbrown = "0.14"
+bitflags = "2.4"
 
 # Font rendering
 fontdue = "0.8"
@@ -39,6 +40,8 @@ bytemuck = { version = "1.14", features = ["derive"] }
 # Vulkan backend (optional)
 ash = { version = "0.38", optional = true }
 ash-window = { version = "0.13", optional = true }
+gpu-allocator = { version = "0.27", optional = true, features = ["vulkan"] }
+shaderc = { version = "0.8", optional = true }
 
 # DirectX 12 backend (optional, Windows only)
 windows = { version = "0.52", features = [
@@ -56,7 +59,7 @@ windows = { version = "0.52", features = [
 winit = "0.29"
 
 # Python bindings (optional)
-pyo3 = { version = "0.20", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
 image = "0.24"
 pulldown-cmark = "0.10"
 naga = { version = "0.19", features = ["glsl-in", "wgsl-in", "spv-out"], optional = true }

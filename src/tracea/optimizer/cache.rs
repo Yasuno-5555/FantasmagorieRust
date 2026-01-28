@@ -1,4 +1,4 @@
-﻿use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -29,30 +29,30 @@ pub struct TuningCache {
 
 impl TuningCache {
     pub fn new() -> Self {
-        eprintln!("[Tracea] 刀 Initializing Tuning Cache...");
+        eprintln!("[Tracea] 📁 Initializing Tuning Cache...");
         let mut path = PathBuf::from(".tracea");
         if !path.exists() {
-            eprintln!("[Tracea] 刀 Creating .tracea directory...");
+            eprintln!("[Tracea] 📁 Creating .tracea directory...");
             let _ = fs::create_dir_all(&path);
         }
         path.push("tuning_cache.json");
-        eprintln!("[Tracea] 刀 Cache Path: {:?}", path);
+        eprintln!("[Tracea] 📁 Cache Path: {:?}", path);
         
         if path.exists() {
-            eprintln!("[Tracea] 刀 Loading existing cache...");
+            eprintln!("[Tracea] 📁 Loading existing cache...");
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(entries) = serde_json::from_str::<HashMap<String, PipelineConfig>>(&content) {
-                   eprintln!("[Tracea] 刀 Cache loaded with {} entries.", entries.len());
+                   eprintln!("[Tracea] 📁 Cache loaded with {} entries.", entries.len());
                    return Self { entries, file_path: path };
                 } else {
-                    eprintln!("[Tracea] 笞・・ Warning: Failed to deserialize cache. JSON might be corrupt.");
+                    eprintln!("[Tracea] ⚠️  Warning: Failed to deserialize cache. JSON might be corrupt.");
                 }
             } else {
-                eprintln!("[Tracea] 笞・・ Warning: Failed to read cache file.");
+                eprintln!("[Tracea] ⚠️  Warning: Failed to read cache file.");
             }
         }
         
-        eprintln!("[Tracea] 刀 Initializing new empty cache.");
+        eprintln!("[Tracea] 📁 Initializing new empty cache.");
         Self {
             entries: HashMap::new(),
             file_path: path,
@@ -60,7 +60,7 @@ impl TuningCache {
     }
 
     fn make_key(key: &CacheKey) -> String {
-        eprintln!("[Tracea] 泊 Generating Cache Key...");
+        eprintln!("[Tracea] 🔑 Generating Cache Key...");
         // Normalize epilogue: remove pointers for caching
         let normalized_epilogue: Vec<String> = key.epilogue.iter().map(|op| {
             match op {
@@ -94,7 +94,7 @@ impl TuningCache {
     fn save(&self) {
         if let Ok(content) = serde_json::to_string_pretty(&self.entries) {
             if let Err(e) = fs::write(&self.file_path, content) {
-                eprintln!("[Tracea] 笞・・Failed to save cache: {:?}", e);
+                eprintln!("[Tracea] ⚠️ Failed to save cache: {:?}", e);
             }
         }
     }

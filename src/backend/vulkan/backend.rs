@@ -10,6 +10,8 @@ use std::ffi::CStr;
 use std::sync::Arc;
 use super::VulkanContext;
 use super::swapchain::VulkanSurfaceContext;
+use super::resources;
+use super::pipelines;
 
 /// Vulkan-based rendering backend
 
@@ -95,6 +97,12 @@ pub struct VulkanBackend {
     k5_resolve_layout: vk::PipelineLayout,
     k5_resolve_descriptor_sets: [vk::DescriptorSet; 2],
 
+    pub exposure: f32,
+    pub gamma: f32,
+    pub fog_density: f32,
+    pub audio_params: crate::backend::shaders::types::AudioParams,
+    pub audio_gain: f32,
+
     // Profiling
     query_pools: [vk::QueryPool; 2],
     timestamp_period: f32,
@@ -103,10 +111,6 @@ pub struct VulkanBackend {
     // HDR Pipeline
     hdr_render_pass: vk::RenderPass,
     hdr_framebuffer: vk::Framebuffer,
-    pub exposure: f32,
-    pub gamma: f32,
-    pub audio_gain: f32,
-    pub fog_density: f32,
 
     // K12 Audio
     k12_pipeline: vk::Pipeline,
@@ -143,10 +147,13 @@ struct PushConstants {
     elevation: f32,
     glow_strength: f32,
     lut_intensity: f32,
-    mode: u32,
-    is_squircle: u32,
-    _pad: [u32; 1],
+    mode: i32,
+    is_squircle: i32,
+    time: f32,
+    _pad: f32,
 }
+// Note: 104 bytes, fits in 128B Push Constant limit. 
+// Standardized to match crate::backend::shaders::types::DrawUniforms
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -170,14 +177,7 @@ struct K4PushConstants {
     _pad: f32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-struct AudioParams {
-    bass: f32,
-    mid: f32,
-    high: f32,
-    _pad: f32,
-}
+// Using crate::backend::shaders::types::AudioParams for unified audio reactive parameters
 
 /// Uniform buffer for global data (Matches GlobalUniforms in shaders)
 #[repr(C)]
@@ -217,6 +217,7 @@ impl VulkanBackend {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
+        { use std::io::Write; let mut f = std::fs::OpenOptions::new().append(true).create(true).open("debug_log.txt").unwrap(); writeln!(f, "[VulkanBackend] new_with_context starting...").unwrap(); f.sync_all().unwrap(); }
         // Create render pass (needed for swapchain framebuffers)
         let attachment = vk::AttachmentDescription::default()
             .format(vk::Format::B8G8R8A8_UNORM)
@@ -240,7 +241,7 @@ impl VulkanBackend {
 
         let render_pass = ctx.device.create_render_pass(&render_pass_info, None).map_err(|e| format!("{:?}", e))?;
 
-        // Create Surface Context (Swapchain, images, framebuffers)
+        // Create Surface Context (Swapchain)
         let surface_ctx = VulkanSurfaceContext::new(&ctx, hinstance, hwnd, width, height, render_pass)?;
 
         let render_pass_load = {
@@ -301,12 +302,10 @@ impl VulkanBackend {
         ];
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-
-        let descriptor_set_layout = device
-            .create_descriptor_set_layout(&layout_info, None)
+        let descriptor_set_layout = device.create_descriptor_set_layout(&layout_info, None)
             .map_err(|e| format!("Failed to create descriptor set layout: {:?}", e))?;
 
-        // Create pipeline layout with push constants
+        // Pipeline Layout with Push Constants
         let push_constant_range = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
@@ -316,151 +315,128 @@ impl VulkanBackend {
             .set_layouts(std::slice::from_ref(&descriptor_set_layout))
             .push_constant_ranges(std::slice::from_ref(&push_constant_range));
 
-        let pipeline_layout = device
-            .create_pipeline_layout(&pipeline_layout_info, None)
+        let pipeline_layout = device.create_pipeline_layout(&pipeline_layout_info, None)
             .map_err(|e| format!("Failed to create pipeline layout: {:?}", e))?;
 
-        // Create command pool
-        let pool_info = vk::CommandPoolCreateInfo::default()
-            .queue_family_index(graphics_family)
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        // Sync Objects
+        let semaphore_info = vk::SemaphoreCreateInfo::default();
+        let image_available_semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }.map_err(|e| format!("{:?}", e))?;
+        let render_finished_semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }.map_err(|e| format!("{:?}", e))?;
+        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+        let in_flight_fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| format!("{:?}", e))?;
 
-        let command_pool = device
-            .create_command_pool(&pool_info, None)
-            .map_err(|e| format!("Failed to create command pool: {:?}", e))?;
-
-        // Allocate command buffer
-        let alloc_info = vk::CommandBufferAllocateInfo::default()
+        // Command Buffer
+        let command_alloc_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(1);
+        let command_buffer = unsafe { device.allocate_command_buffers(&command_alloc_info) }.map_err(|e| format!("{:?}", e))?[0];
 
-        let command_buffers = device
-            .allocate_command_buffers(&alloc_info)
-            .map_err(|e| format!("Failed to allocate command buffers: {:?}", e))?;
-        let command_buffer = command_buffers[0];
+        // 1. Create Counter Buffer (STORAGE + VERTEX + TRANSFER)
+        let (counter_buffer, counter_memory) = resources::create_buffer(
+            device, instance, physical_device, 1024,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
 
-        // Create sync objects
-        let semaphore_info = vk::SemaphoreCreateInfo::default();
-        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-        let image_available_semaphore = device
-            .create_semaphore(&semaphore_info, None)
-            .map_err(|e| format!("Failed to create semaphore: {:?}", e))?;
-        let render_finished_semaphore = device
-            .create_semaphore(&semaphore_info, None)
-            .map_err(|e| format!("Failed to create semaphore: {:?}", e))?;
-        let in_flight_fence = device
-            .create_fence(&fence_info, None)
-            .map_err(|e| format!("Failed to create fence: {:?}", e))?;
-
-        // Create vertex buffer (dynamic, host visible)
-        let buffer_size = 65536 * std::mem::size_of::<Vertex>() as vk::DeviceSize;
-        let (vertex_buffer, vertex_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            buffer_size,
+        // 2. Create Vertex Buffer
+        let vertex_buffer_size = 65536 * std::mem::size_of::<Vertex>() as vk::DeviceSize;
+        let (vertex_buffer, vertex_memory) = resources::create_buffer(
+            device, instance, physical_device, vertex_buffer_size,
             vk::BufferUsageFlags::VERTEX_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        // Create uniform buffer
+        // 3. Create Uniform Buffer
         let uniform_size = std::mem::size_of::<UniformBufferObject>() as vk::DeviceSize;
-        let (uniform_buffer, uniform_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            uniform_size,
+        let (uniform_buffer, uniform_memory) = resources::create_buffer(
+            device, instance, physical_device, uniform_size,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        // Allocate Compute Storage Buffers (Aggressive Plan)
-        let (indirect_dispatch_buffer, indirect_dispatch_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            1024, // 256 commands
+        // 4. Create Compute Storage Buffers
+        let (indirect_dispatch_buffer, indirect_dispatch_memory) = resources::create_buffer(
+            device, instance, physical_device, 1024,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        let (indirect_draw_buffer, indirect_draw_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            1024, // 256 commands
+        let (indirect_draw_buffer, indirect_draw_memory) = resources::create_buffer(
+            device, instance, physical_device, 1024,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        let (counter_buffer, counter_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            1024, // 256 counters
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        let (instance_buffer, instance_memory) = resources::create_buffer(
+            device, instance, physical_device, 1024 * 1024 * 4,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        let (instance_buffer, instance_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            1024 * 1024 * 4, // 4MB for instances
+        let (particle_buffer, particle_memory) = resources::create_buffer(
+            device, instance, physical_device, 1024 * 1024 * 32,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        let (particle_buffer, particle_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            1024 * 1024 * 32, // 32MB for particles
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-
-        let (counter_readback_buffer, counter_readback_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            1024,
+        let (counter_readback_buffer, counter_readback_memory) = resources::create_buffer(
+            device, instance, physical_device, 1024,
             vk::BufferUsageFlags::TRANSFER_DST,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        // Create font texture (1024x1024 for atlas compatibility)
-        let (font_texture, font_texture_memory, font_texture_view) = Self::create_texture(
-            &device,
-            &instance,
-            physical_device,
-            1024,
-            1024,
-            None,
-            vk::Format::R8_UNORM,
-            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-            1,
+        // 5. Create Textures
+        let (font_texture, font_texture_memory, font_texture_view) = resources::create_texture(
+            device, instance, physical_device, 1024, 1024, None, vk::Format::R8_UNORM,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED, vk::ImageAspectFlags::COLOR,
         )?;
 
-        // Create backdrop image for blur
-        let (backdrop_image, backdrop_memory, backdrop_view) = Self::create_texture(
-            &device,
-            &instance,
-            physical_device,
-            width,
-            height,
-            None,
-            vk::Format::R16G16B16A16_SFLOAT, // HDR Format
-            vk::ImageUsageFlags::TRANSFER_DST
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::STORAGE, // Allow Compute Write
-            6, // 6 mip levels for blur
+        let (backdrop_image, backdrop_memory, backdrop_view) = resources::create_texture(
+            device, instance, physical_device, width, height, None, vk::Format::R16G16B16A16_SFLOAT,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE, vk::ImageAspectFlags::COLOR,
         )?;
 
-        // Create HDR Render Pas and Framebuffer
+        let jfa_images = [
+            resources::create_texture(device, instance, physical_device, width, height, None, vk::Format::R32G32_SFLOAT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT, vk::ImageAspectFlags::COLOR)?,
+            resources::create_texture(device, instance, physical_device, width, height, None, vk::Format::R32G32_SFLOAT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT, vk::ImageAspectFlags::COLOR)?,
+        ];
+
+        let (sdf_image_raw, sdf_memory_raw, sdf_view_raw) = resources::create_texture(
+            device, instance, physical_device, width, height, None, vk::Format::R32_SFLOAT,
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC, vk::ImageAspectFlags::COLOR,
+        )?;
+        let sdf_image = (sdf_image_raw, sdf_memory_raw, sdf_view_raw);
+
+        // 6. Create Sampler
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+        let sampler = unsafe { device.create_sampler(&sampler_info, None) }.map_err(|e| format!("{:?}", e))?;
+
+        // 7. Descriptor Updates
+        let descriptor_set = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&descriptor_set_layout))) }.map_err(|e| format!("{:?}", e))?[0];
+        
+        let db_info = vk::DescriptorBufferInfo::default().buffer(uniform_buffer).offset(0).range(uniform_size);
+        let font_info = vk::DescriptorImageInfo::default().image_view(font_texture_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let sampler_info = vk::DescriptorImageInfo::default().sampler(sampler);
+        let backdrop_info = vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let instance_info = vk::DescriptorBufferInfo::default().buffer(instance_buffer).offset(0).range(vk::WHOLE_SIZE);
+
+        let writes = [
+            vk::WriteDescriptorSet::default().dst_set(descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(std::slice::from_ref(&db_info)),
+            vk::WriteDescriptorSet::default().dst_set(descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(std::slice::from_ref(&font_info)),
+            vk::WriteDescriptorSet::default().dst_set(descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::SAMPLER).image_info(std::slice::from_ref(&sampler_info)),
+            vk::WriteDescriptorSet::default().dst_set(descriptor_set).dst_binding(3).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(std::slice::from_ref(&font_info)),
+            vk::WriteDescriptorSet::default().dst_set(descriptor_set).dst_binding(4).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(std::slice::from_ref(&backdrop_info)),
+            vk::WriteDescriptorSet::default().dst_set(descriptor_set).dst_binding(5).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&instance_info)),
+        ];
+        unsafe { device.update_descriptor_sets(&writes, &[]); }
+
+        // HDR Render Pass
         let hdr_attachment = vk::AttachmentDescription::default()
             .format(vk::Format::R16G16B16A16_SFLOAT)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -468,395 +444,103 @@ impl VulkanBackend {
             .store_op(vk::AttachmentStoreOp::STORE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let hdr_ref = vk::AttachmentReference::default().attachment(0).layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+        let hdr_subpass = vk::SubpassDescription::default().pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS).color_attachments(std::slice::from_ref(&hdr_ref));
+        let hdr_rp_info = vk::RenderPassCreateInfo::default().attachments(std::slice::from_ref(&hdr_attachment)).subpasses(std::slice::from_ref(&hdr_subpass));
+        let hdr_render_pass = unsafe { device.create_render_pass(&hdr_rp_info, None).map_err(|e| format!("{:?}", e))? };
 
-        let hdr_attachment_ref = vk::AttachmentReference::default()
-            .attachment(0)
-            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-
-        let hdr_subpass = vk::SubpassDescription::default()
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .color_attachments(std::slice::from_ref(&hdr_attachment_ref));
-
-        let hdr_render_pass_info = vk::RenderPassCreateInfo::default()
-            .attachments(std::slice::from_ref(&hdr_attachment))
-            .subpasses(std::slice::from_ref(&hdr_subpass));
-        
-        let hdr_render_pass = device.create_render_pass(&hdr_render_pass_info, None)
-            .map_err(|e| format!("Failed to create HDR render pass: {:?}", e))?;
-
-        let hdr_framebuffer_info = vk::FramebufferCreateInfo::default()
-            .render_pass(hdr_render_pass)
-            .attachments(std::slice::from_ref(&backdrop_view))
-            .width(width)
-            .height(height)
-            .layers(1);
-        
-        let hdr_framebuffer = device.create_framebuffer(&hdr_framebuffer_info, None)
-             .map_err(|e| format!("Failed to create HDR framebuffer: {:?}", e))?;
-
-        // JFA SDF Lighting (K5) textures
-        let jfa_images = [
-            Self::create_texture(&device, &instance, physical_device, width, height, None, vk::Format::R32G32_SFLOAT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST, 1)?,
-            Self::create_texture(&device, &instance, physical_device, width, height, None, vk::Format::R32G32_SFLOAT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST, 1)?,
-        ];
-        let sdf_image = Self::create_texture(&device, &instance, physical_device, width, height, None, vk::Format::R32_SFLOAT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC, 1)?;
-
-        // Create sampler
-        let sampler_info = vk::SamplerCreateInfo::default()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
-
-        let sampler = device
-            .create_sampler(&sampler_info, None)
-            .map_err(|e| format!("Failed to create sampler: {:?}", e))?;
-
-        // Create descriptor pool (Expanded for Compute)
-        let pool_sizes = [
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: 10,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: 20,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: 10,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 20,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: 10,
-            },
-        ];
-
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(&pool_sizes)
-            .max_sets(20);
-
-        let descriptor_pool = device
-            .create_descriptor_pool(&pool_info, None)
-            .map_err(|e| format!("Failed to create descriptor pool: {:?}", e))?;
-
-        // Allocate descriptor set
-        let alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(std::slice::from_ref(&descriptor_set_layout));
-
-        let descriptor_sets = device
-            .allocate_descriptor_sets(&alloc_info)
-            .map_err(|e| format!("Failed to allocate descriptor sets: {:?}", e))?;
-        let descriptor_set = descriptor_sets[0];
-
-        // Update descriptor set
-        let buffer_info = vk::DescriptorBufferInfo::default()
-            .buffer(uniform_buffer)
-            .offset(0)
-            .range(uniform_size);
-
-        let font_image_info = vk::DescriptorImageInfo::default()
-            .image_view(font_texture_view)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-            
-        let sampler_info = vk::DescriptorImageInfo::default()
-            .sampler(sampler);
-
-        let backdrop_image_info = vk::DescriptorImageInfo::default()
-            .image_view(backdrop_view)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-
-        let instance_info = vk::DescriptorBufferInfo::default()
-            .buffer(instance_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&buffer_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&font_image_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::SAMPLER)
-                .image_info(std::slice::from_ref(&sampler_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set)
-                .dst_binding(3)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&font_image_info)), // Use font as LUT placeholder
-            vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set)
-                .dst_binding(4)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(std::slice::from_ref(&backdrop_image_info)),
-            vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set)
-                .dst_binding(5)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&instance_info)),
-        ];
-
-        device.update_descriptor_sets(&writes, &[]);
-
-        // Helper to compile WGSL to SPIR-V using Naga (much more stable for Vulkan push constants)
-        fn compile_wgsl(src: &str) -> Result<Vec<u32>, String> {
-            #[cfg(feature = "vulkan")]
-            {
-                let module = naga::front::wgsl::parse_str(src)
-                    .map_err(|e| format!("WGSL Parse Error: {:?}", e))?;
-                
-                let mut validator = naga::valid::Validator::new(
-                    naga::valid::ValidationFlags::all(),
-                    naga::valid::Capabilities::all(),
-                );
-                
-                let info = validator.validate(&module)
-                    .map_err(|e| format!("WGSL Validation Error: {:?}", e))?;
-                
-                let spirv = naga::back::spv::write_vec(
-                    &module,
-                    &info,
-                    &naga::back::spv::Options {
-                        lang_version: (1, 3),
-                        flags: naga::back::spv::WriterFlags::empty(),
-                        ..naga::back::spv::Options::default()
-                    },
-                    None,
-                ).map_err(|e| format!("SPIR-V Export Error: {:?}", e))?;
-                
-                Ok(spirv)
-            }
-            #[cfg(not(feature = "vulkan"))]
-            {
-                let _ = src;
-                Err("Vulkan feature not enabled".to_string())
-            }
-        }
+        let hdr_framebuffer = unsafe { device.create_framebuffer(&vk::FramebufferCreateInfo::default().render_pass(hdr_render_pass).attachments(&[backdrop_view]).width(width).height(height).layers(1), None).map_err(|e| format!("{:?}", e))? };
 
         let wgsl_src = include_str!("../vulkan.wgsl");
-        let spv_binary = compile_wgsl(wgsl_src)?;
+        let spv_binary = pipelines::compile_wgsl(wgsl_src)?;
 
         // Create Modules
         let shader_code = vk::ShaderModuleCreateInfo::default().code(&spv_binary);
         let shader_module = unsafe {
             device
                 .create_shader_module(&shader_code, None)
-                .map_err(|e| format!("Failed to create shader module: {}", e))?
+                .map_err(|e| format!("{:?}", e))?
         };
 
-        let vert_stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(shader_module)
-            .name(unsafe { CStr::from_bytes_with_nul_unchecked(b"vs_main\0") });
+        let v_main = unsafe { CStr::from_bytes_with_nul_unchecked(b"vs_main\0") };
+        let f_main = unsafe { CStr::from_bytes_with_nul_unchecked(b"fs_main\0") };
 
-        let frag_stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(shader_module)
-            .name(unsafe { CStr::from_bytes_with_nul_unchecked(b"fs_main\0") });
-
-        // Compile K12 (Audio) Shader
-        let k12_src = include_str!("../shaders/k12_audio.wgsl");
-        let k12_spv = compile_wgsl(k12_src)?;
-        let k12_code = vk::ShaderModuleCreateInfo::default().code(&k12_spv);
-        let k12_module = unsafe { device.create_shader_module(&k12_code, None).map_err(|e| format!("Failed to create K12 module: {}", e))? };
-        let k12_stage_info = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(k12_module)
-            .name(unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") });
-
+        let vert_stage = vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(shader_module).name(v_main);
+        let frag_stage = vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(shader_module).name(f_main);
         let shader_stages = [vert_stage, frag_stage];
 
         // Pipeline States
-        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(std::slice::from_ref(&vk::VertexInputBindingDescription {
-                binding: 0,
-                stride: std::mem::size_of::<Vertex>() as u32,
-                input_rate: vk::VertexInputRate::VERTEX,
-            }))
-            .vertex_attribute_descriptions(&[
-                vk::VertexInputAttributeDescription {
-                    location: 0,
-                    binding: 0,
-                    format: vk::Format::R32G32_SFLOAT,
-                    offset: 0,
-                },
-                vk::VertexInputAttributeDescription {
-                    location: 1,
-                    binding: 0,
-                    format: vk::Format::R32G32_SFLOAT,
-                    offset: 8,
-                },
-                vk::VertexInputAttributeDescription {
-                    location: 2,
-                    binding: 0,
-                    format: vk::Format::R32G32B32A32_SFLOAT,
-                    offset: 16,
-                },
-            ]);
-
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-            .primitive_restart_enable(false);
-
-        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
-
-        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.0)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::CLOCKWISE)
-            .depth_bias_enable(false);
-
-        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
-            .sample_shading_enable(false)
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-        let color_blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(
-                vk::ColorComponentFlags::R
-                    | vk::ColorComponentFlags::G
-                    | vk::ColorComponentFlags::B
-                    | vk::ColorComponentFlags::A,
-            )
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-            .alpha_blend_op(vk::BlendOp::ADD);
-
-        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .attachments(std::slice::from_ref(&color_blend_attachment));
-
+        let v_binding = vk::VertexInputBindingDescription { binding: 0, stride: std::mem::size_of::<Vertex>() as u32, input_rate: vk::VertexInputRate::VERTEX };
+        let v_attrs = [
+            vk::VertexInputAttributeDescription { location: 0, binding: 0, format: vk::Format::R32G32_SFLOAT, offset: 0 },
+            vk::VertexInputAttributeDescription { location: 1, binding: 0, format: vk::Format::R32G32_SFLOAT, offset: 8 },
+            vk::VertexInputAttributeDescription { location: 2, binding: 0, format: vk::Format::R32G32B32A32_SFLOAT, offset: 16 },
+        ];
+        // Use explicit slices to ensure pointers remain valid
+        let v_bindings = [v_binding];
+        // Consolidate states to avoid builder pointer issues
+        let v_bindings = [v_binding];
+        let v_input_state_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&v_bindings)
+            .vertex_attribute_descriptions(&v_attrs);
+        let ia_state_info = vk::PipelineInputAssemblyStateCreateInfo::default().topology(vk::PrimitiveTopology::TRIANGLE_LIST).primitive_restart_enable(false);
+        let viewport_state_info = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic_state =
-            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let dyn_state_info = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let rs_state_info = vk::PipelineRasterizationStateCreateInfo::default().depth_clamp_enable(false).rasterizer_discard_enable(false).polygon_mode(vk::PolygonMode::FILL).line_width(1.0).cull_mode(vk::CullModeFlags::NONE).front_face(vk::FrontFace::CLOCKWISE).depth_bias_enable(false);
+        let ms_state_info = vk::PipelineMultisampleStateCreateInfo::default().sample_shading_enable(false).rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let cb_attach = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA).blend_enable(true).src_color_blend_factor(vk::BlendFactor::SRC_ALPHA).dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA).color_blend_op(vk::BlendOp::ADD).src_alpha_blend_factor(vk::BlendFactor::ONE).dst_alpha_blend_factor(vk::BlendFactor::ZERO).alpha_blend_op(vk::BlendOp::ADD);
+        let cb_attachments = [cb_attach];
+        let cb_state_info = vk::PipelineColorBlendStateCreateInfo::default().logic_op_enable(false).attachments(&cb_attachments);
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&shader_stages)
-            .vertex_input_state(&vertex_input_state)
-            .input_assembly_state(&input_assembly)
-            .viewport_state(&viewport_state)
-            .rasterization_state(&rasterizer)
-            .multisample_state(&multisampling)
-            .color_blend_state(&color_blending)
-            .dynamic_state(&dynamic_state)
+            .vertex_input_state(&v_input_state_info)
+            .input_assembly_state(&ia_state_info)
+            .viewport_state(&viewport_state_info)
+            .dynamic_state(&dyn_state_info)
+            .rasterization_state(&rs_state_info)
+            .multisample_state(&ms_state_info)
+            .color_blend_state(&cb_state_info)
             .layout(pipeline_layout)
             .render_pass(hdr_render_pass)
             .subpass(0);
-
-        let pipelines = device
-            .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
-            .map_err(|e| format!("Failed to create graphics pipeline: {:?}", e))?;
-        let pipeline = pipelines[0];
-
-        // Clean up shader module
+        let pipeline = unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None).map_err(|e| format!("{:?}", e))? }[0];
         device.destroy_shader_module(shader_module, None);
 
-        // Create query pools for profiling (Double Buffered)
-        let query_pool_info = vk::QueryPoolCreateInfo::default()
-            .query_type(vk::QueryType::TIMESTAMP)
-            .query_count(64);
-        let qp0 = device.create_query_pool(&query_pool_info, None)
-            .map_err(|e| format!("Failed to create query pool 0: {:?}", e))?;
-        let qp1 = device.create_query_pool(&query_pool_info, None)
-            .map_err(|e| format!("Failed to create query pool 1: {:?}", e))?;
-
-        let props = instance.get_physical_device_properties(physical_device);
-        let timestamp_period = props.limits.timestamp_period;
-
-        // K13: Indirect Dispatch Pipeline
-        let k13_wgsl = include_str!("../shaders/k13_indirect.wgsl");
-        let k13_spv = Self::compile_wgsl(k13_wgsl)?;
-        let k13_module_info = vk::ShaderModuleCreateInfo::default().code(&k13_spv);
-        let k13_module = unsafe { device.create_shader_module(&k13_module_info, None) }
-            .map_err(|e| format!("Failed to create K13 shader module: {:?}", e))?;
+        // K13: Indirect Dispatch
 
         let k13_bindings = [
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default().binding(0).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default().binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default().binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
+        let k13_set_layout = unsafe { device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&k13_bindings), None) }.map_err(|e| format!("{:?}", e))?;
+        let k13_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k13_set_layout)), None) }.map_err(|e| format!("{:?}", e))?;
+        let k13_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k13_layout, include_str!("../shaders/k13_indirect.wgsl"), "main") }?;
+        let k13_descriptor_set = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k13_set_layout))) }.map_err(|e| format!("{:?}", e))?[0];
 
-        let k13_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&k13_bindings);
-        let k13_set_layout = unsafe { device.create_descriptor_set_layout(&k13_set_layout_info, None) }
-            .map_err(|e| format!("Failed to create K13 descriptor set layout: {:?}", e))?;
-
-        let k13_layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k13_set_layout));
-        let k13_layout = unsafe { device.create_pipeline_layout(&k13_layout_info, None) }
-            .map_err(|e| format!("Failed to create K13 pipeline layout: {:?}", e))?;
-
-        let k13_stage_info = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(k13_module)
-            .name(unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") });
-
-        let k13_pipeline_info = vk::ComputePipelineCreateInfo::default()
-            .stage(k13_stage_info)
-            .layout(k13_layout);
-
-        let k13_pipelines = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[k13_pipeline_info], None) }
-            .map_err(|e| format!("Failed to create K13 compute pipeline: {:?}", e))?;
-        let k13_pipeline = k13_pipelines[0];
-        unsafe { device.destroy_shader_module(k13_module, None); }
-
-        // Allocate and Update K13 Descriptor Set
-        let k13_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(std::slice::from_ref(&k13_set_layout));
-        let k13_descriptor_set = unsafe { device.allocate_descriptor_sets(&k13_alloc_info) }
-            .map_err(|e| format!("Failed to allocate K13 descriptor set: {:?}", e))?[0];
-
-        let k13_db_infos = [
+        // Update K13 Writes
+        let k13_bis = [
             vk::DescriptorBufferInfo::default().buffer(counter_buffer).offset(0).range(vk::WHOLE_SIZE),
             vk::DescriptorBufferInfo::default().buffer(indirect_draw_buffer).offset(0).range(vk::WHOLE_SIZE),
             vk::DescriptorBufferInfo::default().buffer(indirect_dispatch_buffer).offset(0).range(vk::WHOLE_SIZE),
         ];
+        unsafe {
+            device.update_descriptor_sets(&[
+                vk::WriteDescriptorSet::default().dst_set(k13_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k13_bis[0..1]),
+                vk::WriteDescriptorSet::default().dst_set(k13_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k13_bis[1..2]),
+                vk::WriteDescriptorSet::default().dst_set(k13_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k13_bis[2..3]),
+            ], &[]);
+        }
 
-        let k13_writes = [
-            vk::WriteDescriptorSet::default().dst_set(k13_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k13_db_infos[0..1]),
-            vk::WriteDescriptorSet::default().dst_set(k13_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k13_db_infos[1..2]),
-            vk::WriteDescriptorSet::default().dst_set(k13_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k13_db_infos[2..3]),
-        ];
-        unsafe { device.update_descriptor_sets(&k13_writes, &[]); }
-        // K8: Visibility Pipeline
-        let k8_wgsl = include_str!("../shaders/k8_visibility.wgsl");
-        let k8_spv = Self::compile_wgsl(k8_wgsl)?;
-        let k8_module_info = vk::ShaderModuleCreateInfo::default().code(&k8_spv);
-        let k8_module = unsafe { device.create_shader_module(&k8_module_info, None) }
-            .map_err(|e| format!("Failed to create K8 shader module: {:?}", e))?;
+        // Query Pools
+        let query_pool_info = vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(128);
+        let qp0 = unsafe { device.create_query_pool(&query_pool_info, None) }.map_err(|e| format!("{:?}", e))?;
+        let qp1 = unsafe { device.create_query_pool(&query_pool_info, None) }.map_err(|e| format!("{:?}", e))?;
+        let timestamp_period = ctx.physical_device_properties.limits.timestamp_period;
+
+        // K8: Visibility Culling
 
         let k8_bindings = [
             vk::DescriptorSetLayoutBinding::default().binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
@@ -865,132 +549,59 @@ impl VulkanBackend {
             vk::DescriptorSetLayoutBinding::default().binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default().binding(4).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
-        let k8_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&k8_bindings);
-        let k8_set_layout = unsafe { device.create_descriptor_set_layout(&k8_set_layout_info, None) }
-            .map_err(|e| format!("Failed to create K8 descriptor set layout: {:?}", e))?;
-        let k8_layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k8_set_layout));
-        let k8_layout = unsafe { device.create_pipeline_layout(&k8_layout_info, None) }
-            .map_err(|e| format!("Failed to create K8 pipeline layout: {:?}", e))?;
-        let k8_stage_info = vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(k8_module).name(unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") });
-        let k8_pipeline_info = vk::ComputePipelineCreateInfo::default().stage(k8_stage_info).layout(k8_layout);
-        let k8_pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[k8_pipeline_info], None) }
-            .map_err(|e| format!("Failed to create K8 compute pipeline: {:?}", e))?[0];
-        unsafe { device.destroy_shader_module(k8_module, None); }
+        let k8_set_layout = unsafe { device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&k8_bindings), None) }.map_err(|e| format!("{:?}", e))?;
+        let k8_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k8_set_layout)), None) }.map_err(|e| format!("{:?}", e))?;
+        let k8_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k8_layout, include_str!("../shaders/k8_visibility.wgsl"), "main") }?;
+        let k8_descriptor_set = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k8_set_layout))) }.map_err(|e| format!("{:?}", e))?[0];
+        unsafe { device.update_descriptor_sets(&[
+            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&[vk::DescriptorBufferInfo::default().buffer(uniform_buffer).offset(0).range(uniform_size)]),
+            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[vk::DescriptorBufferInfo::default().buffer(instance_buffer).offset(0).range(vk::WHOLE_SIZE)]),
+            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&[vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]),
+            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[vk::DescriptorBufferInfo::default().buffer(indirect_draw_buffer).offset(0).range(vk::WHOLE_SIZE)]),
+            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(4).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[vk::DescriptorBufferInfo::default().buffer(counter_buffer).offset(0).range(vk::WHOLE_SIZE)]),
+        ], &[]); }
 
-        // Allocate and Update K8 Descriptor Set
-        let k8_alloc_info = vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k8_set_layout));
-        let k8_descriptor_set = unsafe { device.allocate_descriptor_sets(&k8_alloc_info) }
-            .map_err(|e| format!("Failed to allocate K8 descriptor set: {:?}", e))?[0];
+        // K6: Particles
 
-        let k8_db_infos = [
-            vk::DescriptorBufferInfo::default().buffer(uniform_buffer).offset(0).range(uniform_size),
-            vk::DescriptorBufferInfo::default().buffer(instance_buffer).offset(0).range(vk::WHOLE_SIZE),
-            vk::DescriptorBufferInfo::default().buffer(indirect_draw_buffer).offset(0).range(vk::WHOLE_SIZE),
-            vk::DescriptorBufferInfo::default().buffer(counter_buffer).offset(0).range(vk::WHOLE_SIZE),
-        ];
-        let k8_img_info = vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-
-        let k8_writes = [
-            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&k8_db_infos[0..1]),
-            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k8_db_infos[1..2]),
-            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(std::slice::from_ref(&k8_img_info)),
-            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k8_db_infos[2..3]),
-            vk::WriteDescriptorSet::default().dst_set(k8_descriptor_set).dst_binding(4).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k8_db_infos[3..4]),
-        ];
-        unsafe { device.update_descriptor_sets(&k8_writes, &[]); }
-
-        // K6: Particle Pipeline
-        let k6_wgsl = include_str!("../shaders/k6_particle.wgsl");
-        let k6_spv = Self::compile_wgsl(k6_wgsl)?;
-        let k6_module_info = vk::ShaderModuleCreateInfo::default().code(&k6_spv);
-        let k6_module = unsafe { device.create_shader_module(&k6_module_info, None) }
-            .map_err(|e| format!("Failed to create K6 shader module: {:?}", e))?;
         let k6_bindings = [
             vk::DescriptorSetLayoutBinding::default().binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default().binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
-            vk::DescriptorSetLayoutBinding::default().binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
-            vk::DescriptorSetLayoutBinding::default().binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default().binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE), // Combined counters
         ];
-        let k6_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&k6_bindings);
-        let k6_set_layout = unsafe { device.create_descriptor_set_layout(&k6_set_layout_info, None) }
-            .map_err(|e| format!("Failed to create K6 descriptor set layout: {:?}", e))?;
-        let k6_layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k6_set_layout));
-        let k6_layout = unsafe { device.create_pipeline_layout(&k6_layout_info, None) }
-            .map_err(|e| format!("Failed to create K6 pipeline layout: {:?}", e))?;
-        
-        let k6_u_stage_info = vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(k6_module).name(unsafe { CStr::from_bytes_with_nul_unchecked(b"update\0") });
-        let k6_u_pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[vk::ComputePipelineCreateInfo::default().stage(k6_u_stage_info).layout(k6_layout)], None) }
-            .map_err(|e| format!("Failed to create K6 update pipeline: {:?}", e))?[0];
-        
-        let k6_s_stage_info = vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(k6_module).name(unsafe { CStr::from_bytes_with_nul_unchecked(b"spawn\0") });
-        let k6_s_pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[vk::ComputePipelineCreateInfo::default().stage(k6_s_stage_info).layout(k6_layout)], None) }
-            .map_err(|e| format!("Failed to create K6 spawn pipeline: {:?}", e))?[0];
-        unsafe { device.destroy_shader_module(k6_module, None); }
-        let k6_update_pipeline = k6_u_pipeline;
-        let k6_spawn_pipeline = k6_s_pipeline;
+        let k6_set_layout = unsafe { device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&k6_bindings), None) }.map_err(|e| format!("{:?}", e))?;
+        let k6_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k6_set_layout)), None) }.map_err(|e| format!("{:?}", e))?;
+        let k6_update_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k6_layout, include_str!("../shaders/k6_particle.wgsl"), "update") }?;
+        let k6_spawn_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k6_layout, include_str!("../shaders/k6_particle.wgsl"), "spawn") }?;
+        let k6_descriptor_set = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k6_set_layout))) }.map_err(|e| format!("{:?}", e))?[0];
+        unsafe { device.update_descriptor_sets(&[
+            vk::WriteDescriptorSet::default().dst_set(k6_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&[vk::DescriptorBufferInfo::default().buffer(uniform_buffer).offset(0).range(uniform_size)]),
+            vk::WriteDescriptorSet::default().dst_set(k6_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[vk::DescriptorBufferInfo::default().buffer(particle_buffer).offset(0).range(vk::WHOLE_SIZE)]),
+            vk::WriteDescriptorSet::default().dst_set(k6_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[vk::DescriptorBufferInfo::default().buffer(counter_buffer).offset(0).range(vk::WHOLE_SIZE)]),
+        ], &[]); }
 
-        // Allocate and Update K6 Descriptor Set
-        let k6_alloc_info = vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k6_set_layout));
-        let k6_descriptor_set = unsafe { device.allocate_descriptor_sets(&k6_alloc_info) }
-            .map_err(|e| format!("Failed to allocate K6 descriptor set: {:?}", e))?[0];
-
-        let k6_db_infos = [
-            vk::DescriptorBufferInfo::default().buffer(uniform_buffer).offset(0).range(uniform_size),
-            vk::DescriptorBufferInfo::default().buffer(particle_buffer).offset(0).range(vk::WHOLE_SIZE),
-            vk::DescriptorBufferInfo::default().buffer(counter_buffer).offset(0).range(4),
-            vk::DescriptorBufferInfo::default().buffer(counter_buffer).offset(4).range(4),
-        ];
-        let k6_writes = [
-            vk::WriteDescriptorSet::default().dst_set(k6_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&k6_db_infos[0..1]),
-            vk::WriteDescriptorSet::default().dst_set(k6_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k6_db_infos[1..2]),
-            vk::WriteDescriptorSet::default().dst_set(k6_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k6_db_infos[2..3]),
-            vk::WriteDescriptorSet::default().dst_set(k6_descriptor_set).dst_binding(3).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&k6_db_infos[3..4]),
-        ];
-        unsafe { device.update_descriptor_sets(&k6_writes, &[]); }
-
-
-        // K5: JFA SDF Pipeline
-        let k5_wgsl = include_str!("../shaders/k5_jfa.wgsl");
-        let k5_spv = Self::compile_wgsl(k5_wgsl)?;
-        let k5_module_info = vk::ShaderModuleCreateInfo::default().code(&k5_spv);
-        let k5_module = unsafe { device.create_shader_module(&k5_module_info, None) }
-            .map_err(|e| format!("Failed to create K5 shader module: {:?}", e))?;
+        // K5: JFA SDF
         let k5_bindings = [
             vk::DescriptorSetLayoutBinding::default().binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default().binding(2).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default().binding(3).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
-        let k5_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&k5_bindings);
-        let k5_set_layout = unsafe { device.create_descriptor_set_layout(&k5_set_layout_info, None) }
-            .map_err(|e| format!("Failed to create K5 descriptor set layout: {:?}", e))?;
-        let k5_pc_range = vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).offset(0).size(std::mem::size_of::<JFAUniforms>() as u32);
-        let k5_layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k5_set_layout)).push_constant_ranges(std::slice::from_ref(&k5_pc_range));
-        let k5_layout = unsafe { device.create_pipeline_layout(&k5_layout_info, None) }
-            .map_err(|e| format!("Failed to create K5 pipeline layout: {:?}", e))?;
-        let k5_stage_info = vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(k5_module).name(unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") });
-        let k5_pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[vk::ComputePipelineCreateInfo::default().stage(k5_stage_info).layout(k5_layout)], None) }
-            .map_err(|e| format!("Failed to create K5 pipeline: {:?}", e))?[0];
-        unsafe { device.destroy_shader_module(k5_module, None); }
+        let k5_set_layout = unsafe { device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&k5_bindings), None) }.map_err(|e| format!("{:?}", e))?;
+        let k5_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k5_set_layout)).push_constant_ranges(&[vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).offset(0).size(std::mem::size_of::<JFAUniforms>() as u32)]), None) }.map_err(|e| format!("{:?}", e))?;
+        let k5_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k5_layout, include_str!("../shaders/k5_jfa.wgsl"), "main") }?;
 
-        // K5 Resolve Pipeline
-        let k5_resolve_wgsl = include_str!("../shaders/k5_resolve.wgsl");
-        let k5_resolve_spv = Self::compile_wgsl(k5_resolve_wgsl)?;
-        let k5_resolve_module_info = vk::ShaderModuleCreateInfo::default().code(&k5_resolve_spv);
-        let k5_resolve_module = unsafe { device.create_shader_module(&k5_resolve_module_info, None) }.map_err(|e| format!("Resolve Mod: {:?}", e))?;
-        
+        // K5 Resolve
         let k5_resolve_bindings = [
             vk::DescriptorSetLayoutBinding::default().binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default().binding(3).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
         let k5_resolve_set_layout = unsafe { device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&k5_resolve_bindings), None) }.map_err(|e| format!("{:?}", e))?;
-        let k5_resolve_pc_range = vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).offset(0).size(std::mem::size_of::<JFAUniforms>() as u32);
-        let k5_resolve_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k5_resolve_set_layout)).push_constant_ranges(std::slice::from_ref(&k5_resolve_pc_range)), None) }.map_err(|e| format!("{:?}", e))?;
-        let k5_resolve_pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[vk::ComputePipelineCreateInfo::default().stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(k5_resolve_module).name(unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") })).layout(k5_resolve_layout)], None) }.map_err(|e| format!("{:?}", e))?[0];
-        unsafe { device.destroy_shader_module(k5_resolve_module, None); }
-
+        let k5_resolve_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k5_resolve_set_layout)).push_constant_ranges(&[vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).offset(0).size(std::mem::size_of::<JFAUniforms>() as u32)]), None) }.map_err(|e| format!("{:?}", e))?;
+        let k5_resolve_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k5_resolve_layout, include_str!("../shaders/k5_resolve.wgsl"), "main") }?;
         let k5_resolve_descriptor_sets_vec = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(&[k5_resolve_set_layout, k5_resolve_set_layout])) }.map_err(|e| format!("{:?}", e))?;
         let k5_resolve_descriptor_sets = [k5_resolve_descriptor_sets_vec[0], k5_resolve_descriptor_sets_vec[1]];
-        
+
+        let k5_descriptor_sets_vec = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(&[k5_set_layout, k5_set_layout])) }.map_err(|e| format!("{:?}", e))?;
+        let k5_descriptor_sets = [k5_descriptor_sets_vec[0], k5_descriptor_sets_vec[1]];
         for i in 0..2 {
             let resolve_img_info_src = vk::DescriptorImageInfo::default().image_view(jfa_images[i].2).image_layout(vk::ImageLayout::GENERAL);
             let resolve_img_info_dst = vk::DescriptorImageInfo::default().image_view(sdf_image.2).image_layout(vk::ImageLayout::GENERAL);
@@ -1000,7 +611,8 @@ impl VulkanBackend {
             ], &[]); }
         }
         let seed_wgsl = include_str!("../shaders/seed.wgsl");
-        let seed_spv = Self::compile_wgsl(seed_wgsl)?;
+
+        let seed_spv = pipelines::compile_wgsl(seed_wgsl)?;
         let seed_module_info = vk::ShaderModuleCreateInfo::default().code(&seed_spv);
         let seed_module = unsafe { device.create_shader_module(&seed_module_info, None) }
             .map_err(|e| format!("Failed to create seed shader module: {:?}", e))?;
@@ -1040,18 +652,25 @@ impl VulkanBackend {
         // Reuse vertex input from main pipeline but for RG32_SFLOAT
         let vi_info = vk::PipelineVertexInputStateCreateInfo::default(); // Using unit quad in VS, no buffers needed for position if hardcoded, but we use Vertex for simplicity
         let ia_info = vk::PipelineInputAssemblyStateCreateInfo::default().topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        
+        // Fix: Enable Dynamic State for Seed Pipeline too
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dyn_state_info = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
         let vp_info = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
+        
         let rs_info = vk::PipelineRasterizationStateCreateInfo::default().line_width(1.0).cull_mode(vk::CullModeFlags::NONE).front_face(vk::FrontFace::COUNTER_CLOCKWISE);
         let ms_info = vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(vk::SampleCountFlags::TYPE_1);
         let ds_info = vk::PipelineDepthStencilStateCreateInfo::default().depth_test_enable(false);
         let cb_attach = vk::PipelineColorBlendAttachmentState::default().color_write_mask(vk::ColorComponentFlags::RGBA);
-        let cb_info = vk::PipelineColorBlendStateCreateInfo::default().attachments(std::slice::from_ref(&cb_attach));
+        let cb_attachments = [cb_attach];
+        let cb_info = vk::PipelineColorBlendStateCreateInfo::default().attachments(&cb_attachments);
 
         let seed_pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&seed_stage_infos)
             .vertex_input_state(&vi_info)
             .input_assembly_state(&ia_info)
             .viewport_state(&vp_info)
+            .dynamic_state(&dyn_state_info) // Added dynamic state
             .rasterization_state(&rs_info)
             .multisample_state(&ms_info)
             .depth_stencil_state(&ds_info)
@@ -1088,11 +707,6 @@ impl VulkanBackend {
 
 
         // K4: Cinematic Resolver Pipeline
-        let k4_wgsl = include_str!("../shaders/k4_resolver.wgsl");
-        let k4_spv = Self::compile_wgsl(k4_wgsl)?;
-        let k4_module_info = vk::ShaderModuleCreateInfo::default().code(&k4_spv);
-        let k4_module = unsafe { device.create_shader_module(&k4_module_info, None) }
-            .map_err(|e| format!("Failed to create K4 shader module: {:?}", e))?;
         let k4_bindings = [
             vk::DescriptorSetLayoutBinding::default().binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default().binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
@@ -1102,206 +716,67 @@ impl VulkanBackend {
             vk::DescriptorSetLayoutBinding::default().binding(5).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default().binding(6).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE), // Audio Params
         ];
-        let k4_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&k4_bindings);
-        let k4_set_layout = unsafe { device.create_descriptor_set_layout(&k4_set_layout_info, None) }
-            .map_err(|e| format!("Failed to create K4 descriptor set layout: {:?}", e))?;
+        let k4_set_layout = unsafe { device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&k4_bindings), None) }.map_err(|e| format!("{:?}", e))?;
         let k4_pc_range = vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).offset(0).size(std::mem::size_of::<K4PushConstants>() as u32);
-        let k4_layout_info = vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k4_set_layout)).push_constant_ranges(std::slice::from_ref(&k4_pc_range));
-        let k4_layout = unsafe { device.create_pipeline_layout(&k4_layout_info, None) }
-            .map_err(|e| format!("Failed to create K4 pipeline layout: {:?}", e))?;
-        let k4_stage_info = vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(k4_module).name(unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") });
-        let k4_pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[vk::ComputePipelineCreateInfo::default().stage(k4_stage_info).layout(k4_layout)], None) }
-            .map_err(|e| format!("Failed to create K4 pipeline: {:?}", e))?[0];
-        unsafe { device.destroy_shader_module(k4_module, None); }
+        let k4_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k4_set_layout)).push_constant_ranges(std::slice::from_ref(&k4_pc_range)), None) }.map_err(|e| format!("{:?}", e))?;
+        let k4_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k4_layout, include_str!("../shaders/k4_resolver.wgsl"), "main") }?;
 
         // K12 Descriptor Set Layout (Audio)
         let k12_bindings = [
-             vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
-             vk::DescriptorSetLayoutBinding::default()
-                .binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
-             vk::DescriptorSetLayoutBinding::default()
-                .binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+             vk::DescriptorSetLayoutBinding::default().binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+             vk::DescriptorSetLayoutBinding::default().binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
+             vk::DescriptorSetLayoutBinding::default().binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1).stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
-        let k12_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&k12_bindings);
-        let k12_set_layout = unsafe { device.create_descriptor_set_layout(&k12_set_layout_info, None) }
-             .map_err(|e| format!("Failed to create K12 set layout: {:?}", e))?;
-
-        // Create Pipelines
-        // K12
-        let k12_pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(std::slice::from_ref(&k12_set_layout));
-        
-        let k12_layout = unsafe { device.create_pipeline_layout(&k12_pipeline_layout_info, None) }
-             .map_err(|e| format!("Failed to create K12 pipeline layout: {:?}", e))?;
-
-        let k12_pipeline = unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[vk::ComputePipelineCreateInfo::default().stage(k12_stage_info).layout(k12_layout)], None) }
-             .map_err(|e| format!("Failed to create K12 pipeline: {:?}", e))?[0];
-        unsafe { device.destroy_shader_module(k12_module, None); }
+        let k12_set_layout = unsafe { device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&k12_bindings), None) }.map_err(|e| format!("{:?}", e))?;
+        let k12_layout = unsafe { device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&k12_set_layout)), None) }.map_err(|e| format!("{:?}", e))?;
+        let k12_pipeline = unsafe { pipelines::create_compute_pipeline(&device, k12_layout, include_str!("../shaders/k12_audio.wgsl"), "main") }?;
 
         // Audio Buffers
-        // Spectrum: CPU Write -> GPU Read
-        let (spectrum_buffer, spectrum_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            (512 * 4) as vk::DeviceSize, 
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        
-        // Audio Params: GPU K12 Write -> GPU K4/K5 Read
-        let (audio_params_buffer, audio_params_memory) = Self::create_buffer(
-            &device,
-            &instance,
-            physical_device,
-            std::mem::size_of::<AudioParams>() as vk::DeviceSize,
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
+        let (spectrum_buffer, spectrum_memory) = resources::create_buffer(device, instance, physical_device, (512 * 4) as vk::DeviceSize, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST, vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT)?;
+        let (audio_params_buffer, audio_params_memory) = resources::create_buffer(device, instance, physical_device, std::mem::size_of::<crate::backend::shaders::types::AudioParams>() as vk::DeviceSize, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
 
-        // Allocate and Update K4 Descriptor Set
-        let k4_alloc_info = vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k4_set_layout));
-        let k4_descriptor_set = unsafe { device.allocate_descriptor_sets(&k4_alloc_info) }
-            .map_err(|e| format!("Failed to allocate K4 descriptor set: {:?}", e))?[0];
-
-        // Allocate K12 Set
-        let k12_alloc_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(descriptor_pool)
-            .set_layouts(std::slice::from_ref(&k12_set_layout));
-        let k12_descriptor_set = unsafe { device.allocate_descriptor_sets(&k12_alloc_info) }
-            .map_err(|e| format!("Failed to allocate K12 descriptor set: {:?}", e))?[0];
+        // Allocate and Update Descriptor Sets
+        let k4_descriptor_set = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k4_set_layout))) }.map_err(|e| format!("{:?}", e))?[0];
+        let k12_descriptor_set = unsafe { device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(std::slice::from_ref(&k12_set_layout))) }.map_err(|e| format!("{:?}", e))?[0];
 
         let k4_db_info = vk::DescriptorBufferInfo::default().buffer(uniform_buffer).offset(0).range(uniform_size);
-        let k4_img_infos = [
-            vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL), // Input (previous frame / base color)
-            vk::DescriptorImageInfo::default().image_view(sdf_image.2).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL), // SDF Input & View
-            vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL), // History Buffer
-            vk::DescriptorImageInfo::default().sampler(sampler),
-            vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::GENERAL), // Final Output (Placeholder)
-        ];
-
-        // K4 Writes
-        let audio_params_info = vk::DescriptorBufferInfo::default()
-            .buffer(audio_params_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
-
-        let k4_writes = [
-            vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(std::slice::from_ref(&k4_db_info)),
-            vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&k4_img_infos[0..1]),
-            vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&k4_img_infos[1..2]),
-            vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(3).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&k4_img_infos[2..3]),
-            vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(4).descriptor_type(vk::DescriptorType::SAMPLER).image_info(&k4_img_infos[3..4]),
-            vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(5).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).image_info(&k4_img_infos[4..5]),
-            vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(6).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(std::slice::from_ref(&audio_params_info)),
-        ];
-        unsafe { device.update_descriptor_sets(&k4_writes, &[]); }
-
-        // K12 Writes
-        let spectrum_buffer_info = vk::DescriptorBufferInfo::default()
-            .buffer(spectrum_buffer)
-            .offset(0)
-            .range(vk::WHOLE_SIZE);
+        let audio_params_info = vk::DescriptorBufferInfo::default().buffer(audio_params_buffer).offset(0).range(vk::WHOLE_SIZE);
+        let spectrum_buffer_info = vk::DescriptorBufferInfo::default().buffer(spectrum_buffer).offset(0).range(vk::WHOLE_SIZE);
         
-        // K12 uses same Uniform Buffer as Global (Binding 0)
-        let k12_writes = [
-             vk::WriteDescriptorSet::default()
-                .dst_set(k12_descriptor_set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(std::slice::from_ref(&k4_db_info)), 
-             vk::WriteDescriptorSet::default()
-                .dst_set(k12_descriptor_set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&spectrum_buffer_info)),
-             vk::WriteDescriptorSet::default()
-                .dst_set(k12_descriptor_set)
-                .dst_binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(std::slice::from_ref(&audio_params_info)),
-        ];
-        unsafe { device.update_descriptor_sets(&k12_writes, &[]); }
+        unsafe {
+            device.update_descriptor_sets(&[
+                vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&[k4_db_info]),
+                vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&[vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]),
+                vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&[vk::DescriptorImageInfo::default().image_view(sdf_image.2).image_layout(vk::ImageLayout::GENERAL)]),
+                vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(3).descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).image_info(&[vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)]),
+                vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(4).descriptor_type(vk::DescriptorType::SAMPLER).image_info(&[vk::DescriptorImageInfo::default().sampler(sampler)]),
+                vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(5).descriptor_type(vk::DescriptorType::STORAGE_IMAGE).image_info(&[vk::DescriptorImageInfo::default().image_view(backdrop_view).image_layout(vk::ImageLayout::GENERAL)]),
+                vk::WriteDescriptorSet::default().dst_set(k4_descriptor_set).dst_binding(6).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[audio_params_info]),
+            ], &[]);
+
+            device.update_descriptor_sets(&[
+                vk::WriteDescriptorSet::default().dst_set(k12_descriptor_set).dst_binding(0).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&[k4_db_info]),
+                vk::WriteDescriptorSet::default().dst_set(k12_descriptor_set).dst_binding(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[spectrum_buffer_info]),
+                vk::WriteDescriptorSet::default().dst_set(k12_descriptor_set).dst_binding(2).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&[audio_params_info]),
+            ], &[]);
+        }
 
         Ok(Self {
-            ctx,
-            surface_ctx,
-
-            command_buffer,
-            render_pass,
-            render_pass_load,
-            pipeline_layout,
-            pipeline,
-            descriptor_set_layout,
-
-            // Buffers
-            vertex_buffer,
-            vertex_memory,
-            uniform_buffer,
-            uniform_memory,
-
-            // Texture
-            font_texture,
-            font_texture_memory,
-            font_texture_view,
-            sampler,
+            ctx, surface_ctx, command_buffer, render_pass, render_pass_load,
+            pipeline_layout, pipeline, descriptor_set_layout,
+            vertex_buffer, vertex_memory, uniform_buffer, uniform_memory,
+            indirect_dispatch_buffer, indirect_dispatch_memory, indirect_draw_buffer, indirect_draw_memory,
+            counter_buffer, counter_memory, instance_buffer, instance_memory,
+            particle_buffer, particle_memory, counter_readback_buffer, counter_readback_memory,
+            start_time: std::time::Instant::now(), last_image_index: 0,
+            image_available_semaphore, render_finished_semaphore, in_flight_fence,
             descriptor_set,
-
-            // Sync
-            image_available_semaphore,
-            render_finished_semaphore,
-            in_flight_fence,
-
-            // Compute Pipelines
-            k13_pipeline,
-            k13_layout,
-            k8_pipeline,
-            k8_layout,
-            k6_update_pipeline,
-            k6_spawn_pipeline,
-            k6_layout,
-            k5_pipeline,
-            k5_layout,
-            k4_pipeline,
-            k4_layout,
-
-            k13_descriptor_set,
-            k8_descriptor_set,
-            k6_descriptor_set,
             k5_descriptor_sets,
-            k4_descriptor_set,
-
-            // Compute Storage Buffers
-            indirect_dispatch_buffer,
-            indirect_dispatch_memory,
-            indirect_draw_buffer,
-            indirect_draw_memory,
-            counter_buffer,
-            counter_memory,
-            instance_buffer,
-            instance_memory,
-            particle_buffer,
-            particle_memory,
-            counter_readback_buffer,
-            counter_readback_memory,
-
-            start_time: std::time::Instant::now(),
-            last_image_index: 0,
-            backdrop_image,
-            backdrop_view,
-            backdrop_memory,
-            jfa_images,
-            sdf_image,
+            k12_set_layout,
+            k12_descriptor_set,
+            k4_set_layout,
+            backdrop_image, backdrop_memory, backdrop_view,
+            jfa_images, sdf_image,
             jfa_framebuffers,
             seed_render_pass,
             seed_pipeline,
@@ -1309,24 +784,19 @@ impl VulkanBackend {
             k5_resolve_pipeline,
             k5_resolve_layout,
             k5_resolve_descriptor_sets,
-            query_pools: [qp0, qp1],
-            timestamp_period,
-            frame_index: 0,
-            hdr_render_pass,
-            hdr_framebuffer,
-            exposure: 1.0,
-            gamma: 2.2,
-            audio_gain: 1.0, // Default gain
-            fog_density: 0.05, // Default fog density
-            k12_pipeline,
-            k12_layout,
-            k12_set_layout,
-            k12_descriptor_set,
-            k4_set_layout,
-            spectrum_buffer,
-            spectrum_memory,
-            audio_params_buffer,
-            audio_params_memory,
+            query_pools: [qp0, qp1], timestamp_period, frame_index: 0,
+            hdr_render_pass, hdr_framebuffer, 
+            exposure: 1.0, gamma: 2.2, audio_gain: 1.0, fog_density: 0.05,
+            audio_params: crate::backend::shaders::types::AudioParams { bass: 0.0, mid: 0.0, high: 0.0, _pad: 0.0 },
+            k12_pipeline, k12_layout,
+            spectrum_buffer, spectrum_memory,
+            audio_params_buffer, audio_params_memory,
+            font_texture, font_texture_memory, font_texture_view, sampler,
+            k13_pipeline, k13_layout, k13_descriptor_set,
+            k8_pipeline, k8_layout, k8_descriptor_set,
+            k6_update_pipeline, k6_spawn_pipeline, k6_layout, k6_descriptor_set,
+            k5_pipeline, k5_layout,
+            k4_pipeline, k4_layout, k4_descriptor_set,
         })
     }
 
@@ -1334,7 +804,7 @@ impl VulkanBackend {
         // Map Spectrum Buffer and write
         unsafe {
             let size = (spectrum.len() * 4) as vk::DeviceSize;
-            let ptr = self.ctx.device.map_memory(self.spectrum_memory, 0, size, vk::MemoryMapFlags::empty()).unwrap();
+            let ptr = self.ctx.device.map_memory(self.spectrum_memory, 0, size, vk::MemoryMapFlags::empty()).map_err(|e| format!("{:?}", e)).unwrap();
             let slice = std::slice::from_raw_parts_mut(ptr as *mut f32, spectrum.len());
             slice.copy_from_slice(spectrum);
             self.ctx.device.unmap_memory(self.spectrum_memory);
@@ -1361,182 +831,13 @@ impl VulkanBackend {
         Err("Vulkan backend Windows surface not available on this platform".to_string())
     }
 
-    fn compile_wgsl(wgsl: &str) -> Result<Vec<u32>, String> {
-        #[cfg(feature = "vulkan")]
-        {
-            let module = naga::front::wgsl::parse_str(wgsl)
-                .map_err(|e| format!("WGSL Parse Error: {:?}", e))?;
-            
-            let mut validator = naga::valid::Validator::new(
-                naga::valid::ValidationFlags::all(),
-                naga::valid::Capabilities::all(),
-            );
-            
-            let info = validator.validate(&module)
-                .map_err(|e| format!("WGSL Validation Error: {:?}", e))?;
-            
-            let spirv = naga::back::spv::write_vec(
-                &module,
-                &info,
-                &naga::back::spv::Options {
-                    lang_version: (1, 3),
-                    flags: naga::back::spv::WriterFlags::empty(),
-                    ..naga::back::spv::Options::default()
-                },
-                None,
-            ).map_err(|e| format!("SPIR-V Export Error: {:?}", e))?;
-            
-            Ok(spirv)
-        }
-        #[cfg(not(feature = "vulkan"))]
-        {
-            let _ = wgsl;
-            Err("Vulkan feature not enabled".to_string())
-        }
-    }
 
-    unsafe fn create_buffer(
-        device: &ash::Device,
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
-        size: vk::DeviceSize,
-        usage: vk::BufferUsageFlags,
-        properties: vk::MemoryPropertyFlags,
-    ) -> Result<(vk::Buffer, vk::DeviceMemory), String> {
-        let buffer_info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-        let buffer = device
-            .create_buffer(&buffer_info, None)
-            .map_err(|e| format!("Failed to create buffer: {:?}", e))?;
 
-        let mem_requirements = device.get_buffer_memory_requirements(buffer);
-        let mem_properties = instance.get_physical_device_memory_properties(physical_device);
 
-        let memory_type = Self::find_memory_type(
-            mem_properties,
-            mem_requirements.memory_type_bits,
-            properties,
-        )?;
 
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type);
 
-        let memory = device
-            .allocate_memory(&alloc_info, None)
-            .map_err(|e| format!("Failed to allocate buffer memory: {:?}", e))?;
 
-        device
-            .bind_buffer_memory(buffer, memory, 0)
-            .map_err(|e| format!("Failed to bind buffer memory: {:?}", e))?;
-
-        Ok((buffer, memory))
-    }
-
-    unsafe fn create_texture(
-        device: &ash::Device,
-        instance: &ash::Instance,
-        physical_device: vk::PhysicalDevice,
-        width: u32,
-        height: u32,
-        data: Option<&[u8]>,
-        format: vk::Format,
-        usage: vk::ImageUsageFlags,
-        mip_levels: u32,
-    ) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), String> {
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(format)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(mip_levels)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(usage | vk::ImageUsageFlags::SAMPLED)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-
-        let image = device
-            .create_image(&image_info, None)
-            .map_err(|e| format!("Failed to create image: {:?}", e))?;
-
-        let mem_requirements = device.get_image_memory_requirements(image);
-        let mem_properties = instance.get_physical_device_memory_properties(physical_device);
-
-        let memory_type = Self::find_memory_type(
-            mem_properties,
-            mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(mem_requirements.size)
-            .memory_type_index(memory_type);
-
-        let memory = device
-            .allocate_memory(&alloc_info, None)
-            .map_err(|e| format!("Failed to allocate image memory: {:?}", e))?;
-
-        device
-            .bind_image_memory(image, memory, 0)
-            .map_err(|e| format!("Failed to bind image memory: {:?}", e))?;
-
-        if let Some(_data) = data {
-             // For now, font texture is 1 canal. 
-             // Logic for data upload would be here (staging buffer etc)
-             // But since we only have font texture using it and it's updated later, 
-             // we can skip initial data upload for now if it's None.
-             // Existing code just created it with zeros.
-        }
-
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(format)
-            .components(vk::ComponentMapping {
-                r: vk::ComponentSwizzle::IDENTITY,
-                g: vk::ComponentSwizzle::IDENTITY,
-                b: vk::ComponentSwizzle::IDENTITY,
-                a: vk::ComponentSwizzle::IDENTITY,
-            })
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: mip_levels,
-                base_array_layer: 0,
-                layer_count: 1,
-            });
-
-        let view = device
-            .create_image_view(&view_info, None)
-            .map_err(|e| format!("Failed to create image view: {:?}", e))?;
-
-        Ok((image, memory, view))
-    }
-
-    fn find_memory_type(
-        mem_properties: vk::PhysicalDeviceMemoryProperties,
-        type_filter: u32,
-        properties: vk::MemoryPropertyFlags,
-    ) -> Result<u32, String> {
-        for i in 0..mem_properties.memory_type_count {
-            if (type_filter & (1 << i)) != 0
-                && mem_properties.memory_types[i as usize]
-                    .property_flags
-                    .contains(properties)
-            {
-                return Ok(i);
-            }
-        }
-        Err("Failed to find suitable memory type".to_string())
-    }
 
     fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
         let tx = -(right + left) / (right - left);
@@ -2089,7 +1390,7 @@ impl crate::backend::GraphicsBackend for VulkanBackend {
         unsafe {
             // Create staging buffer
             let size = (width * height) as vk::DeviceSize;
-            let (staging_buffer, staging_memory) = Self::create_buffer(
+            let (staging_buffer, staging_memory) = resources::create_buffer(
                 &self.ctx.device,
                 &self.ctx.instance,
                 self.ctx.physical_device,
@@ -2269,7 +1570,8 @@ impl crate::backend::GraphicsBackend for VulkanBackend {
                         lut_intensity: 0.0,
                         mode: 0,
                         is_squircle: 0,
-                        _pad: [0],
+                        time: 0.0,
+                        _pad: 0.0,
                     };
                     // Fill PC based on command (Duplicated logic from main loop for now, we should unify this)
                     match cmd {
@@ -2331,7 +1633,7 @@ impl crate::backend::GraphicsBackend for VulkanBackend {
             // Begin render pass
             let clear_values = [vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.08, 0.08, 0.1, 1.0],
+                    float32: [0.1, 0.1, 0.12, 1.0],
                 },
             }];
 
@@ -2410,7 +1712,7 @@ impl crate::backend::GraphicsBackend for VulkanBackend {
                 let pc_mode_instanced = PushConstants {
                     rect: [0.0; 4], radii: [0.0; 4], border_color: [1.0; 4], glow_color: [0.0; 4],
                     offset: [0.0; 2], scale: 1.0, border_width: 0.0, elevation: 0.0, glow_strength: 0.0,
-                    lut_intensity: 0.0, mode: 0xFFFFFFFF, is_squircle: 0, _pad: [0],
+                    lut_intensity: 0.0, mode: -1, is_squircle: 0, time: 0.0, _pad: 0.0,
                 };
                 self.ctx.device.cmd_push_constants(
                     self.command_buffer,
@@ -2445,7 +1747,8 @@ impl crate::backend::GraphicsBackend for VulkanBackend {
                         lut_intensity: 0.0,
                         mode: 0,
                         is_squircle: 0,
-                        _pad: [0],
+                        time: 0.0,
+                        _pad: 0.0,
                     };
 
                     match cmd {
@@ -2724,7 +2027,7 @@ impl crate::backend::GraphicsBackend for VulkanBackend {
 
             // Submit
             let wait_semaphores = [self.image_available_semaphore];
-            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::COMPUTE_SHADER];
             let signal_semaphores = [self.render_finished_semaphore];
             let command_buffers = [self.command_buffer];
 
@@ -2770,7 +2073,7 @@ impl crate::backend::GraphicsBackend for VulkanBackend {
             
             // Create staging buffer
             let size = (width * height * 4) as vk::DeviceSize;
-            let (staging_buffer, staging_memory) = Self::create_buffer(
+            let (staging_buffer, staging_memory) = resources::create_buffer(
                 &self.ctx.device,
                 &self.ctx.instance,
                 self.ctx.physical_device,

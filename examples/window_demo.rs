@@ -86,9 +86,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create OpenGL backend
     let mut backend = unsafe { OpenGLBackend::new(gl)? };
 
+    // Initialize fonts
+    fanta_rust::text::FONT_MANAGER.with(|fm| {
+        fm.borrow_mut().init_fonts();
+    });
+
     // State
     let mut current_width = size.width;
     let mut current_height = size.height;
+    let start_time = std::time::Instant::now();
 
     // Interaction state
     let mut cursor_x = 0.0;
@@ -158,63 +164,101 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Check out the Mesh Gradient Background (Mode 5) - it's automatic in render!
 
-                // Root container with Glass effect
-                // Note: We don't set bg here to let the Mesh Gradient show through,
-                // OR we set a semi-transparent BG for the glass effect.
-                let root = ui
-                    .column()
+                // --- UI DEFINITION ---
+                let root = ui.column()
                     .size(current_width as f32, current_height as f32)
-                    .padding(40.0)
+                    .aurora() // Background Aurora
                     .build();
 
                 ui.begin(root);
-
-                // Title
-                ui.text("Fantasmagorie V5: Visual Revolution")
-                    .font_size(32.0)
-                    .fg(ColorF::white())
-                    .layout_margin(10.0);
-
-                // Glass Panel
-                let panel = ui
-                    .column()
-                    .size(500.0, 400.0)
-                    .bg(ColorF::new(1.0, 1.0, 1.0, 0.1)) // 10% white for glass base
-                    .backdrop_blur(20.0) // BLUR!
-                    .squircle(24.0) // SQUIRCLE! (via is_squircle below)
-                    .border(1.0, ColorF::new(1.0, 1.0, 1.0, 0.3)) // Hairline
-                    .elevation(10.0) // Shadow
-                    .padding(20.0)
+                
+                let elapsed = start_time.elapsed().as_secs_f32();
+                
+                // Centered Glassmorphism Panel
+                let panel = ui.column()
+                    .size(800.0, 500.0)
+                    .align(Align::Center)
+                    .bg(ColorF::new(1.0, 1.0, 1.0, 0.05))
+                    .squircle(32.0)
+                    .backdrop_blur(15.0)
+                    .border(1.0, ColorF::new(1.0, 1.0, 1.0, 0.2))
+                    .elevation(30.0)
+                    .padding(40.0)
+                    .spacing(20.0)
                     .build();
-
+                
                 ui.begin(panel);
-
-                ui.text("Cinematic Glass & Glow")
-                    .font_size(24.0)
-                    .fg(ColorF::white());
-
-                ui.text("This panel features Mipmap Blur, Noise, and Squircle geometry.")
-                    .font_size(16.0)
-                    .fg(ColorF::new(0.8, 0.8, 0.8, 1.0))
-                    .layout_margin(10.0);
-
-                // Glowy Buttons
-                let btn1 = ui
-                    .button("Glowing Button")
-                    .size(200.0, 50.0)
-                    .bg(ColorF::new(0.3, 0.6, 1.0, 1.0))
-                    .radius(12.0)
-                    .glow(0.8, ColorF::new(0.3, 0.6, 1.0, 1.0)) // GLOW!
+                
+                ui.text("Fantasmagorie Ultimate Demo")
+                    .font_size(48.0)
+                    .fg(ColorF::white())
+                    .build();
+                
+                ui.text("Backend: OPENGL")
+                    .font_size(18.0)
+                    .fg(ColorF::new(0.7, 0.8, 1.0, 1.0))
                     .build();
 
-                ui.text("The background is the new 'Aurora' mesh gradient.")
-                    .font_size(14.0)
-                    .fg(ColorF::new(0.7, 0.7, 0.7, 1.0))
-                    .layout_margin(20.0);
+                let content_row = ui.row().spacing(20.0).build();
+                ui.begin(content_row);
+                
+                // Animated Rotating Box (SDF)
+                let orbit = elapsed * 2.0;
+                let offset_x = orbit.cos() * 20.0;
+                
+                ui.r#box()
+                    .size(150.0, 150.0)
+                    .bg(ColorF::new(0.2, 0.2, 0.8, 1.0))
+                    .radius(20.0 + (elapsed.sin() * 20.0))
+                    .glow(1.0 + elapsed.sin().abs() * 2.0, ColorF::new(0.4, 0.4, 1.0, 1.0))
+                    .margin(offset_x) 
+                    .build();
 
-                ui.end(); // End Panel
+                let button_col = ui.column().spacing(10.0).build();
+                ui.begin(button_col);
+                
+                if ui.button("Standard Button").size(200.0, 50.0).radius(10.0).clicked() {
+                    println!("Standard Click!");
+                }
 
-                ui.end(); // End Root
+                if ui.button("Glowing Squircle")
+                    .size(200.0, 50.0)
+                    .squircle(15.0)
+                    .bg(ColorF::new(0.8, 0.2, 0.2, 1.0))
+                    .hover(ColorF::new(1.0, 0.3, 0.3, 1.0))
+                    .glow(2.0, ColorF::new(0.8, 0.2, 0.2, 0.8))
+                    .clicked() {
+                    println!("Squircle Click!");
+                }
+
+                if ui.button("Transparent Border")
+                    .size(200.0, 50.0)
+                    .bg(ColorF::transparent())
+                    .border(2.0, ColorF::white())
+                    .radius(25.0)
+                    .clicked() {
+                    println!("Border Click!");
+                }
+                
+                ui.end(); // end button_col
+                ui.end(); // end content_row
+
+                ui.text("Verification Targets:")
+                    .font_size(20.0)
+                    .fg(ColorF::new(0.6, 1.0, 0.6, 1.0))
+                    .build();
+                
+                ui.text("- [x] Aurora Pixel Shader Parity")
+                    .font_size(14.0).fg(ColorF::white()).build();
+                ui.text("- [x] Backdrop Blur (LOD Mipmap) Sampling")
+                    .font_size(14.0).fg(ColorF::white()).build();
+                ui.text("- [x] Squircle Continuity (SDF)")
+                    .font_size(14.0).fg(ColorF::white()).build();
+                ui.text("- [x] Real-time Constant Updates")
+                    .font_size(14.0).fg(ColorF::white()).build();
+
+                ui.end(); // end panel
+                ui.end(); // end root
 
                 // Layout & Render
                 if let Some(root) = ui.root() {

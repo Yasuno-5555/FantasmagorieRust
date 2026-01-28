@@ -1,4 +1,4 @@
-﻿/// Abstraction for a compute backend (CUDA, ROCm, Metal, CPU).
+/// Abstraction for a compute backend (CUDA, ROCm, Metal, CPU).
 /// Provides hardware identification and generic constraints checking.
 pub trait Backend {
     /// Returns the unique device identifier (e.g., "sm_86_RTX3070", "gfx1100", "cpu_ryzen9").
@@ -29,3 +29,5 @@ pub mod cuda;
 pub mod cpu;
 pub mod rocm;
 pub mod metal;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;

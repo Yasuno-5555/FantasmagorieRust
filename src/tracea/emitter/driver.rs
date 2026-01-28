@@ -1,4 +1,4 @@
-﻿use std::sync::Once;
+use std::sync::Once;
 use std::ffi::c_void;
 use libloading::{Library, Symbol};
 

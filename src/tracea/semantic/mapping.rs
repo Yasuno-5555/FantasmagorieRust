@@ -1,4 +1,4 @@
-﻿use std::collections::HashSet;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy)]
 pub enum MatrixLayout {
@@ -22,10 +22,10 @@ impl LaneMapping {
         format!("(row * 16 + col)") // Simplified
     }
 
-    /// 讀懆ｨｼ逕ｨ・壹☆縺ｹ縺ｦ縺ｮ (row, col) 縺御ｸ諢上↑繝ｬ繧ｸ繧ｹ繧ｿ繧､繝ｳ繝・ャ繧ｯ繧ｹ縺ｫ繝槭ャ繝励＆繧後※縺・ｋ縺狗｢ｺ隱・
+    /// 検証用：すべての (row, col) が一意なレジスタインデックスにマップされているか確認
     pub fn verify_injectivity(&self) -> Result<(), String> {
         let mut seen = std::collections::HashSet::new();
-        // 蜈ｸ蝙狗噪縺ｪ繧ｿ繧､繝ｫ繧ｵ繧､繧ｺ蜀・〒縺ｮ讀懆ｨｼ
+        // 典型的なタイルサイズ内での検証
         for r in 0..16 {
             for c in 0..16 {
                 let addr = self.get_addr(r, c);

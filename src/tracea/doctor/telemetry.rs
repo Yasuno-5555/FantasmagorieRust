@@ -1,4 +1,4 @@
-﻿use serde::Serialize;
+use serde::Serialize;
 use super::engine::CompileStrategy;
 
 #[derive(Debug, Serialize)]

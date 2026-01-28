@@ -1,4 +1,4 @@
-﻿use crate::tracea::semantic::transition::SyncRequirement;
+use crate::tracea::semantic::transition::SyncRequirement;
 use crate::tracea::core::op::EpilogueOp;
 use crate::tracea::semantic::fragment::{FragmentOp, Fragment};
 
@@ -60,6 +60,12 @@ pub enum UnifiedOpType {
         dilation: usize,
         layout: crate::tracea::core::config::LayoutPolicy,
     },
+    /// Unified Matrix-Multiply-Accumulate (Tensor Core / Cooperative Matrix)
+    MatrixCore {
+        m: u32,
+        n: u32,
+        k: u32,
+    },
     /// ConvTranspose2d (Deconvolution) for VAE Decoder
     /// Constraints: groups=1, dilation=1, FP32 only (v3.1)
     ConvTranspose2d {
@@ -74,5 +80,11 @@ pub enum UnifiedOpType {
         pad: usize,
         output_padding: usize,
         layout: crate::tracea::core::config::LayoutPolicy,
+    },
+    LowRankMlp {
+        m: u32,
+        n: u32,
+        k: u32,
+        r: u32,
     },
 }

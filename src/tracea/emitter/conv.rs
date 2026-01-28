@@ -1,4 +1,4 @@
-﻿use crate::tracea::emitter::traits::UnifiedOpIR;
+use crate::tracea::emitter::traits::UnifiedOpIR;
 use crate::tracea::backend::cuda::CudaBackend;
 use crate::tracea::emitter::traits::UnifiedOpType;
 use crate::tracea::core::op::EpilogueOp;

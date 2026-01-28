@@ -16,10 +16,14 @@ struct ParticleUniforms {
     time: f32,
 };
 
+struct ParticleCounters {
+    active_count: atomic<u32>,
+    pool_count: atomic<u32>,
+};
+
 @group(0) @binding(0) var<uniform> uniforms: ParticleUniforms;
 @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
-@group(0) @binding(2) var<storage, read_write> active_counter: atomic<u32>;
-@group(0) @binding(3) var<storage, read_write> pool_counter: atomic<u32>;
+@group(0) @binding(2) var<storage, read_write> counters: ParticleCounters;
 
 // Update Kernel
 @compute @workgroup_size(64)
@@ -44,7 +48,7 @@ fn update(@builtin(global_invocation_id) gid: vec3<u32>) {
     // if (particles[idx].pos.y > 1.0) { particles[idx].vel.y *= -0.8; }
 
     if (particles[idx].life > 0.0) {
-        atomicAdd(&active_counter, 1u);
+        atomicAdd(&counters.active_count, 1u);
     }
 }
 
@@ -57,7 +61,8 @@ fn spawn(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Try to acquire an index from the "dead" pool or simple atomic increment
-    let p_idx = atomicAdd(&pool_counter, 1u) % uniforms.num_particles;
+    let p_idx = atomicAdd(&counters.pool_count, 1u) % uniforms.num_particles;
+    // let p_idx = idx % uniforms.num_particles;
     
     // Low-quality hash for velocity
     let seed = f32(p_idx) + uniforms.time;

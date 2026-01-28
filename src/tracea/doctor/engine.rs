@@ -1,4 +1,4 @@
-﻿use super::capabilities::TraceaCapabilities;
+use super::capabilities::TraceaCapabilities;
 use super::registry::{KernelVariant, Requirement, Preference, BackendKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -176,6 +176,7 @@ pub fn select_variant(
                 BackendKind::Rocm => CompileStrategy::AOT,
                 BackendKind::Metal => CompileStrategy::AOT,
                 BackendKind::Cpu => CompileStrategy::AOT, 
+                BackendKind::Vulkan => CompileStrategy::JIT,
             },
             fallback_plan,
             reason: DecisionReason::MatchesAllRequirements,

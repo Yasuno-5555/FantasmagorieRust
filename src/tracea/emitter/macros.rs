@@ -1,4 +1,4 @@
-﻿#[macro_export]
+#[macro_export]
 macro_rules! tracea_emitter {
     ($name:ident { 
         sync: $sync_fn:expr, 

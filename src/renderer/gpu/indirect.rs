@@ -19,6 +19,7 @@ impl IndirectDispatchKernel {
             DeviceBackend::Cuda => self.cuda_source(),
             DeviceBackend::Rocm => self.cuda_source(), // ROCm uses HIP (CUDA-ish)
             DeviceBackend::Metal => self.metal_source(),
+            DeviceBackend::Vulkan => String::new(), // TODO: Vulkan indirect
             DeviceBackend::Cpu => String::new(),
         }
     }

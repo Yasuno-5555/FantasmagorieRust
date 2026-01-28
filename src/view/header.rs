@@ -394,11 +394,11 @@ mod tests {
 
         let parent = arena.alloc(ViewHeader::default());
         let child1 = arena.alloc(ViewHeader {
-            id: ID::from_str("c1"),
+            id: Cell::new(ID::from_str("c1")),
             ..Default::default()
         });
         let child2 = arena.alloc(ViewHeader {
-            id: ID::from_str("c2"),
+            id: Cell::new(ID::from_str("c2")),
             ..Default::default()
         });
 
@@ -407,7 +407,7 @@ mod tests {
 
         let children: Vec<_> = parent.children().collect();
         assert_eq!(children.len(), 2);
-        assert_eq!(children[0].id, ID::from_str("c1"));
-        assert_eq!(children[1].id, ID::from_str("c2"));
+        assert_eq!(children[0].id.get(), ID::from_str("c1"));
+        assert_eq!(children[1].id.get(), ID::from_str("c2"));
     }
 }

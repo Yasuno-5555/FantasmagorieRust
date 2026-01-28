@@ -1,4 +1,4 @@
-﻿use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::fmt::Debug;
 
 /// Represents the possible values for a configuration parameter.
@@ -92,7 +92,7 @@ use std::io::Write;
 fn grid_search<K: TunableKernel>(kernel: &K) -> K::Config {
     let space = kernel.search_space();
     let total = space.candidates.len();
-    eprintln!("[Tuner] 剥 Starting Grid Search ({} candidates)...", total);
+    eprintln!("[Tuner] 🔍 Starting Grid Search ({} candidates)...", total);
 
     let mut best_score = -1.0;
     let mut best_config = space.candidates.first().expect("Search space cannot be empty").clone();
@@ -117,6 +117,6 @@ fn grid_search<K: TunableKernel>(kernel: &K) -> K::Config {
         }
     }
     
-    eprintln!("[Tuner] 醇 Best Config: {:?} ({:.2} TFLOPS)", best_config, best_score);
+    eprintln!("[Tuner] 🏆 Best Config: {:?} ({:.2} TFLOPS)", best_config, best_score);
     best_config
 }

@@ -1,4 +1,4 @@
-﻿
+
 use libloading::{Library, Symbol};
 use std::ffi::{CString, c_void};
 use std::ptr;

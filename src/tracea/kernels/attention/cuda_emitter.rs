@@ -1,4 +1,4 @@
-﻿use crate::tracea::core::config::PipelineConfig;
+use crate::tracea::core::config::PipelineConfig;
 use crate::tracea::backend::cuda::CudaBackend;
 
 pub struct FlashAttentionEmitter {

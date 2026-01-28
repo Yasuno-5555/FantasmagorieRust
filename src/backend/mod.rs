@@ -9,6 +9,9 @@ use crate::renderer::packet::DrawPacket;
 /// Shared shader definitions and uniform types
 pub mod shaders;
 
+/// Unified Hardware Abstraction Layer traits
+pub mod hal;
+
 /// Common interface for all graphics rendering backends.
 /// This is "The Muscle" - no optimization logic allowed here.
 /// Tracea is the coordinator that prepares work for GraphicsBackend.

@@ -1,4 +1,4 @@
-﻿use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BackendKind {
@@ -6,6 +6,7 @@ pub enum BackendKind {
     Rocm,
     Metal,
     Cpu,
+    Vulkan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +61,13 @@ pub fn get_variants_for(kernel_id: &str) -> Vec<KernelVariant> {
                  priority: 90,
              },
              KernelVariant {
+                 id: "fa2_vulkan",
+                 backend: BackendKind::Vulkan,
+                 hard_requirements: vec![Requirement::BackendIs(BackendKind::Vulkan)],
+                 soft_preferences: vec![Preference::PreferLargerSharedMem],
+                 priority: 85,
+             },
+             KernelVariant {
                  id: "fa2_metal",
                  backend: BackendKind::Metal,
                  hard_requirements: vec![Requirement::BackendIs(BackendKind::Metal)],
@@ -88,6 +96,13 @@ pub fn get_variants_for(kernel_id: &str) -> Vec<KernelVariant> {
                  hard_requirements: vec![Requirement::BackendIs(BackendKind::Rocm)],
                  soft_preferences: vec![Preference::PreferTensorCoreLike],
                  priority: 90,
+             },
+             KernelVariant {
+                 id: "gemm_vulkan",
+                 backend: BackendKind::Vulkan,
+                 hard_requirements: vec![Requirement::BackendIs(BackendKind::Vulkan)],
+                 soft_preferences: vec![Preference::PreferLargerSharedMem],
+                 priority: 85,
              },
              KernelVariant {
                  id: "gemm_metal",

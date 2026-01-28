@@ -1,4 +1,4 @@
-﻿use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use crate::tracea::core::config::{PipelineConfig, BarrierMode};
 use crate::tracea::core::backend::Device;
 

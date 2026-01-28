@@ -4,20 +4,21 @@
 
 struct Uniforms {
     projection: mat4x4<f32>,
-    rect: vec4<f32>,         // x, y, w, h
-    radii: vec4<f32>,        // tl, tr, br, bl
+    rect: vec4<f32>,
+    radii: vec4<f32>,
     border_color: vec4<f32>,
     glow_color: vec4<f32>,
-    
-    mode: i32,
+    offset: vec2<f32>,
+    scale: f32,
     border_width: f32,
     elevation: f32,
-    is_squircle: i32,
-    
     glow_strength: f32,
-    start_angle: f32,
-    end_angle: f32,
+    lut_intensity: f32,
+    mode: u32,
+    is_squircle: u32,
     time: f32,
+    _pad: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0)
@@ -181,8 +182,7 @@ fn mode_image(col: vec4<f32>, uv: vec2<f32>, world_pos: vec2<f32>) -> vec4<f32> 
     return vec4<f32>(tex_lin, tex_col.a * alpha);
 }
 
-fn mode_blur(col: vec4<f32>, world_pos: vec2<f32>) -> vec4<f32> {
-    // Placeholder: needs backdrop texture for full implementation
+fn mode_blur(col: vec4<f32>, world_pos: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     let center = uniforms.rect.xy + uniforms.rect.zw * 0.5;
     let half_size = uniforms.rect.zw * 0.5;
     let local = world_pos - center;
@@ -194,15 +194,27 @@ fn mode_blur(col: vec4<f32>, world_pos: vec2<f32>) -> vec4<f32> {
         d = sd_rounded_box(local, half_size, uniforms.radii);
     }
     
-    let alpha = 1.0 - smoothstep(-1.0, 1.0, d);
+    // Increased base alpha for "Frosted" substance
+    let base_alpha = 0.45;
+    let edge_aa = 1.0;
+    let alpha_mask = 1.0 - smoothstep(-edge_aa, edge_aa, d);
     
-    // Fresnel Hairline
-    var color = col;
-    let hairline_alpha = 1.0 - smoothstep(0.0, 1.0, abs(d + 0.5));
-    let highlight = vec4<f32>(1.0, 1.0, 1.0, 0.15);
-    color = mix(color, highlight, hairline_alpha * highlight.a);
+    // Procedural Frost Grain
+    let grain = (hash(world_pos * 0.5 + vec2<f32>(uniforms.time * 0.01)) - 0.5) * 0.04;
+    var glass_col = col + grain;
     
-    return vec4<f32>(color.rgb, alpha);
+    // Liquid Fresnel: Catching light on the edges
+    // 1. Sharp Hairline (Outer)
+    let hairline = 1.0 - smoothstep(0.0, 1.0, abs(d + 0.5));
+    let highlight_sharp = vec4<f32>(1.0, 1.0, 1.0, 0.4) * hairline;
+    
+    // 2. Soft Inner Glow (Light refraction)
+    let inner_glow = 1.0 - smoothstep(-15.0, 0.0, d);
+    let highlight_soft = vec4<f32>(1.0, 1.0, 1.0, 0.15) * inner_glow * alpha_mask;
+    
+    glass_col = mix(glass_col, vec4<f32>(1.0), (highlight_sharp.a + highlight_soft.a) * 0.5);
+    
+    return vec4<f32>(glass_col.rgb, (base_alpha + highlight_sharp.a * 0.2) * alpha_mask);
 }
 
 fn mode_arc(col: vec4<f32>, world_pos: vec2<f32>) -> vec4<f32> {
@@ -217,8 +229,8 @@ fn mode_arc(col: vec4<f32>, world_pos: vec2<f32>) -> vec4<f32> {
     var angle = atan2(local.y, local.x);
     if (angle < 0.0) { angle = angle + 6.283185; }
     
-    let start_angle = uniforms.start_angle;
-    let end_angle = uniforms.end_angle;
+    let start_angle = uniforms.offset.x;
+    let end_angle = uniforms.offset.y;
     
     var in_angle = false;
     if (start_angle < end_angle) {
@@ -291,7 +303,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     else if (uniforms.mode == 1) { final_color = mode_sdf_text(in.color, in.uv); }
     else if (uniforms.mode == 2) { final_color = mode_shape(in.color, in.world_pos); }
     else if (uniforms.mode == 3) { final_color = mode_image(in.color, in.uv, in.world_pos); }
-    else if (uniforms.mode == 4) { final_color = mode_blur(in.color, in.world_pos); }
+    else if (uniforms.mode == 4) { final_color = mode_blur(in.color, in.world_pos, in.uv); }
     else if (uniforms.mode == 5) { final_color = mode_aurora(in.clip_position, in.uv); }
     else if (uniforms.mode == 6) { final_color = mode_arc(in.color, in.world_pos); }
     else if (uniforms.mode == 7) { final_color = mode_plot(in.color); }
@@ -300,5 +312,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     else { final_color = in.color; }
 
     // Linear -> sRGB
-    return vec4<f32>(pow(final_color.rgb, vec3<f32>(1.0 / 2.2)), final_color.a);
+    return final_color;
 }

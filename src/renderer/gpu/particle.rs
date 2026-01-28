@@ -16,6 +16,7 @@ impl ParticleKernel {
     pub fn generate_source(&self) -> String {
         match self.backend {
             DeviceBackend::Cuda => self.cuda_source(),
+            DeviceBackend::Vulkan => self.vulkan_source(),
             _ => String::new(),
         }
     }
@@ -69,6 +70,41 @@ extern "C" __global__ void k6_particle_spawn(
     // Acquire from pool
     unsigned int p_idx = atomicAdd(pool_counter, 1);
     // initialize particles[p_idx]
+}
+"#.to_string()
+    }
+
+    fn vulkan_source(&self) -> String {
+        r#"#version 450
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct Particle {
+    vec2 pos;
+    vec2 vel;
+    float life;
+    vec4 color;
+};
+
+layout(set = 0, binding = 0) buffer Particles { Particle particles[]; };
+layout(set = 0, binding = 1) buffer ActiveCounter { uint active_counter; };
+
+layout(push_constant) uniform Params {
+    int num_particles;
+    float dt;
+} p;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= p.num_particles) return;
+
+    if (particles[idx].life <= 0.0) return;
+
+    particles[idx].pos += particles[idx].vel * p.dt;
+    particles[idx].life -= p.dt;
+
+    if (particles[idx].life > 0.0) {
+        atomicAdd(active_counter, 1);
+    }
 }
 "#.to_string()
     }

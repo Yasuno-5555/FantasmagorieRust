@@ -1,4 +1,4 @@
-﻿use super::diagnosis::{JitResultInfo, KernelLaunchInfo};
+use super::diagnosis::{JitResultInfo, KernelLaunchInfo};
 
 pub trait DiagnosticStrategy {
     fn analyze_jit(&self, info: &JitResultInfo) -> Option<String>;

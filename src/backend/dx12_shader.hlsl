@@ -149,7 +149,7 @@ float4 PSMain(PixelInput input) : SV_TARGET {
     }
     else if (mode == 5) {
         // Mesh Gradient (Aurora)
-        float t = elevation; // Time
+        float t = time; // Updated from elevation
         float2 uv = input.pos.xy / rect.zw; // Screen space to UV
         
         // Flip Y if needed for DX coords? DX is top-left usually for window, but clip space is -1..1.

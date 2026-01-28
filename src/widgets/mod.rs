@@ -229,6 +229,11 @@ impl<'a> ButtonBuilder<'a> {
         self
     }
 
+    pub fn fg(self, color: ColorF) -> Self {
+        self.view.fg_color.set(color);
+        self
+    }
+
     pub fn hover(self, c: ColorF) -> Self {
         self.view.bg_hover.set(Some(c));
         self
@@ -252,6 +257,12 @@ impl<'a> ButtonBuilder<'a> {
 
     pub fn font_size(self, size: f32) -> Self {
         self.view.font_size.set(size);
+        self
+    }
+
+    pub fn border(self, width: f32, color: ColorF) -> Self {
+        self.view.border_width.set(width);
+        self.view.border_color.set(color);
         self
     }
 
@@ -441,6 +452,8 @@ impl<'a> UIContext<'a> {
         // Button hover/active from theme
         view.bg_hover.set(Some(self.theme.panel.lighten(0.1)));
         view.bg_active.set(Some(self.theme.accent.with_alpha(0.3)));
+        
+        view.text.set(label);
 
         self.push_child(view);
 

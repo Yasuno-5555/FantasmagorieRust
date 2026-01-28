@@ -1,4 +1,4 @@
-﻿pub mod traits;
+pub mod traits;
 pub mod jit;
 pub mod cuda;
 pub mod rocm;
@@ -12,3 +12,8 @@ pub mod cpu;
 pub mod elementwise;
 pub mod conv;
 pub mod conv_transpose;
+pub mod gemm;
+pub mod attention;
+pub mod cuda_low_rank;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;

@@ -1,4 +1,4 @@
-﻿pub mod transition;
+pub mod transition;
 pub mod swizzle;
 pub mod mapping;
 

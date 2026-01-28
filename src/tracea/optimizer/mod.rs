@@ -1,4 +1,4 @@
-﻿use crate::tracea::PipelineConfig;
+use crate::tracea::PipelineConfig;
 use std::sync::Arc;
 use cudarc::driver::CudaDevice;
 use serde::{Serialize, Deserialize};
@@ -26,6 +26,9 @@ pub struct HardwareProfile {
     pub has_specialized_units: bool,
     pub compute_capability: Option<(u32, u32)>,
     pub supported_intrinsic_shapes: Vec<crate::tracea::core::config::IntrinsicShape>,
+    pub max_threadgroup_memory: usize, // Metal: 32KB on some devices
+    pub preferred_tile_shape: [usize; 3], // [M, N, K] hint
+    pub simd_width: usize, // Warp/Wave/SimdGroup width
 }
 
 impl HardwareProfile {
@@ -44,6 +47,9 @@ impl HardwareProfile {
             has_specialized_units: true,
             compute_capability: Some((8, 6)),
             supported_intrinsic_shapes: vec![crate::tracea::core::config::IntrinsicShape::M16N8K16],
+            max_threadgroup_memory: 0,
+            preferred_tile_shape: [128, 128, 32], 
+            simd_width: 32,
         }
     }
 
@@ -62,6 +68,9 @@ impl HardwareProfile {
             has_specialized_units: true,
             compute_capability: None,
             supported_intrinsic_shapes: vec![crate::tracea::core::config::IntrinsicShape::M32N32K2, crate::tracea::core::config::IntrinsicShape::M16N16K4],
+            max_threadgroup_memory: 64 * 1024, // LDS size approximation
+            preferred_tile_shape: [256, 128, 16], // MI250 prefers large tiles
+            simd_width: 64,
         }
     }
 
@@ -80,6 +89,9 @@ impl HardwareProfile {
             has_specialized_units: true,
             compute_capability: Some((8, 0)),
             supported_intrinsic_shapes: vec![crate::tracea::core::config::IntrinsicShape::M16N8K16],
+            max_threadgroup_memory: 0,
+            preferred_tile_shape: [128, 256, 32],
+            simd_width: 32,
         }
     }
 }
@@ -135,8 +147,8 @@ impl HardwareProfile {
         let warps_per_block = config.force_num_warps.unwrap_or(4);
         let blocks_by_warps = self.max_warps_per_sm / warps_per_block;
         
-        // 笞・・Conservative Register Estimation (Lower Bound)
-        // Registers 竕・(TileSizeElements * PipelineDepth) / ThreadCount + BaseOverhead
+        // ⚠️ Conservative Register Estimation (Lower Bound)
+        // Registers ≈ (TileSizeElements * PipelineDepth) / ThreadCount + BaseOverhead
         // Using f32 for intermediate calc to avoid overflow/truncation early
         let thread_count = (warps_per_block * self.wavefront_size) as f32;
         let tile_elements = (config.m_tile * config.n_tile) as f32; // Simplified
@@ -199,6 +211,9 @@ pub mod benchmark;
 pub mod cache;
 pub mod policy;
 pub mod problem;
+pub mod orchestrator;
+pub mod semantic;
+pub mod history;
 
 use benchmark::{MicroBenchmark, Observation, BenchmarkResult, Conv2dBenchmark, ConvConfig, Conv2dProblem};
 use cache::{TuningCache, CacheKey};
@@ -402,9 +417,13 @@ pub struct AutoTuner {
 impl AutoTuner {
     pub fn new(gpu: HardwareProfile) -> Self {
         let device = match gpu.backend {
-            DeviceBackend::Cuda => Device::Cuda(CudaArch::Ampere), // Assume Ampere for auto-detection if unknown
-            DeviceBackend::Rocm => Device::Cuda(CudaArch::Unknown), // Temporary
-            _ => Device::Cpu(CpuArch::Avx2),
+            DeviceBackend::Cuda => Device::Cuda(CudaArch::Ampere),
+            DeviceBackend::Rocm => Device::Cuda(CudaArch::Unknown), // Temporary mapping
+            #[cfg(feature = "vulkan")]
+            DeviceBackend::Vulkan => Device::Vulkan,
+            #[cfg(feature = "wgpu")]
+            DeviceBackend::Wgpu => Device::Wgpu,
+             _ => Device::Cpu(CpuArch::Avx2),
         };
 
         let hardware_id = match device {
@@ -416,6 +435,8 @@ impl AutoTuner {
                     gpu.name.clone()
                 }
             }
+            Device::Vulkan => "Vulkan".to_string(),
+            Device::Wgpu => "WebGPU".to_string(),
         };
 
         Self {
@@ -510,7 +531,7 @@ impl AutoTuner {
     
     pub fn optimize_v2<B: MicroBenchmark>(&mut self, benchmark: &B, problem: &ProblemDescriptor, iterations: usize, goal: OptimizationGoal) -> PipelineConfig {
         let policy = PolicyFactory::derive(problem);
-        eprintln!("[Tracea] 噫 Starting V2 Tuning for {} [layer_type={:?}]", problem.name, problem.layer_type);
+        eprintln!("[Tracea] 🚀 Starting V2 Tuning for {} [layer_type={:?}]", problem.name, problem.layer_type);
         let key = CacheKey {
             backend: self.gpu.backend,
             gpu: self.gpu.name.clone(),
@@ -529,11 +550,11 @@ impl AutoTuner {
         };
         let mut cache = TuningCache::new();
         if let Some(config) = cache.get(&key) {
-            println!("[Tracea] 虫 Cache Hit! {:?}", key);
+            println!("[Tracea] 💎 Cache Hit! {:?}", key);
             return config;
         }
 
-        eprintln!("[Tracea] 噫 Starting V2 Tuning for {} (Policy: {})", problem.name, "Derived");
+        eprintln!("[Tracea] 🚀 Starting V2 Tuning for {} (Policy: {})", problem.name, "Derived");
 
         let mut current_best_score = -1e9;
         let mut best_config = None;
@@ -541,18 +562,18 @@ impl AutoTuner {
         
         // 1. Hero Injection (Priority 0)
         let heroes = policy.hero_configs();
-        eprintln!("[Tracea] ｦｸ Found {} Hero Configs", heroes.len());
+        eprintln!("[Tracea] 🦸 Found {} Hero Configs", heroes.len());
         
         for (idx, hero) in heroes.iter().enumerate() {
-            eprintln!("[Tracea] ｦｸ Injecting Hero #{}: {} ({:?})", idx+1, hero.note, hero.scope);
+            eprintln!("[Tracea] 🦸 Injecting Hero #{}: {} ({:?})", idx+1, hero.note, hero.scope);
             if !benchmark.validate_config(&hero.config) {
-                eprintln!("[Tracea] 笞・・Hero config failed validation! Skipping.");
+                eprintln!("[Tracea] ⚠️ Hero config failed validation! Skipping.");
                 continue;
             }
             
             let res = benchmark.measure(&hero.config);
             let score = self.calculate_score(&res, goal);
-            eprintln!("[Tracea] ｦｸ Hero Result [hero=true]: {:.2} TFLOPS (Score: {:.2})", res.tflops, score);
+            eprintln!("[Tracea] 🦸 Hero Result [hero=true]: {:.2} TFLOPS (Score: {:.2})", res.tflops, score);
             
             self.gp.observe(Observation { 
                 m: problem.shape.m as u32, n: problem.shape.n as u32, k: problem.shape.k as u32, 
@@ -567,11 +588,11 @@ impl AutoTuner {
         
         // 1.1 Structural Hero Injection (v3)
         if let Some(v3_hero) = self.heroscope.get_hero(&self.hardware_id, problem.layer_type) {
-            eprintln!("[Tracea] 鋤・・Injecting Structural Hero (v3) for {}", self.hardware_id);
+            eprintln!("[Tracea] 🏛️ Injecting Structural Hero (v3) for {}", self.hardware_id);
             if benchmark.validate_config(&v3_hero) {
                 let res = benchmark.measure(&v3_hero);
                 let score = self.calculate_score(&res, goal);
-                eprintln!("[Tracea] 鋤・・Structural Hero Result: {:.2} TFLOPS", res.tflops);
+                eprintln!("[Tracea] 🏛️ Structural Hero Result: {:.2} TFLOPS", res.tflops);
                 
                 self.gp.observe(Observation { 
                     m: problem.shape.m as u32, n: problem.shape.n as u32, k: problem.shape.k as u32, 
@@ -594,7 +615,7 @@ impl AutoTuner {
         // 2. Optimization Loop
         for i in 0..iterations {
             trials_so_far += 1;
-            eprintln!("[Tracea] 売 Iteration {}/{}", i + 1, iterations);
+            eprintln!("[Tracea] 🔄 Iteration {}/{}", i + 1, iterations);
             
             // Context update
             let ctx = TuningContext {
@@ -613,7 +634,7 @@ impl AutoTuner {
             let candidate = self.propose_candidate(problem, &policy.search_space(), acq, &policy, current_best_score);
             
             if let Err(reason) = self.gpu.check_feasibility(&candidate, problem) {
-                eprintln!("[Tracea] 驩・Pruned configuration {:?} - Reason: {:?}", candidate, reason);
+                eprintln!("[Tracea] 鉁 Pruned configuration {:?} - Reason: {:?}", candidate, reason);
                 self.stats.log_pruning(reason);
                 continue;
             }
@@ -732,6 +753,6 @@ mod tests {
         let result = gpu.check_feasibility(&golden, &problem);
         assert!(result.is_ok(), "Golden Config was incorrectly pruned: {:?}", result.err());
         
-        println!("[Test] 笨・Golden Config Preserved (Occupancy: {:.2}%)", gpu.estimate_occupancy(&golden) * 100.0);
+        println!("[Test] ✅ Golden Config Preserved (Occupancy: {:.2}%)", gpu.estimate_occupancy(&golden) * 100.0);
     }
 }

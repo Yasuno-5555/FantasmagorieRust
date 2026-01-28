@@ -1,13 +1,13 @@
-﻿/// 菴咲嶌・・hase・峨ｒ Z/NZ 蟾｡蝗樒ｾ､縺ｨ縺励※螳夂ｾｩ
+/// 位相（Phase）を Z/NZ 巡回群として定義
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Phase(pub u32);
 
 #[derive(Debug, Clone, Copy)]
 pub enum SyncRequirement {
     None,
-    /// cp.async.wait_group<N> 縺ｫ逶ｸ蠖・
+    /// cp.async.wait_group<N> に相当
     WaitAsyncLoad { stages_behind: u32 },
-    /// __syncthreads() 逶ｸ蠖・
+    /// __syncthreads() 相当
     Barrier,
 }
 
@@ -27,12 +27,12 @@ impl PhaseTransition {
         }
     }
 
-    /// 谺｡縺ｮ繧ｹ繝・・繧ｸ縺ｸ騾ｲ繧縺溘ａ縺ｮ蜷梧悄蜻ｽ莉､繧堤ｮ怜・
-    /// 繧ｹ繝・・繧ｸ髢薙・霍晞屬縺ｫ蝓ｺ縺･縺・※蜷梧悄縺ｮ驥阪∩繧呈ｱｺ螳・
+    /// 次のステージへ進むための同期命令を算出
+    /// ステージ間の距離に基づいて同期の重みを決定
     pub fn required_sync(&self) -> SyncRequirement {
-        // 萓・ N繧ｹ繝・・繧ｸ繝代う繝励Λ繧､繝ｳ縺ｮ蝣ｴ蜷医・
-        // 繝ｭ繝ｼ繝峨・螳御ｺ・ｾ・ｩ溘・ (num_stages - 2) 蛟句燕繧呈欠螳壹☆繧九・縺御ｸ闊ｬ逧・
-        // (譛譁ｰ縺ｮcommit縺九ｉ謨ｰ縺医※縺・￥縺､蜑阪・繧ｰ繝ｫ繝ｼ繝励′螳御ｺ・＠縺ｦ縺・ｋ縺ｹ縺阪°)
+        // 例: Nステージパイプラインの場合、
+        // ロードの完了待機は (num_stages - 2) 個前を指定するのが一般的
+        // (最新のcommitから数えていくつ前のグループが完了しているべきか)
         if self.num_stages > 1 {
             SyncRequirement::WaitAsyncLoad {
                 stages_behind: (self.num_stages.saturating_sub(2)),

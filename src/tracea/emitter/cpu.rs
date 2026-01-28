@@ -1,4 +1,4 @@
-﻿use crate::tracea::emitter::traits::{Emitter, UnifiedOpIR, UnifiedOpType};
+use crate::tracea::emitter::traits::{Emitter, UnifiedOpIR, UnifiedOpType};
 use crate::tracea::semantic::transition::SyncRequirement;
 
 pub struct CPUEmitter {

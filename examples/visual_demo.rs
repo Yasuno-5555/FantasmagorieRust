@@ -1,6 +1,6 @@
 //! Visual demo example
 
-use fantasmagorie::prelude::*;
+use fanta_rust::prelude::*;
 
 fn main() {
     println!("Fantasmagorie Rust - Visual Demo");
@@ -55,10 +55,13 @@ fn main() {
     // Get root and compute layout
     if let Some(root) = ui.root() {
         // Create DrawList
-        let mut dl = fantasmagorie::DrawList::new();
+        let mut dl = fanta_rust::draw::DrawList::new();
 
         // Render UI (computes layout and generates draw commands)
-        fantasmagorie::view::render_ui(root, 800.0, 600.0, &mut dl);
+        fanta_rust::text::FONT_MANAGER.with(|fm| {
+            let mut fm = fm.borrow_mut();
+            fanta_rust::view::render_ui(root, 800.0, 600.0, &mut dl, &mut fm);
+        });
 
         println!("Generated {} draw commands", dl.len());
 

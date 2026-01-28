@@ -23,6 +23,26 @@ pub struct GlobalUniforms {
     pub _pad: f32,
 }
 
+/// Cinematic post-processing parameters
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct CinematicParams {
+    pub exposure: f32,
+    pub gamma: f32,
+    pub fog_density: f32,
+    pub _pad: f32,
+}
+
+/// Audio reactive parameters
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct AudioParams {
+    pub bass: f32,
+    pub mid: f32,
+    pub high: f32,
+    pub _pad: f32,
+}
+
 /// Per-draw uniforms - updated per draw call (Push Constants or Dynamic UBO)
 /// Must be ≤ 128 bytes for Push Constants compatibility
 #[repr(C)]

@@ -21,7 +21,8 @@ struct DrawUniforms {
     lut_intensity: f32,
     mode: u32,
     is_squircle: u32,
-    _pad: u32,
+    time: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> globals: GlobalUniforms;
@@ -228,6 +229,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let d = abs(r - (inner_r + outer_r) * 0.5) - (outer_r - inner_r) * 0.5;
         let alpha = 1.0 - smoothstep(-1.0, 1.0, d);
         final_color = vec4<f32>(in.color.rgb, in.color.a * alpha);
+    } else if (mode == 7u) { // Plot
+        final_color = col_lin;
+    } else if (mode == 8u) { // Heatmap
+        let val = textureSample(t_diffuse, s_diffuse, in.uv).r;
+        let t = clamp((val - params.elevation) / (params.glow_strength - params.elevation + 0.0001), 0.0, 1.0);
+        
+        let c0 = vec3<f32>(0.267, 0.004, 0.329);
+        let c1 = vec3<f32>(0.127, 0.566, 0.550);
+        let c2 = vec3<f32>(0.993, 0.906, 0.143);
+        
+        var result: vec3<f32>;
+        if (t < 0.5) {
+            result = mix(c0, c1, t * 2.0);
+        } else {
+            result = mix(c1, c2, (t - 0.5) * 2.0);
+        }
+        final_color = vec4<f32>(result, 1.0);
     } else if (mode == 9u) { // Aurora
         let uv = in.uv;
         let t = globals.time;

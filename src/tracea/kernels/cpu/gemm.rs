@@ -1,4 +1,4 @@
-﻿use rayon::prelude::*;
+use rayon::prelude::*;
 use wide::*;
 use std::convert::TryInto;
 use crate::tracea::optimizer::ProblemDescriptor;

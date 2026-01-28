@@ -467,13 +467,14 @@ fn arrange_grid(node: &ViewHeader, x: f32, y: f32, w: f32, _h: f32) {
 mod tests {
     use super::*;
     use crate::core::{FrameArena, ID};
+    use std::cell::Cell;
 
     #[test]
     fn test_simple_column_layout() {
         let arena = FrameArena::new();
 
         let root = arena.alloc(ViewHeader {
-            id: ID::from_str("root"),
+            id: Cell::new(ID::from_str("root")),
             // Default ViewHeader fields are Cells, created via Default::default
             ..Default::default()
         });
@@ -481,13 +482,13 @@ mod tests {
         root.width.set(100.0);
 
         let child1 = arena.alloc(ViewHeader {
-            id: ID::from_str("c1"),
+            id: Cell::new(ID::from_str("c1")),
             ..Default::default()
         });
         child1.height.set(50.0);
 
         let child2 = arena.alloc(ViewHeader {
-            id: ID::from_str("c2"),
+            id: Cell::new(ID::from_str("c2")),
             ..Default::default()
         });
         child2.height.set(50.0);

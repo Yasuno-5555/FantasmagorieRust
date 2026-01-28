@@ -1,4 +1,4 @@
-﻿use crate::tracea::core::config::PipelineConfig;
+use crate::tracea::core::config::PipelineConfig;
 use crate::tracea::runtime::manager::{DeviceBackend, KernelArg};
 use std::ffi::c_void;
 
