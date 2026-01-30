@@ -1,11 +1,22 @@
 // K8: Visibility & Occlusion Culling (HZB)
 // Performs frustum culling and HZB occlusion testing for 2D sprites.
 
-struct InstanceData {
-    pos: vec2<f32>,
-    size: vec2<f32>,
-    depth: f32,
-    id: u32,
+struct DrawUniforms {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    border_color: vec4<f32>,
+    glow_color: vec4<f32>,
+    offset: vec2<f32>,
+    scale: f32,
+    border_width: f32,
+    elevation: f32,
+    glow_strength: f32,
+    lut_intensity: f32,
+    mode: u32,
+    is_squircle: u32,
+    time: f32,
+    _pad: f32,
+    _pad2: f32,
 };
 
 struct CullingUniforms {
@@ -15,7 +26,7 @@ struct CullingUniforms {
 };
 
 @group(0) @binding(0) var<uniform> uniforms: CullingUniforms;
-@group(0) @binding(1) var<storage, read> instances: array<InstanceData>;
+@group(0) @binding(1) var<storage, read> instances: array<DrawUniforms>;
 @group(0) @binding(2) var t_hzb: texture_2d<f32>;
 @group(0) @binding(3) var<storage, read_write> visible_indices: array<u32>;
 @group(0) @binding(4) var<storage, read_write> visible_counter: atomic<u32>;
@@ -31,24 +42,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     
     // 1. Frustum Culling
     // Project AABB to clip space
-    let p_min = uniforms.view_proj * vec4<f32>(inst.pos, inst.depth, 1.0);
-    let p_max = uniforms.view_proj * vec4<f32>(inst.pos + inst.size, inst.depth, 1.0);
+    // inst.rect is [x, y, w, h]
+    let p_min = uniforms.view_proj * vec4<f32>(inst.rect.xy, 0.0, 1.0);
+    let p_max = uniforms.view_proj * vec4<f32>(inst.rect.xy + inst.rect.zw, 0.0, 1.0);
     
     // Simplistic clip check
-    if (p_max.x < -1.0 || p_min.x > 1.0 || p_max.y < -1.0 || p_min.y > 1.0) {
+    if (p_max.x < -1.1 || p_min.x > 1.1 || p_max.y < -1.1 || p_min.y > 1.1) {
+        // Return but padded slightly for safety with glow/shadow
         return;
     }
 
-    // 2. HZB Occlusion Culling
-    // Sample max depth from HZB at appropriate mip level based on instance size
-    let uv = (inst.pos + inst.size * 0.5) * 0.5 + 0.5; // Dummy projection to UV
-    let hzb_depth = textureLoad(t_hzb, vec2<i32>(uv * vec2<f32>(textureDimensions(t_hzb))), 0).r;
+    // 2. HZB Occlusion Culling (Currently bypassed/stubbed to ensure basic visibility)
+    // sample max depth etc...
     
-    if (inst.depth > hzb_depth) {
-        // Occluded (behind the closest element in the HZB)
-        // return; 
-    }
-
     // 3. Mark as Visible
     let out_idx = atomicAdd(&visible_counter, 1u);
     visible_indices[out_idx] = idx;

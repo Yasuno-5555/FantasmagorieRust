@@ -37,7 +37,7 @@ impl StandardScheduler {
 
         for (producer_id, consumer_id) in &ctx.graph.dependencies {
             if let (Some(&p_idx), Some(&c_idx)) = (op_map.get(producer_id), op_map.get(consumer_id)) {
-                exec_policies[p_idx].kernel_binding.fuse_with.push(*consumer_id);
+                exec_policies[p_idx].kernel_binding.fuse_with.push(*consumer_id as u64);
             }
         }
 
@@ -59,7 +59,7 @@ impl StandardScheduler {
         }
     }
 
-    fn analyze_liveness(graph: &GraphTopology, device: &DeviceProfile) -> HashMap<u64, usize> {
+    fn analyze_liveness(graph: &GraphTopology, _device: &DeviceProfile) -> HashMap<u64, usize> {
         let mut allocations = HashMap::new();
         
         // Step A: Build Dependency Graph & Lifetime Map

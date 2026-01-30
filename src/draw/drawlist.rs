@@ -155,6 +155,15 @@ pub enum DrawCommand {
         size: Vec2,
     },
 
+    /// Backdrop blur (glassmorphism)
+    BackdropBlur {
+        pos: Vec2,
+        size: Vec2,
+        radii: [f32; 4],
+        color: ColorF,
+        is_squircle: bool,
+    },
+
     /// Dynamic Grid
     Grid {
         pos: Vec2,
@@ -505,6 +514,27 @@ impl DrawList {
     /// Add Aurora background
     pub fn add_aurora(&mut self, pos: Vec2, size: Vec2) {
         self.commands.push(DrawCommand::Aurora { pos, size });
+    }
+
+    /// Add backdrop blur
+    pub fn add_backdrop_blur(&mut self, pos: Vec2, size: Vec2, radius: f32, color: ColorF) {
+        self.commands.push(DrawCommand::BackdropBlur {
+            pos,
+            size,
+            radii: [radius, radius, radius, radius],
+            color,
+            is_squircle: false,
+        });
+    }
+
+    pub fn add_backdrop_blur_ex(&mut self, pos: Vec2, size: Vec2, radii: [f32; 4], color: ColorF, is_squircle: bool) {
+        self.commands.push(DrawCommand::BackdropBlur {
+            pos,
+            size,
+            radii,
+            color,
+            is_squircle,
+        });
     }
 
     /// Add Grid background

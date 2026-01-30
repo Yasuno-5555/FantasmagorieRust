@@ -110,4 +110,16 @@ impl GpuResourceProvider for WgpuResourceProvider {
             },
         );
     }
+
+    fn destroy_buffer(&self, buffer: Self::Buffer) {
+        drop(buffer);
+    }
+
+    fn destroy_texture(&self, texture: Self::Texture) {
+        drop(texture);
+    }
+
+    fn destroy_bind_group(&self, bind_group: Self::BindGroup) {
+        drop(bind_group);
+    }
 }

@@ -23,6 +23,7 @@ struct DrawUniforms {
     is_squircle: u32,
     time: f32,
     _pad: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<uniform> globals: GlobalUniforms;
@@ -178,6 +179,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let final_rgb = mix(mixed_bg.rgb, main_layer.rgb, main_layer.a);
         let final_a = max(mixed_bg.a, main_layer.a);
         final_color = vec4<f32>(final_rgb, final_a);
+    } else if (mode == 3u) { // Image
+        let tex_col = textureSample(t_diffuse, s_diffuse, in.uv);
+        let tex_lin = vec4<f32>(pow(tex_col.rgb, vec3<f32>(2.2)), tex_col.a);
+        final_color = tex_lin * col_lin;
     } else if (mode == 4u) { // Blur (Glassmorphism)
         let center = params.rect.xy + params.rect.zw * 0.5;
         let half_size = params.rect.zw * 0.5;
@@ -218,6 +223,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color = mix(color, highlight, hairline_alpha * highlight.a);
         
         final_color = vec4<f32>(color.rgb, alpha);
+    } else if (mode == 5u) { // ImageLUT (Simplified)
+        let tex_col = textureSample(t_diffuse, s_diffuse, in.uv);
+        let tex_lin = vec4<f32>(pow(tex_col.rgb, vec3<f32>(2.2)), tex_col.a);
+        final_color = tex_lin * col_lin;
     } else if (mode == 6u) { // Arc
         let center = params.rect.xy + params.rect.zw * 0.5;
         let p = in.frag_pos - center;
@@ -228,7 +237,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         
         let d = abs(r - (inner_r + outer_r) * 0.5) - (outer_r - inner_r) * 0.5;
         let alpha = 1.0 - smoothstep(-1.0, 1.0, d);
-        final_color = vec4<f32>(in.color.rgb, in.color.a * alpha);
+        final_color = vec4<f32>(col_lin.rgb, col_lin.a * alpha);
     } else if (mode == 7u) { // Plot
         final_color = col_lin;
     } else if (mode == 8u) { // Heatmap
@@ -267,7 +276,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         
         color = clamp(color * 0.5, vec3<f32>(0.05), vec3<f32>(0.6));
-        final_color = vec4<f32>(color, in.color.a);
+        final_color = vec4<f32>(color, col_lin.a);
+    } else if (mode == 10u) { // Grid
+        let pos = in.frag_pos;
+        let g1 = 40.0;
+        let f1 = abs(fract(pos / g1 - 0.5) - 0.5) / (fwidth(pos / g1) + 0.001);
+        let line1 = 1.0 - min(min(f1.x, f1.y), 1.0);
+        final_color = vec4<f32>(col_lin.rgb, col_lin.a * line1);
     }
 
     // Linear -> sRGB (gamma correction)

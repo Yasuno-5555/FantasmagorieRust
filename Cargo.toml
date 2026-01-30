@@ -5,7 +5,7 @@ edition = "2021"
 description = "Fantasmagorie V5 Crystal - High-performance stateless UI framework"
 
 [workspace]
-members = ["tracea"]
+members = ["src/tracea"]
 license = "MIT"
 
 [lib]
@@ -17,7 +17,7 @@ default = ["opengl"]
 opengl = ["glow", "glutin", "glutin-winit", "raw-window-handle"]
 wgpu = ["dep:wgpu"]
 vulkan = ["dep:ash", "dep:ash-window", "dep:naga", "dep:gpu-allocator", "dep:shaderc"]
-dx12 = ["dep:windows"]
+dx12 = ["dep:windows", "dep:naga"]
 python = ["pyo3"]
 cpp = []
 
@@ -68,7 +68,7 @@ winit = "0.29"
 pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
 image = "0.24"
 pulldown-cmark = "0.10"
-naga = { version = "0.19", features = ["glsl-in", "wgsl-in", "spv-out"], optional = true }
+naga = { version = "0.19", features = ["glsl-in", "wgsl-in", "spv-out", "hlsl-out"], optional = true }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -76,7 +76,7 @@ bincode = "1.3"
 
 # Tracea Dependencies
 # Tracea Dependency
-tracea = { path = "./tracea" }
+tracea = { path = "./src/tracea" }
 
 cpal = "0.15"
 realfft = "3.3"

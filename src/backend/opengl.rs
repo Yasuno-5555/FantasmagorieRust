@@ -76,17 +76,16 @@ float sdSquircle(vec2 p, vec2 b, float r) {
 }
 
 void main() {
-    vec4 color_linear = vec4(pow(v_color.rgb, vec3(2.2)), v_color.a);
+    vec4 color_linear = v_color; // Already linear from vertex shader
     vec4 final_color = vec4(0.0);
 
     if (u_mode == 0) {
         final_color = color_linear;
     }
     else if (u_mode == 1) {
-        // MSDF/SDF Text
-        vec3 msd = texture(u_texture, v_uv).rgb;
-        float sd = max(min(msd.r, msd.g), min(max(msd.r, msd.g), msd.b)); 
-        float alpha = smoothstep(0.4, 0.6, sd);
+        // Standard SDF Text (Single Channel)
+        float dist = texture(u_texture, v_uv).r;
+        float alpha = smoothstep(0.45, 0.55, dist);
         final_color = vec4(color_linear.rgb, color_linear.a * alpha);
     }
     else if (u_mode == 2) {
@@ -127,8 +126,11 @@ void main() {
         vec2 local = v_pos - center;
         float d = sdRoundedBox(local, half_size, u_radii);
         float alpha = 1.0 - smoothstep(-1.0, 1.0, d);
-        vec4 tex_col = texture(u_texture, v_uv) * color_linear;
-        final_color = vec4(pow(tex_col.rgb, vec3(2.2)), tex_col.a * alpha);
+        vec4 tex_col = texture(u_texture, v_uv);
+        // Convert texture to linear if needed (assuming standard sRGB texture)
+        tex_col.rgb = pow(tex_col.rgb, vec3(2.2));
+        final_color = tex_col * color_linear;
+        final_color.a *= alpha;
     }
     else if (u_mode == 4) {
         vec2 center = u_rect.xy + u_rect.zw * 0.5;
@@ -137,8 +139,36 @@ void main() {
         float d = sdRoundedBox(local, half_size, u_radii);
         float alpha = 1.0 - smoothstep(-1.0, 1.0, d);
         float lod = u_border_width;
-        vec4 bg = textureLod(u_texture, v_uv, lod) * color_linear;
-        final_color = vec4(bg.rgb, bg.a * alpha);
+        vec4 bg = textureLod(u_texture, v_uv, lod);
+        bg.rgb = pow(bg.rgb, vec3(2.2));
+        final_color = bg * color_linear;
+        final_color.a *= alpha;
+    }
+    else if (u_mode == 5) {
+        // Image + LUT
+        vec4 tex_col = texture(u_texture, v_uv);
+        tex_col.rgb = pow(tex_col.rgb, vec3(2.2));
+        vec3 lut_col = texture(u_lut, tex_col.rgb).rgb;
+        final_color = vec4(mix(tex_col.rgb, lut_col, u_lut_intensity), tex_col.a) * color_linear;
+    }
+    else if (u_mode == 6) {
+        // Arc
+        vec2 center = u_rect.xy + u_rect.zw * 0.5;
+        vec2 p = v_pos - center;
+        float r = length(p);
+        float inner_r = u_radii.x;
+        float thickness = u_radii.y;
+        float outer_r = inner_r + thickness;
+        float d = abs(r - (inner_r + outer_r) * 0.5) - (outer_r - inner_r) * 0.5;
+        float alpha = 1.0 - smoothstep(-1.0, 1.0, d);
+        final_color = vec4(color_linear.rgb, color_linear.a * alpha);
+    }
+    else if (u_mode == 9) {
+        // Aurora
+        vec2 uv = v_uv;
+        float t = v_pos.x * 0.001 + v_pos.y * 0.001; // Fake time if u_time not available
+        vec3 col = 0.5 + 0.5 * cos(3.0 + uv.xyx + vec3(0, 2, 4));
+        final_color = vec4(col * color_linear.rgb, color_linear.a);
     }
     else if (u_mode == 10) {
         vec2 pos = v_pos;
@@ -350,7 +380,7 @@ impl super::GraphicsBackend for OpenGLBackend {
                 if fm.texture_dirty {
                     self.gl.bind_texture(glow::TEXTURE_2D, Some(self.font_texture));
                     self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-                    self.gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGB8 as i32, fm.atlas.width as i32, fm.atlas.height as i32, 0, glow::RGB, glow::UNSIGNED_BYTE, Some(&fm.atlas.texture_data));
+                    self.gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::R8 as i32, fm.atlas.width as i32, fm.atlas.height as i32, 0, glow::RED, glow::UNSIGNED_BYTE, Some(&fm.atlas.texture_data));
                     fm.texture_dirty = false;
                 }
             });
@@ -417,5 +447,61 @@ impl super::GraphicsBackend for OpenGLBackend {
             }
         }
     }
-    fn update_font_texture(&mut self, _w: u32, _h: u32, _data: &[u8]) {}
+    fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
+        unsafe {
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.font_texture));
+            self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            self.gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::R8 as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RED,
+                glow::UNSIGNED_BYTE,
+                Some(data),
+            );
+        }
+    }
+    fn capture_screenshot(&mut self, path: &str) {
+        unsafe {
+            let mut viewport = [0i32; 4];
+            self.gl.get_parameter_i32_slice(glow::VIEWPORT, &mut viewport);
+            let width = viewport[2] as u32;
+            let height = viewport[3] as u32;
+
+            if width == 0 || height == 0 || width > 8192 || height > 8192 { return; }
+
+            let size = (width * height * 4) as usize;
+            let mut pixels = vec![0u8; size];
+            
+            self.gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+            self.gl.read_pixels(
+                0, 0,
+                width as i32, height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut pixels),
+            );
+
+            // Flip image vertically
+            let mut flipped_pixels = vec![0u8; size];
+            let row_size = (width * 4) as usize;
+            for y in 0..height {
+                let src_y = y as usize;
+                let dst_y = (height - 1 - y) as usize;
+                flipped_pixels[dst_y * row_size..(dst_y + 1) * row_size]
+                    .copy_from_slice(&pixels[src_y * row_size..(src_y + 1) * row_size]);
+            }
+
+            let _ = image::save_buffer(
+                path,
+                &flipped_pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            );
+        }
+    }
 }

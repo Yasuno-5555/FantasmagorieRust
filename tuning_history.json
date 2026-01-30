@@ -1,0 +1,34 @@
+{
+  "Cuda:conv1": {
+    "backend": "Cuda",
+    "config": {
+      "num_stages": 2,
+      "m_tile": 64,
+      "n_tile": 64,
+      "k_tile": 32,
+      "instruction": "None",
+      "swizzle_mode": "None",
+      "quantization": "None",
+      "layout_policy": "RowMajor",
+      "epilogue": [],
+      "force_num_warps": 4,
+      "micro_m": 1,
+      "micro_n": 1,
+      "k_unroll": 1,
+      "prefetch_distance": 0,
+      "cp_async_distance": 0,
+      "barrier_mode": "None",
+      "softmax_granularity": "PerTile",
+      "intrinsic_shape": "None",
+      "vectorize_epilogue": true,
+      "ttg_enabled": false,
+      "attention_variant": "Naive",
+      "gemm_variant": "Naive",
+      "double_buffer": false,
+      "register_strategy": "Array"
+    },
+    "tflops": 0.0,
+    "timestamp": 1769776297,
+    "explanation": "Auto-tuned via MetaTuner"
+  }
+}

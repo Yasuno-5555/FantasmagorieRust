@@ -68,6 +68,7 @@ pub fn create_texture(
     physical_device: vk::PhysicalDevice,
     width: u32,
     height: u32,
+    mip_levels: u32,
     _data: Option<&[u8]>,
     format: vk::Format,
     usage: vk::ImageUsageFlags,
@@ -81,7 +82,7 @@ pub fn create_texture(
                 height,
                 depth: 1,
             })
-            .mip_levels(1)
+            .mip_levels(mip_levels)
             .array_layers(1)
             .format(format)
             .tiling(vk::ImageTiling::OPTIMAL)
@@ -121,7 +122,7 @@ pub fn create_texture(
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask,
                 base_mip_level: 0,
-                level_count: 1,
+                level_count: mip_levels,
                 base_array_layer: 0,
                 layer_count: 1,
             });

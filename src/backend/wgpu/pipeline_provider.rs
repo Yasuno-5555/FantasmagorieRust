@@ -16,6 +16,7 @@ impl GpuPipelineProvider for WgpuPipelineProvider {
     type RenderPipeline = wgpu::RenderPipeline;
     type ComputePipeline = wgpu::ComputePipeline;
     type BindGroupLayout = wgpu::BindGroupLayout;
+    type BindGroup = wgpu::BindGroup;
 
     fn create_render_pipeline(
         &self,
@@ -83,5 +84,9 @@ impl GpuPipelineProvider for WgpuPipelineProvider {
             module: &shader,
             entry_point: "main",
         }))
+    }
+
+    fn destroy_bind_group(&self, bind_group: Self::BindGroup) {
+        drop(bind_group);
     }
 }

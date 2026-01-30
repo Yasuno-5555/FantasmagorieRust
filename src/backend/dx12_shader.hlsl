@@ -27,11 +27,12 @@ cbuffer Constants : register(b0) {
     int is_squircle;     // Added
     
     float glow_strength; // Added
-    float3 _padding;
+    float time;          // Added
+    float2 _padding;     // Updated (to maintain 16-byte alignment or just padding)
 };
 
-Texture2D font_texture : register(t0);
-SamplerState font_sampler : register(s0);
+// Texture2D font_texture : register(t0);
+// SamplerState font_sampler : register(s0);
 
 // Vertex Shader
 PixelInput VSMain(VertexInput input) {
@@ -76,8 +77,9 @@ float4 PSMain(PixelInput input) : SV_TARGET {
     }
     else if (mode == 1) {
         // Text
-        float dist = font_texture.Sample(font_sampler, input.uv).r;
-        float alpha = smoothstep(0.4, 0.6, dist);
+        // float dist = font_texture.Sample(font_sampler, input.uv).r;
+        // float alpha = smoothstep(0.4, 0.6, dist);
+        float alpha = 1.0; 
         final_color = float4(input.color.rgb, input.color.a * alpha);
     }
     else if (mode == 2) {

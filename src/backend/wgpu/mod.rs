@@ -1,7 +1,8 @@
-﻿use std::sync::Arc;
+﻿use std::sync::{Arc, Mutex};
 use crate::core::{ColorF, Vec2};
 use crate::draw::{DrawCommand, DrawList};
 use crate::backend::GraphicsBackend;
+use image; // Ensure image crate is available
 use crate::backend::hal::{GpuResourceProvider, GpuPipelineProvider};
 
 pub mod resource_provider;
@@ -40,7 +41,7 @@ impl Vertex {
 /// Uniform data for shaders
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Uniforms {
+pub struct UniformsWgpu {
     pub projection: [[f32; 4]; 4],
     pub rect: [f32; 4],
     pub radii: [f32; 4],
@@ -77,6 +78,7 @@ pub struct WgpuBackend {
     pub vertex_capacity: usize,
 
     pub font_texture: Option<wgpu::Texture>,
+    pub font_view: Option<wgpu::TextureView>,
     pub font_bind_group: Option<wgpu::BindGroup>,
     pub sampler: wgpu::Sampler,
     
@@ -88,7 +90,7 @@ pub struct WgpuBackend {
     pub jfa_textures: [wgpu::Texture; 2],
     pub jfa_views: [wgpu::TextureView; 2],
     pub backdrop_texture: wgpu::Texture,
-    pub backdrop_view: wgpu::TextureView,
+    pub backdrop_view: Arc<wgpu::TextureView>,
     
     // Performance Control
     pub exposure: f32,
@@ -96,10 +98,359 @@ pub struct WgpuBackend {
     pub fog_density: f32,
     
     pub audio_params_buffer: wgpu::Buffer,
+    pub dummy_history_texture: wgpu::Texture,
     pub dummy_history_view: wgpu::TextureView,
     
     pub start_time: std::time::Instant,
-    pub screenshot_requested: Option<String>,
+    pub screenshot_requested: Mutex<Option<String>>,
+    
+    pub current_encoder: Mutex<Option<wgpu::CommandEncoder>>,
+    pub current_texture: Mutex<Option<wgpu::SurfaceTexture>>,
+    pub current_view: Mutex<Option<wgpu::TextureView>>,
+}
+
+impl crate::backend::hal::GpuResourceProvider for WgpuBackend {
+    type Buffer = wgpu::Buffer;
+    type Texture = wgpu::Texture;
+    type TextureView = wgpu::TextureView;
+    type Sampler = wgpu::Sampler;
+
+    fn create_buffer(&self, size: u64, usage: crate::backend::hal::BufferUsage, label: &str) -> Result<Self::Buffer, String> {
+        self.resources.create_buffer(size, usage, label)
+    }
+
+    fn create_texture(&self, desc: &crate::backend::hal::TextureDescriptor) -> Result<Self::Texture, String> {
+        self.resources.create_texture(desc)
+    }
+
+    fn create_texture_view(&self, texture: &Self::Texture) -> Result<Self::TextureView, String> {
+        self.resources.create_texture_view(texture)
+    }
+
+    fn create_sampler(&self, label: &str) -> Result<Self::Sampler, String> {
+        self.resources.create_sampler(label)
+    }
+
+    fn write_buffer(&self, buffer: &Self::Buffer, offset: u64, data: &[u8]) {
+        self.resources.write_buffer(buffer, offset, data)
+    }
+
+    fn write_texture(&self, texture: &Self::Texture, data: &[u8], width: u32, height: u32) {
+        self.resources.write_texture(texture, data, width, height)
+    }
+}
+
+impl crate::backend::hal::GpuPipelineProvider for WgpuBackend {
+    type RenderPipeline = wgpu::RenderPipeline;
+    type ComputePipeline = wgpu::ComputePipeline;
+    type BindGroupLayout = wgpu::BindGroupLayout;
+    type BindGroup = wgpu::BindGroup;
+
+    fn create_render_pipeline(
+        &self,
+        label: &str,
+        wgsl_source: &str,
+        layout: Option<&Self::BindGroupLayout>,
+    ) -> Result<Self::RenderPipeline, String> {
+        self.pipelines.create_render_pipeline(label, wgsl_source, layout)
+    }
+
+    fn create_compute_pipeline(
+        &self,
+        label: &str,
+        wgsl_source: &str,
+        layout: Option<&Self::BindGroupLayout>,
+    ) -> Result<Self::ComputePipeline, String> {
+        self.pipelines.create_compute_pipeline(label, wgsl_source, layout)
+    }
+}
+
+impl crate::backend::hal::GpuExecutor for WgpuBackend {
+    fn begin_execute(&self) -> Result<(), String> {
+        let output = self.surface.get_current_texture().map_err(|e| e.to_string())?;
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        
+        *self.current_texture.lock().unwrap() = Some(output);
+        *self.current_view.lock().unwrap() = Some(view);
+
+        let encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Fantasmagorie Frame Encoder") });
+        *self.current_encoder.lock().unwrap() = Some(encoder);
+        Ok(())
+    }
+
+    fn end_execute(&self) -> Result<(), String> {
+        let encoder = self.current_encoder.lock().unwrap().take().ok_or("No active encoder")?;
+        self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
+    fn draw(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        vertex_count: u32,
+        _uniform_data: &[u8],
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        
+        // We use a temporary pass for each draw for now.
+        // In a real implementation, we'd batch these.
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Geometry Draw"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.hdr_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load, // We must Load to preserve previous draws in the batch
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        rpass.set_pipeline(pipeline);
+        if let Some(bg) = bind_group {
+            rpass.set_bind_group(0, bg, &[]);
+        }
+        rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        rpass.draw(0..vertex_count, 0..1);
+        Ok(())
+    }
+
+    fn dispatch(
+        &self,
+        pipeline: &Self::ComputePipeline,
+        _bind_group: Option<&Self::BindGroupLayout>,
+        groups: [u32; 3],
+        _push_constants: &[u8],
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { 
+            label: Some("Compute Task"),
+            timestamp_writes: None,
+        });
+        cpass.set_pipeline(pipeline);
+        cpass.dispatch_workgroups(groups[0], groups[1], groups[2]);
+        Ok(())
+    }
+
+    fn copy_texture(
+        &self,
+        src: &Self::Texture,
+        dst: &Self::Texture,
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        
+        encoder.copy_texture_to_texture(
+            src.as_image_copy(),
+            dst.as_image_copy(),
+            src.size(),
+        );
+        Ok(())
+    }
+
+    fn generate_mipmaps(&self, _texture: &Self::Texture) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn create_bind_group(
+        &self,
+        layout: &Self::BindGroupLayout,
+        buffers: &[&Self::Buffer],
+        textures: &[&Self::TextureView],
+        samplers: &[&Self::Sampler],
+    ) -> Result<Self::BindGroup, String> {
+        let mut entries = Vec::new();
+        
+        // Binding 0: Uniform Buffer (First buffer)
+        if let Some(buf) = buffers.first() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            });
+        }
+
+        // Binding 1: Main Texture (First texture, usually Font or Atlas)
+        if let Some(tex) = textures.first() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(tex),
+            });
+        }
+
+        // Binding 2: Main Sampler (First sampler)
+        if let Some(samp) = samplers.first() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(samp),
+            });
+        }
+
+        // Binding 3: Secondary Texture (Second texture or Fallback Backdrop)
+        let secondary_tex = textures.get(1).map(|&t| t).unwrap_or(&self.backdrop_view);
+        entries.push(wgpu::BindGroupEntry {
+            binding: 3,
+            resource: wgpu::BindingResource::TextureView(secondary_tex),
+        });
+
+        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Dynamic Bind Group"),
+            layout,
+            entries: &entries,
+        }))
+    }
+
+    fn get_font_view(&self) -> &Self::TextureView {
+        self.font_view.as_ref().expect("Font view not initialized")
+    }
+
+    fn get_backdrop_view(&self) -> &Self::TextureView {
+        &self.backdrop_view
+    }
+
+    fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout {
+        &self.bind_group_layout
+    }
+
+    fn get_default_render_pipeline(&self) -> &Self::RenderPipeline {
+        &self.main_pipeline
+    }
+
+    fn get_default_sampler(&self) -> &Self::Sampler {
+        &self.sampler
+    }
+
+    fn resolve(&mut self) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        
+        let view_guard = self.current_view.lock().unwrap();
+        let view = view_guard.as_ref().ok_or("No active swapchain view")?;
+
+        // K4: Cinematic Resolve Compute Pass
+        {
+            let k4_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("K4 Bind Group"),
+                layout: &self.compute.k4_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                    // Placeholder: SDF view not implemented here yet (requires JFA). using hdr as dummy/fallback?
+                    // Actually we have self.sdf_view. But is it populated?
+                    // JFA was removed from Orchestrator logic.
+                    // For now, assume SDF is 0 (use hdr_view or sdf_view empty).
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.sdf_view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.dummy_history_view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(view) },
+                    wgpu::BindGroupEntry { binding: 6, resource: self.audio_params_buffer.as_entire_binding() },
+                ],
+            });
+
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("K4 Resolver Pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&self.compute.k4_pipeline);
+            compute_pass.set_bind_group(0, &k4_bind_group, &[]);
+            
+            // Push constants? K4 uses them (exposure, gamma...).
+            let k4_pc = [self.exposure, self.gamma, self.fog_density, 0.0];
+            compute_pass.set_push_constants(0, bytemuck::cast_slice(&k4_pc));
+            
+            let width = self.surface_config.width;
+            let height = self.surface_config.height;
+            compute_pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
+        }
+        Ok(())
+    }
+
+    fn present(&self) -> Result<(), String> {
+        // Screenshot Capture Logic
+        if let Some(path) = self.screenshot_requested.lock().unwrap().take() {
+            let width = self.surface_config.width;
+            let height = self.surface_config.height;
+            let bytes_per_pixel = 4; // Rgba8 or Bgra8
+            let bytes_per_row = ((width * bytes_per_pixel) + 255) & !255;
+            let buffer_size = (bytes_per_row * height) as u64;
+
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Screenshot Encoder") });
+            
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Screenshot Buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            // Copy from current swapchain texture
+            let tex_guard = self.current_texture.lock().unwrap();
+            if let Some(texture) = tex_guard.as_ref() {
+                encoder.copy_texture_to_buffer(
+                    wgpu::ImageCopyTexture {
+                        texture: &texture.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::ImageCopyBuffer {
+                        buffer: &buffer,
+                        layout: wgpu::ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: Some(bytes_per_row),
+                            rows_per_image: None,
+                        },
+                    },
+                    wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                );
+            }
+            self.queue.submit(Some(encoder.finish()));
+
+            let slice = buffer.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |res| {
+                tx.send(res).unwrap();
+            });
+            self.device.poll(wgpu::Maintain::Wait);
+            rx.recv().unwrap().unwrap();
+
+            let data = slice.get_mapped_range();
+            let mut image_data = Vec::with_capacity((width * height * 4) as usize);
+            
+            // Unpad rows and Swap BGR to RGB if needed (assuming Bgra8Unorm surface)
+            for y in 0..height {
+                let row_start = (y * bytes_per_row) as usize;
+                let row_end = row_start + (width * 4) as usize;
+                let row = &data[row_start..row_end];
+                // Check surface format
+                if self.surface_config.format == wgpu::TextureFormat::Bgra8Unorm || self.surface_config.format == wgpu::TextureFormat::Bgra8UnormSrgb {
+                    for chunk in row.chunks(4) {
+                        image_data.push(chunk[2]); // R
+                        image_data.push(chunk[1]); // G
+                        image_data.push(chunk[0]); // B
+                        image_data.push(chunk[3]); // A
+                    }
+                } else {
+                    image_data.extend_from_slice(row);
+                }
+            }
+            
+            // Save using image crate
+            image::save_buffer(&path, &image_data, width, height, image::ColorType::Rgba8).map_err(|e| e.to_string())?;
+            println!("Screenshot saved to {}", path);
+        }
+
+        let mut tex_guard = self.current_texture.lock().unwrap();
+        let texture = tex_guard.take().ok_or("No active texture to present")?;
+        texture.present();
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for WgpuBackend {
@@ -194,6 +545,16 @@ impl WgpuBackend {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -233,7 +594,7 @@ impl WgpuBackend {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<Uniforms>() as u64,
+            size: std::mem::size_of::<UniformsWgpu>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -246,8 +607,15 @@ impl WgpuBackend {
             mapped_at_creation: false,
         });
 
+        // --- Sampler ---
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Font Sampler"),
+            label: Some("Main Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -333,10 +701,10 @@ impl WgpuBackend {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let backdrop_view = backdrop_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let backdrop_view = Arc::new(backdrop_texture.create_view(&wgpu::TextureViewDescriptor::default()));
 
         let font_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Font Bind Group"),
@@ -345,6 +713,7 @@ impl WgpuBackend {
                 wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&font_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&font_view) }, // Dummy for Binding 3
             ],
         });
 
@@ -367,9 +736,10 @@ impl WgpuBackend {
         });
         let dummy_history_view = dummy_history.create_view(&wgpu::TextureViewDescriptor::default());
 
+
         Ok(Self {
-            device,
-            queue,
+            device: device,
+            queue: queue,
             surface,
             surface_config,
             resources,
@@ -381,6 +751,7 @@ impl WgpuBackend {
             vertex_buffer,
             vertex_capacity,
             font_texture: Some(font_texture),
+            font_view: Some(font_view), // Storing the view
             font_bind_group: Some(font_bind_group),
             sampler,
             hdr_texture,
@@ -390,14 +761,18 @@ impl WgpuBackend {
             jfa_textures,
             jfa_views,
             backdrop_texture,
-            backdrop_view,
-            audio_params_buffer,
-            dummy_history_view,
+            backdrop_view: backdrop_view,
             exposure: 1.0,
             gamma: 2.2,
-            fog_density: 0.0,
+            fog_density: 0.05,
+            audio_params_buffer,
+            dummy_history_texture: dummy_history,
+            dummy_history_view,
             start_time: std::time::Instant::now(),
-            screenshot_requested: None,
+            screenshot_requested: Mutex::new(None),
+            current_encoder: Mutex::new(None),
+            current_texture: Mutex::new(None),
+            current_view: Mutex::new(None),
         })
     }
 
@@ -441,13 +816,6 @@ impl WgpuBackend {
 impl GraphicsBackend for WgpuBackend {
     fn name(&self) -> &str { "WGPU (Unified)" }
 
-    fn submit(&mut self, _packets: &[crate::renderer::packet::DrawPacket]) {
-        // In the unified backend, submit is the primary way to draw.
-        // For now, we will use it to prepare commands that will be executed in render.
-        // Or actually, submit should probably do its own queue submission.
-        println!("⚠️ WGPU submit() called with {} packets - mapping to high-perf path", _packets.len());
-    }
-
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         if width != self.surface_config.width || height != self.surface_config.height {
             self.surface_config.width = width;
@@ -455,399 +823,39 @@ impl GraphicsBackend for WgpuBackend {
             self.surface.configure(&self.device, &self.surface_config);
         }
 
-        let output = match self.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
+        let orchestrator = crate::renderer::orchestrator::RenderOrchestrator::new();
+        let tasks = orchestrator.plan(dl);
+        let time = self.start_time.elapsed().as_secs_f32();
 
-        // Resource Tracking
-        struct PreparedDraw {
-            bind_group: wgpu::BindGroup,
-            v_buf: wgpu::Buffer,
-            #[allow(dead_code)]
-            u_buf: wgpu::Buffer,
-            vertex_count: u32,
+        if let Err(e) = orchestrator.execute(self, &tasks, time, width, height) {
+            eprintln!("WGPU Render Error: {}", e);
         }
-        let mut prepared = Vec::new();
-
-        for cmd in dl.commands() {
-            match cmd {
-                DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, .. } => {
-                    let uniforms = Uniforms {
-                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
-                        rect: [pos.x, pos.y, size.x, size.y],
-                        radii: *radii,
-                        border_color: [border_color.r, border_color.g, border_color.b, border_color.a],
-                        glow_color: [glow_color.r, glow_color.g, glow_color.b, glow_color.a],
-                        offset: [0.0; 2],
-                        scale: 1.0,
-                        border_width: *border_width,
-                        elevation: *elevation,
-                        glow_strength: *glow_strength,
-                        lut_intensity: 0.0,
-                        mode: 2, // Shape
-                        is_squircle: if *is_squircle { 1 } else { 0 },
-                        time: self.start_time.elapsed().as_secs_f32(),
-                        _pad: 0.0,
-                        _pad2: 0.0,
-                    };
-                    let verts = Self::quad_vertices(*pos, *size, *color);
-                    
-                    use wgpu::util::DeviceExt;
-                    let u_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Temp Uniforms"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                    let v_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Temp Vertices"),
-                        contents: bytemuck::cast_slice(&verts),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                    
-                    let font_view = self.font_texture.as_ref().unwrap().create_view(&wgpu::TextureViewDescriptor::default());
-                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Temp Bind Group"),
-                        layout: &self.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: u_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&font_view) },
-                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                        ],
-                    });
-
-                    prepared.push(PreparedDraw { bind_group, v_buf, u_buf, vertex_count: verts.len() as u32 });
-                }
-                DrawCommand::Text { pos, size, uv, color } => {
-                     let uniforms = Uniforms {
-                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
-                        rect: [pos.x, pos.y, size.x, size.y],
-                        radii: [0.0; 4],
-                        border_color: [color.r, color.g, color.b, color.a],
-                        glow_color: [0.0; 4],
-                        offset: [0.0; 2],
-                        scale: 1.0,
-                        border_width: 0.0,
-                        elevation: 0.0,
-                        glow_strength: 0.0,
-                        lut_intensity: 0.0,
-                        mode: 1, // Text
-                        is_squircle: 0,
-                        time: 0.0,
-                        _pad: 0.0,
-                        _pad2: 0.0,
-                    };
-                    let verts = Self::quad_vertices_uv(*pos, *size, *uv, *color);
-                    
-                    use wgpu::util::DeviceExt;
-                    let u_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Text Uniforms"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                    let v_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Text Vertices"),
-                        contents: bytemuck::cast_slice(&verts),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                    
-                    let font_view = self.font_texture.as_ref().unwrap().create_view(&wgpu::TextureViewDescriptor::default());
-                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Text Bind Group"),
-                        layout: &self.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: u_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&font_view) },
-                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                        ],
-                    });
-                    prepared.push(PreparedDraw { bind_group, v_buf, u_buf, vertex_count: verts.len() as u32 });
-                }
-                DrawCommand::Aurora { pos, size } => {
-                     let uniforms = Uniforms {
-                        projection: Self::ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0),
-                        rect: [pos.x, pos.y, size.x, size.y],
-                        radii: [0.0; 4],
-                        border_color: [0.0; 4],
-                        glow_color: [0.0; 4],
-                        offset: [0.0; 2],
-                        scale: 1.0,
-                        border_width: 0.0,
-                        elevation: 0.0,
-                        glow_strength: 0.0,
-                        lut_intensity: 0.0,
-                        mode: 9, // Aurora
-                        is_squircle: 0,
-                        time: self.start_time.elapsed().as_secs_f32(),
-                        _pad: 0.0,
-                        _pad2: 0.0,
-                    };
-                    let verts = Self::quad_vertices(*pos, *size, ColorF::white());
-                    
-                    use wgpu::util::DeviceExt;
-                    let u_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Aurora Uniforms"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                    let v_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Aurora Vertices"),
-                        contents: bytemuck::cast_slice(&verts),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                    
-                    let font_view = self.font_texture.as_ref().unwrap().create_view(&wgpu::TextureViewDescriptor::default());
-                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Aurora Bind Group"),
-                        layout: &self.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: u_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&font_view) },
-                            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                        ],
-                    });
-                    prepared.push(PreparedDraw { bind_group, v_buf, u_buf, vertex_count: verts.len() as u32 });
-                }
-                _ => {}
-            }
-        }
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Main Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.12, a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_pipeline(&self.main_pipeline);
-            for p in &prepared {
-                render_pass.set_bind_group(0, &p.bind_group, &[]);
-                render_pass.set_vertex_buffer(0, p.v_buf.slice(..));
-                render_pass.draw(0..p.vertex_count, 0..1);
-            }
-        }
-
-        // --- K5: Jump Flooding Algorithm (SDF Generation) ---
-        // Basic implementation: 8 steps for 1024x1024
-        let steps = [512, 256, 128, 64, 32, 16, 8, 4, 2, 1];
-        let mut ping_pong = 0;
-        
-        for &step in &steps {
-            if step > width.max(height) as i32 { continue; }
-            
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("JFA Pass Bind Group"),
-                layout: &self.compute.k5_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.jfa_views[ping_pong]) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.jfa_views[ping_pong]) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.jfa_views[1 - ping_pong]) },
-                ],
-            });
-
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("JFA Compute Pass"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&self.compute.k5_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-            
-            // Push Constants: width, height, jfa_step, ping_pong_idx, intensity, decay, radius, _pad
-            let jfa_pc = [width, height, step as u32, ping_pong as u32, 100u32, 100u32, 100u32, 0u32]; 
-            // Wait, JFAUniforms uses broad types, let's just cast carefully
-            let mut pc_data = [0u32; 8];
-            pc_data[0] = width;
-            pc_data[1] = height;
-            pc_data[2] = step as u32;
-            pc_data[3] = ping_pong as u32;
-            // intensity, decay, radius are f32 in JFAUniforms but let's use bits
-            pc_data[4] = (1.0f32).to_bits(); // intensity
-            pc_data[5] = (0.95f32).to_bits(); // decay
-            pc_data[6] = (50.0f32).to_bits(); // radius
-            
-            compute_pass.set_push_constants(0, bytemuck::cast_slice(&pc_data));
-            compute_pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
-            
-            ping_pong = 1 - ping_pong;
-        }
-
-        // Copy final JFA result to sdf_texture
-        encoder.copy_texture_to_texture(
-            wgpu::ImageCopyTexture {
-                texture: &self.jfa_textures[ping_pong],
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::ImageCopyTexture {
-                texture: &self.sdf_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-        );
-
-        // --- K4: Cinematic Resolve Compute Pass ---
-        {
-            let k4_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("K4 Bind Group"),
-                layout: &self.compute.k4_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.sdf_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.dummy_history_view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 6, resource: self.audio_params_buffer.as_entire_binding() },
-                ],
-            });
-
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("K4 Resolver Pass"),
-                timestamp_writes: None,
-            });
-            compute_pass.set_pipeline(&self.compute.k4_pipeline);
-            compute_pass.set_bind_group(0, &k4_bind_group, &[]);
-            
-            let k4_pc = [self.exposure, self.gamma, self.fog_density, 0.0];
-            compute_pass.set_push_constants(0, bytemuck::cast_slice(&k4_pc));
-            
-            compute_pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
-        }
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        // Handle deferred screenshot
-        if let Some(path) = self.screenshot_requested.take() {
-            // 1. Create buffer
-            let width = self.surface_config.width;
-            let height = self.surface_config.height;
-            let bytes_per_pixel = 4;
-            let bytes_per_row = if (width * bytes_per_pixel) % 256 != 0 {
-                ((width * bytes_per_pixel) / 256 + 1) * 256
-            } else {
-                width * bytes_per_pixel
-            };
-            let size = (bytes_per_row * height) as u64;
-
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Screenshot Buffer"),
-                size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-
-            // 2. Refresh current texture for copy
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Screenshot Copy Encoder") });
-            encoder.copy_texture_to_buffer(
-                wgpu::ImageCopyTexture {
-                    texture: &output.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::ImageCopyBuffer {
-                    buffer: &buffer,
-                    layout: wgpu::ImageDataLayout {
-                        offset: 0,
-                        bytes_per_row: Some(bytes_per_row),
-                        rows_per_image: Some(height),
-                    },
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                }
-            );
-            self.queue.submit(std::iter::once(encoder.finish()));
-
-            // 3. Map and save
-            let buffer_slice = buffer.slice(..);
-            let (tx, rx) = std::sync::mpsc::channel();
-            buffer_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
-            self.device.poll(wgpu::Maintain::Wait);
-
-            if let Ok(Ok(())) = rx.recv() {
-                let data = buffer_slice.get_mapped_range();
-                let mut image_data = Vec::with_capacity((width * height * 4) as usize);
-                for row in 0..height {
-                    let start = (row * bytes_per_row) as usize;
-                    let end = start + (width * 4) as usize;
-                    image_data.extend_from_slice(&data[start..end]);
-                }
-
-                // Convert BGRA to RGBA if needed
-                let format = self.surface_config.format;
-                if format == wgpu::TextureFormat::Bgra8Unorm || format == wgpu::TextureFormat::Bgra8UnormSrgb {
-                    for chunk in image_data.chunks_exact_mut(4) {
-                        let tmp = chunk[0];
-                        chunk[0] = chunk[2];
-                        chunk[2] = tmp;
-                    }
-                }
-
-                if let Err(e) = image::save_buffer(
-                    &path,
-                    &image_data,
-                    width,
-                    height,
-                    image::ColorType::Rgba8,
-                ) {
-                    eprintln!("Failed to save deferred screenshot: {}", e);
-                } else {
-                    println!("Deferred screenshot saved to {}", path);
-                }
-            }
-        }
-
-        output.present();
     }
 
     fn update_audio_data(&mut self, spectrum: &[f32]) {
-        // AudioParams is 16 bytes: bass, mid, high, _pad (all f32)
-        // We calculate these from the spectrum data
         if spectrum.len() < 3 { return; }
-        
         let bass = spectrum[0..spectrum.len()/3].iter().fold(0.0, |a, &b| a + b) / (spectrum.len() as f32 / 3.0);
         let mid = spectrum[spectrum.len()/3..2*spectrum.len()/3].iter().fold(0.0, |a, &b| a + b) / (spectrum.len() as f32 / 3.0);
         let high = spectrum[2*spectrum.len()/3..].iter().fold(0.0, |a, &b| a + b) / (spectrum.len() as f32 / 3.0);
-        
         let params = [bass, mid, high, 0.0f32];
         self.queue.write_buffer(&self.audio_params_buffer, 0, bytemuck::cast_slice(&params));
     }
 
-    fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
-        let mut recreate = false;
-        if let Some(tex) = &self.font_texture {
-            let size = tex.size();
-            if size.width != width || size.height != height {
-                recreate = true;
-            }
-        } else {
-            recreate = true;
-        }
+    fn capture_screenshot(&mut self, path: &str) {
+        *self.screenshot_requested.lock().unwrap() = Some(path.to_string());
+    }
 
-        if recreate {
-            let font_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+    fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
+        let needs_resize = if let Some(tex) = &self.font_texture {
+            tex.width() != width || tex.height() != height
+        } else {
+            true
+        };
+
+        if needs_resize {
+            let new_texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Font Atlas"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -855,42 +863,31 @@ impl GraphicsBackend for WgpuBackend {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            self.font_texture = Some(font_texture);
+            let new_view = new_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.font_texture = Some(new_texture);
+            self.font_view = Some(new_view);
             
-            // Note: font_bind_group is recreated per-draw in the current render implementation,
-            // but we update the cached one anyway if we ever switch to a more efficient path.
-            let font_view = self.font_texture.as_ref().unwrap().create_view(&wgpu::TextureViewDescriptor::default());
-            let font_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Font Bind Group"),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: self.uniform_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&font_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                ],
+            // Recreate bind group to avoid stale texture references
+            let entries = [
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniform_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(self.font_view.as_ref().unwrap()) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.backdrop_view) },
+            ];
+            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                 label: Some("Dynamic Bind Group"),
+                 layout: &self.bind_group_layout,
+                 entries: &entries,
             });
-            self.font_bind_group = Some(font_bind_group);
+            self.font_bind_group = Some(bg);
         }
 
         if let Some(tex) = &self.font_texture {
-            self.queue.write_texture(
-                wgpu::ImageCopyTexture {
-                    texture: tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
+             self.queue.write_texture(
+                wgpu::ImageCopyTexture { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 data,
-                wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width),
-                    rows_per_image: Some(height),
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
+                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(width), rows_per_image: Some(height) },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             );
         }
     }

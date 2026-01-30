@@ -98,6 +98,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 event: WindowEvent::RedrawRequested,
                 ..
             } => {
+                // Screenshot verification logic
+                static mut FRAME_COUNT: u32 = 0;
+                unsafe {
+                    FRAME_COUNT += 1;
+                    if FRAME_COUNT == 10 {
+                        println!("Requesting screenshot...");
+                        *backend.screenshot_requested.lock().unwrap() = Some("wgpu_screenshot.png".to_string());
+                    }
+                    if FRAME_COUNT == 11 {
+                        println!("Exiting after screenshot.");
+                        elwt.exit();
+                    }
+                }
+
                 fanta_rust::view::interaction::update_input(
                     cursor_x,
                     cursor_y,
@@ -121,12 +135,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let elapsed = start_time.elapsed().as_secs_f32();
                 
                 // Centered Glassmorphism Panel
-                let panel = ui.column()
+                let panel = ui.backdrop_blur()
                     .size(800.0, 500.0)
                     .align(Align::Center)
                     .bg(ColorF::new(1.0, 1.0, 1.0, 0.05))
                     .squircle(32.0)
-                    .backdrop_blur(15.0)
                     .border(1.0, ColorF::new(1.0, 1.0, 1.0, 0.2))
                     .elevation(30.0)
                     .padding(40.0)
@@ -225,6 +238,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Use generic render method
                     backend.render(&dl, current_width, current_height);
+
+                    // Automatic Screenshot for Verification
+                    if start_time.elapsed().as_secs_f32() > 2.0 {
+                        println!("Capturing verification screenshot...");
+                        backend.capture_screenshot("wgpu_screenshot.png");
+                        // We need one more frame to process the screenshot in WgpuBackend::render
+                        // This demo calls render every frame, so next frame will handle it.
+                    }
+                    
+                    if start_time.elapsed().as_secs_f32() > 2.5 {
+                        println!("Demo completed successfully.");
+                        elwt.exit();
+                    }
                 }
             }
             _ => {}

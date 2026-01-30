@@ -71,7 +71,8 @@ struct ConstantBuffer {
     elevation: f32,
     is_squircle: i32,   // Added
     glow_strength: f32, // Added
-    _padding: [f32; 27], // Fill to 256 bytes (64 floats total). 40 used. 24 left?
+    time: f32,          // Added
+    _padding: [f32; 26], // Fill to 256 bytes
                         // Wait, 40 floats * 4 = 160 bytes.
                         // 256 - 160 = 96 bytes. 96/4 = 24 floats.
                         // Let's verify align. 160 is 16-byte aligned.
@@ -104,6 +105,7 @@ impl Dx12Backend {
         let mut device: Option<ID3D12Device> = None;
         D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)?;
         let device = device.unwrap();
+        println!("✅ DirectX 12 device created: {:?}", device);
 
         println!("✅ DirectX 12 device created");
 
@@ -169,7 +171,7 @@ impl Dx12Backend {
             device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?,
         ];
 
-        // Create Root Signature
+        println!("   ... Creating Root Signature");
         let root_signature = Self::create_root_signature(&device)?;
 
         // Create Command List
@@ -214,7 +216,7 @@ impl Dx12Backend {
             StrideInBytes: std::mem::size_of::<Vertex>() as u32,
         };
 
-        // Compile Shader & Pipeline
+        println!("   ... Creating Pipeline State");
         let pipeline_state = Some(Self::create_pipeline_state(&device, &root_signature)?);
 
         // Create Fence
@@ -282,18 +284,19 @@ impl Dx12Backend {
     }
 
     unsafe fn create_root_signature(device: &ID3D12Device) -> Result<ID3D12RootSignature> {
-        // Root parameter for CBV
-        let root_parameters = [D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
-                    Num32BitValues: 64, // 256 bytes
+        let root_parameters = [
+            D3D12_ROOT_PARAMETER {
+                ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+                Anonymous: D3D12_ROOT_PARAMETER_0 {
+                    Constants: D3D12_ROOT_CONSTANTS {
+                        ShaderRegister: 0,
+                        RegisterSpace: 0,
+                        Num32BitValues: 64, // 256 bytes
+                    },
                 },
+                ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
             },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        }];
+        ];
 
         let root_sig_desc = D3D12_ROOT_SIGNATURE_DESC {
             NumParameters: root_parameters.len() as u32,
@@ -425,14 +428,7 @@ impl Dx12Backend {
         ];
 
         let mut pso_desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-            pRootSignature: std::mem::transmute_copy(root_signature), // Unsafe copy for C compatible struct?
-            // Wait, windows-rs expects Option<ID3D12RootSignature> reference logic?
-            // Actually it takes ManuallyDrop or raw interface usually.
-            // Let's use simple assignment if compatible.
-            // checking Struct definition... it expects a raw pointer usually or interface.
-            // In windows-rs 0.52 pRootSignature is ManuallyDrop<Option<ID3D12RootSignature>>.
-            // So:
-            // pRootSignature: ManuallyDrop::new(Some(root_signature.clone())),
+            pRootSignature: ManuallyDrop::new(Some(root_signature.clone())),
             VS: D3D12_SHADER_BYTECODE {
                 pShaderBytecode: vs_blob.as_ref().unwrap().GetBufferPointer(),
                 BytecodeLength: vs_blob.as_ref().unwrap().GetBufferSize(),
@@ -500,7 +496,6 @@ impl Dx12Backend {
             ..Default::default()
         };
 
-        pso_desc.pRootSignature = ManuallyDrop::new(Some(root_signature.clone()));
 
         device.CreateGraphicsPipelineState(&pso_desc)
     }
@@ -743,13 +738,15 @@ impl super::GraphicsBackend for Dx12Backend {
                         elevation: 0.0,
                         is_squircle: 0,
                         glow_strength: 0.0,
-                        _padding: [0.0; 27],
+                        time: 0.0,
+                        _padding: [0.0; 26],
                     };
 
                     match cmd {
-            DrawCommand::Aurora { .. } => {
-                // DX12 implementation placeholder
-            }
+                DrawCommand::Aurora { .. } => {
+                    // DX12 implementation placeholder
+                    cb_data.mode = 5; // Aurora
+                }
                         DrawCommand::RoundedRect {
                             pos,
                             size,
@@ -780,6 +777,7 @@ impl super::GraphicsBackend for Dx12Backend {
                             cb_data.elevation = *elevation;
                             cb_data.is_squircle = if *is_squircle { 1 } else { 0 };
                             cb_data.glow_strength = *glow_strength;
+                            cb_data.time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f32(); // Simple time
                         }
                         DrawCommand::Text {
                             pos,

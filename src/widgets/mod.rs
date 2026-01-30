@@ -406,6 +406,13 @@ impl<'a> UIContext<'a> {
         BoxBuilder { view }
     }
 
+    /// Create a backdrop blur container
+    pub fn backdrop_blur(&mut self) -> BoxBuilder<'a> {
+        let b = self.column();
+        b.view.backdrop_blur.set(20.0); // Default blur
+        b
+    }
+
     /// Create text label
     pub fn text(&mut self, text: &'a str) -> TextBuilder<'a> {
         let id = ID::from_u64(self.next_id);

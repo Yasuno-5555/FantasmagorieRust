@@ -30,6 +30,9 @@ var u_texture: texture_2d<f32>;
 @group(0) @binding(2)
 var u_sampler: sampler;
 
+@group(0) @binding(3)
+var u_backdrop_texture: texture_2d<f32>;
+
 struct VertexInput {
     @location(0) pos: vec2<f32>,
     @location(1) uv: vec2<f32>,
@@ -199,9 +202,27 @@ fn mode_blur(col: vec4<f32>, world_pos: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     let edge_aa = 1.0;
     let alpha_mask = 1.0 - smoothstep(-edge_aa, edge_aa, d);
     
+    // Backdrop Blur (New: Manual Box Blur via textureLoad)
+    // Non-filterable textures can't use textureSample / textureSampleLevel
+    let dims = vec2<f32>(textureDimensions(u_backdrop_texture));
+    let pixel_coords = vec2<i32>(uv * dims);
+    
+    var blurred_bg = vec3<f32>(0.0);
+    let blur_radius = 4;
+    var weight = 0.0;
+    
+    for (var i = -blur_radius; i <= blur_radius; i++) {
+        for (var j = -blur_radius; j <= blur_radius; j++) {
+            let offset = vec2<i32>(i * 4, j * 4); // Spread out for more blur
+            blurred_bg += textureLoad(u_backdrop_texture, pixel_coords + offset, 0).rgb;
+            weight += 1.0;
+        }
+    }
+    blurred_bg /= weight;
+    
     // Procedural Frost Grain
     let grain = (hash(world_pos * 0.5 + vec2<f32>(uniforms.time * 0.01)) - 0.5) * 0.04;
-    var glass_col = col + grain;
+    var glass_col = vec4<f32>(mix(blurred_bg, col.rgb, 0.4), col.a) + grain;
     
     // Liquid Fresnel: Catching light on the edges
     // 1. Sharp Hairline (Outer)
@@ -212,9 +233,9 @@ fn mode_blur(col: vec4<f32>, world_pos: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     let inner_glow = 1.0 - smoothstep(-15.0, 0.0, d);
     let highlight_soft = vec4<f32>(1.0, 1.0, 1.0, 0.15) * inner_glow * alpha_mask;
     
-    glass_col = mix(glass_col, vec4<f32>(1.0), (highlight_sharp.a + highlight_soft.a) * 0.5);
+    var final_glass = mix(glass_col, vec4<f32>(1.0), (highlight_sharp.a + highlight_soft.a) * 0.5);
     
-    return vec4<f32>(glass_col.rgb, (base_alpha + highlight_sharp.a * 0.2) * alpha_mask);
+    return vec4<f32>(final_glass.rgb, (base_alpha + highlight_sharp.a * 0.2) * alpha_mask);
 }
 
 fn mode_arc(col: vec4<f32>, world_pos: vec2<f32>) -> vec4<f32> {

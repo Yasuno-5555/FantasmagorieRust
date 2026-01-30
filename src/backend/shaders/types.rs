@@ -35,7 +35,7 @@ pub struct CinematicParams {
 
 /// Audio reactive parameters
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
 pub struct AudioParams {
     pub bass: f32,
     pub mid: f32,
@@ -48,6 +48,8 @@ pub struct AudioParams {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct DrawUniforms {
+    /// MVP projection matrix (64 bytes)
+    pub projection: [f32; 16],
     /// Rect bounds: x, y, w, h (16 bytes)
     pub rect: [f32; 4],
     /// Corner radii: tl, tr, br, bl (16 bytes)  
@@ -72,8 +74,10 @@ pub struct DrawUniforms {
     pub mode: i32,
     /// Is squircle flag (4 bytes)
     pub is_squircle: i32,
-    /// Padding (4 bytes)
-    pub _pad: i32,
+    /// Time in seconds (4 bytes)
+    pub time: f32,
+    /// Padding (8 bytes)
+    pub _pad: [f32; 2],
 }
 // Total: 16*4 + 8 + 4*7 + 4 = 104 bytes ✅ Under 128B limit
 

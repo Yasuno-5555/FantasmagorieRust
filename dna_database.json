@@ -1,0 +1,25 @@
+{
+  "strategies": {
+    "conv2d_fma:Synthesized_Lattice": {
+      "tile_sizes": {
+        "ow": 32,
+        "n": 128,
+        "r": 64,
+        "s": 32,
+        "ic": 32,
+        "oh": 32,
+        "oc": 64
+      },
+      "loop_order": [
+        "n",
+        "oh",
+        "ow",
+        "oc",
+        "r",
+        "s",
+        "ic"
+      ],
+      "spatial_map": {}
+    }
+  }
+}
