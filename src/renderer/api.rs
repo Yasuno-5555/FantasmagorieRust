@@ -1,4 +1,4 @@
-use crate::core::Vec2;
+﻿use crate::core::Vec2;
 use crate::backend::GraphicsBackend;
 use crate::config::{EngineConfig, Profile, Pipeline};
 use super::frame::{FrameDescription, RenderCommand};

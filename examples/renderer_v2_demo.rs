@@ -1,4 +1,4 @@
-use fanta_rust::backend::{GraphicsBackend, WgpuBackend};
+﻿use fanta_rust::backend::{GraphicsBackend, WgpuBackend};
 use fanta_rust::renderer::types::{Rect, Color};
 use fanta_rust::prelude::*;
 use std::sync::Arc;

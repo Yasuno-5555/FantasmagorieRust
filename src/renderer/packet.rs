@@ -1,4 +1,4 @@
-use super::types::*;
+﻿use super::types::*;
 
 /// A complete, immutable snapshot of a draw call for the GPU.
 /// "Optimization is forbidden here."

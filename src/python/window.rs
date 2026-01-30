@@ -1,4 +1,4 @@
-//! Window runner - winit event loop integration
+﻿//! Window runner - winit event loop integration
 //!
 //! Implements run_window() which:
 //! 1. Creates a window with glutin/winit

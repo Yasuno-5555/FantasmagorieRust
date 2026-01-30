@@ -1,4 +1,4 @@
-//! 2-pass Flexbox Layout Engine
+﻿//! 2-pass Flexbox Layout Engine
 //! Ported from layout.cpp
 //!
 //! Pass 1: Measure (Bottom-Up) - Children tell parent their size

@@ -1,4 +1,4 @@
-//! ID type for widget identification
+﻿//! ID type for widget identification
 //! Ported from fanta_id.h
 
 use std::collections::hash_map::DefaultHasher;

@@ -1,4 +1,4 @@
-//! Plugin system for extensibility
+﻿//! Plugin system for extensibility
 //!
 //! Provides:
 //! - Plugin trait for custom extensions

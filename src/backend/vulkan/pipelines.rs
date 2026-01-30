@@ -1,4 +1,4 @@
-use ash::vk;
+﻿use ash::vk;
 use std::ffi::CStr;
 
 /// Compile WGSL source code to SPIR-V

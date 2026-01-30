@@ -1,4 +1,4 @@
-//! Canvas widget - Infinite workspace with panning and zooming
+﻿//! Canvas widget - Infinite workspace with panning and zooming
 use crate::core::{Vec2, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use std::cell::Cell;

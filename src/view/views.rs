@@ -1,4 +1,4 @@
-//! Concrete view types
+﻿//! Concrete view types
 //! Ported from definitions.hpp
 
 use super::header::{ViewHeader, ViewType};

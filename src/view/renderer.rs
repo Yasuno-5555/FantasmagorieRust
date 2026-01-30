@@ -1,4 +1,4 @@
-//! View renderer - converts View AST to DrawList commands
+﻿//! View renderer - converts View AST to DrawList commands
 //! Ported from renderer.cpp
 
 use super::header::{ViewHeader, ViewType};

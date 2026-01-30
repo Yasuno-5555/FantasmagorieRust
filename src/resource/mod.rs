@@ -1,4 +1,4 @@
-use image::GenericImageView;
+﻿use image::GenericImageView;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

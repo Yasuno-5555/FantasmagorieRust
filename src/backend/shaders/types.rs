@@ -1,4 +1,4 @@
-//! Shared shader types and uniform structures
+﻿//! Shared shader types and uniform structures
 //! 
 //! Design principles:
 //! - Uniform structures split to respect Push Constants 128B limit

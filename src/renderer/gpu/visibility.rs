@@ -2,7 +2,7 @@
 //!
 //! High-performance GPU-driven culling using Hierarchical Z-Buffer.
 
-use crate::tracea::runtime::manager::KernelArg; use crate::tracea::doctor::BackendKind as DeviceBackend;
+use tracea::runtime::manager::KernelArg; use tracea::doctor::BackendKind as DeviceBackend;
 
 pub struct VisibilityKernel {
     pub backend: DeviceBackend,

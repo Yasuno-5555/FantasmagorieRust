@@ -1,4 +1,4 @@
-//! Performance profiler for UI rendering
+﻿//! Performance profiler for UI rendering
 //!
 //! Tracks and displays:
 //! - Frame timing

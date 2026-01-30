@@ -2,7 +2,7 @@
 //!
 //! GPU-driven particle simulation with spatial hash collision.
 
-use crate::tracea::runtime::manager::KernelArg; use crate::tracea::doctor::BackendKind as DeviceBackend;
+use tracea::runtime::manager::KernelArg; use tracea::doctor::BackendKind as DeviceBackend;
 
 pub struct ParticleKernel {
     pub backend: DeviceBackend,

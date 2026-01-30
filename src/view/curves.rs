@@ -1,4 +1,4 @@
-use crate::core::{ColorF, Vec2};
+﻿use crate::core::{ColorF, Vec2};
 use std::cell::{Cell, RefCell};
 
 /// Control point for a curve

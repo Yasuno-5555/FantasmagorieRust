@@ -1,4 +1,4 @@
-//! Path system - SVG-like vector path builder and tessellator
+﻿//! Path system - SVG-like vector path builder and tessellator
 //! Ported from path.hpp
 
 use crate::core::Vec2;

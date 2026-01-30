@@ -1,4 +1,4 @@
-
+﻿
 use fanta_rust::backend::{GraphicsBackend, WgpuBackend};
 use fanta_rust::prelude::*;
 use fanta_rust::view::header::Align;

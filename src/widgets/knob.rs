@@ -1,4 +1,4 @@
-//! Knob widget - Rotary control with infinite turn and bloom
+﻿//! Knob widget - Rotary control with infinite turn and bloom
 use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use crate::widgets::UIContext; // Needed? UIContext returns the builder

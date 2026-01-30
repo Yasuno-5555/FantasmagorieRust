@@ -1,4 +1,4 @@
-//! minimal.rs - Minimal "Hello World" example for Fantasmagorie
+﻿//! minimal.rs - Minimal "Hello World" example for Fantasmagorie
 //! Simple button and text demo with basic event handling.
 
 use fanta_rust::prelude::*;

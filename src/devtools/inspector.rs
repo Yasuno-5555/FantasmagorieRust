@@ -1,4 +1,4 @@
-//! UI Inspector for debugging and development
+﻿//! UI Inspector for debugging and development
 //!
 //! Provides runtime inspection of:
 //! - Widget tree hierarchy

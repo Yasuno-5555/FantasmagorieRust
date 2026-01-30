@@ -1,4 +1,4 @@
-use fanta_rust::prelude::*;
+﻿use fanta_rust::prelude::*;
 use fanta_rust::game::*;
 use fanta_rust::backend::GraphicsBackend;
 use fanta_rust::draw::DrawList;

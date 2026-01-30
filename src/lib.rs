@@ -1,4 +1,4 @@
-//! # Fantasmagorie Engine (Project Crystal)
+﻿//! # Fantasmagorie Engine (Project Crystal)
 //!
 //! **The Dual-Persona Engine** - A 2D-first, GPU-native rendering engine.
 //!
@@ -27,7 +27,7 @@ pub mod text;
 pub mod view;
 pub mod widgets;
 pub mod renderer;
-pub mod tracea;
+pub use tracea;
 pub mod game;
 
 #[cfg(any(

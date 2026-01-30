@@ -1,4 +1,4 @@
-use crate::core::{Vec3, ID};
+﻿use crate::core::{Vec3, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use crate::view::scene3d::Scene3DData;
 use crate::widgets::UIContext;

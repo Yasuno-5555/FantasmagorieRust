@@ -1,4 +1,4 @@
-//! Fader widget - Professional vertical slider
+﻿//! Fader widget - Professional vertical slider
 use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use std::cell::Cell;

@@ -1,4 +1,4 @@
-use crate::core::Vec2;
+﻿use crate::core::Vec2;
 use crate::text::FontManager;
 
 #[derive(Debug, Clone)]

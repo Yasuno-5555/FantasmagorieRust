@@ -1,4 +1,4 @@
-//! # Engine Configuration (The Soul)
+﻿//! # Engine Configuration (The Soul)
 //!
 //! This module defines the Dual Persona architecture's core switch.
 //! The `Profile` determines the engine's entire behavior at startup.

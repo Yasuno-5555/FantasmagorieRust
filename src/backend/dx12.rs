@@ -1,4 +1,4 @@
-//! DirectX 12 backend - Windows-native GPU rendering
+﻿//! DirectX 12 backend - Windows-native GPU rendering
 //!
 //! Full implementation using windows-rs crate for DirectX 12 API on Windows 10+.
 

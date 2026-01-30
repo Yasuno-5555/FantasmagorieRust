@@ -1,4 +1,4 @@
-//! View module - AST definitions
+﻿//! View module - AST definitions
 
 pub mod animation;
 pub mod curves;

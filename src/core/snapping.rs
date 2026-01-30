@@ -1,4 +1,4 @@
-use crate::core::{Vec2, Vec3};
+﻿use crate::core::{Vec2, Vec3};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapType {

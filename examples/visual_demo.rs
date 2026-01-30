@@ -1,4 +1,4 @@
-//! Visual demo example
+﻿//! Visual demo example
 
 use fanta_rust::prelude::*;
 

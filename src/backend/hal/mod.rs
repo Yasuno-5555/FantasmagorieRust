@@ -1,4 +1,4 @@
-//! Hardware Abstraction Layer (HAL) for GPU Backends
+﻿//! Hardware Abstraction Layer (HAL) for GPU Backends
 //! 
 //! This module defines the common traits and types that all Fantasmagorie backends
 //! must implement to ensure structural parity and modularity.

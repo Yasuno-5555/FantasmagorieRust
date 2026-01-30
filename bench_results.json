@@ -1,0 +1,35 @@
+{
+  "best_config": {
+    "attention_variant": "Naive",
+    "barrier_mode": "None",
+    "cp_async_distance": 0,
+    "double_buffer": false,
+    "epilogue": [],
+    "force_num_warps": 4,
+    "gemm_variant": "Naive",
+    "instruction": "None",
+    "intrinsic_shape": "None",
+    "k_tile": 32,
+    "k_unroll": 1,
+    "layout_policy": "RowMajor",
+    "m_tile": 64,
+    "micro_m": 1,
+    "micro_n": 1,
+    "n_tile": 64,
+    "num_stages": 2,
+    "prefetch_distance": 0,
+    "quantization": "None",
+    "register_strategy": "Array",
+    "softmax_granularity": "PerTile",
+    "swizzle_mode": "None",
+    "ttg_enabled": false,
+    "vectorize_epilogue": true
+  },
+  "kernel": "gemm",
+  "problem": {
+    "k": 128,
+    "m": 128,
+    "n": 128
+  },
+  "timestamp": "2026-01-30T21:24:58.682724+09:00"
+}

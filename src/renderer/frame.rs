@@ -1,4 +1,4 @@
-use super::types::*;
+﻿use super::types::*;
 
 /// The linear description of a frame's rendering intent.
 /// This is the "Meaning" layer. Tracea will consume this.

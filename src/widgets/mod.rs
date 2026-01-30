@@ -1,4 +1,4 @@
-//! Widget builders - Fluent API for view construction
+﻿//! Widget builders - Fluent API for view construction
 //! Ported from api.hpp
 //!
 //! Uses immutable references with Cell for interior mutability

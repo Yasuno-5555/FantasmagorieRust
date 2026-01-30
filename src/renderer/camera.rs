@@ -1,4 +1,4 @@
-use crate::core::{Vec2, Rectangle};
+﻿use crate::core::{Vec2, Rectangle};
 
 /// 2D Camera for world-space rendering.
 /// Per Phase 1 Philosophy: "視点であって物体ではない"

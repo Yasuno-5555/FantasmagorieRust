@@ -1,4 +1,4 @@
-//! Core types: ColorF, Vec2, Rectangle
+﻿//! Core types: ColorF, Vec2, Rectangle
 //! Ported from types_core.hpp
 
 use serde::{Deserialize, Serialize};

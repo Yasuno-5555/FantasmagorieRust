@@ -1,4 +1,4 @@
-//! Animation system
+﻿//! Animation system
 //!
 //! Comprehensive animation support including:
 //! - Keyframe-based timeline animation

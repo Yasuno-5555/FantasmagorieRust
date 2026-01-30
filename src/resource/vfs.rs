@@ -1,4 +1,4 @@
-//! Virtual File System (VFS) and Asset Management
+﻿//! Virtual File System (VFS) and Asset Management
 //! Ported from vfs.hpp
 
 use std::cell::RefCell;

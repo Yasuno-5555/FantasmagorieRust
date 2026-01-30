@@ -1,4 +1,4 @@
-//! Gesture detection engine
+﻿//! Gesture detection engine
 //!
 //! Detects touch/mouse gestures including:
 //! - Swipe (direction + velocity)

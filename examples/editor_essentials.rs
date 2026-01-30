@@ -1,4 +1,4 @@
-//! Phase 3: Editor Essentials Demo
+﻿//! Phase 3: Editor Essentials Demo
 //! Showcases Interactive Splitters, Drag & Drop, and Simple Reactivity correctly.
 
 use fanta_rust::backend::{GraphicsBackend, OpenGLBackend};

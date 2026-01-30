@@ -1,4 +1,4 @@
-//! Backend module - GPU rendering backends
+﻿//! Backend module - GPU rendering backends
 //! 
 //! GraphicsBackend is the "Muscle" - it strictly executes drawing commands.
 //! All GPU rendering goes through this trait, which is under Tracea's coordination.

@@ -1,4 +1,4 @@
-//! Node-Wire interaction system
+﻿//! Node-Wire interaction system
 //!
 //! Provides connection handling for node-based editors:
 //! - Port hit testing

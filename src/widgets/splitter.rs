@@ -1,4 +1,4 @@
-//! Splitter widget - Draggable panel resizing
+﻿//! Splitter widget - Draggable panel resizing
 use crate::core::ID;
 use crate::view::header::{ViewHeader, ViewType};
 

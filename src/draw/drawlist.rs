@@ -1,4 +1,4 @@
-//! DrawList - Rendering command buffer
+﻿//! DrawList - Rendering command buffer
 //! Ported from drawlist.hpp
 //!
 //! All rendering goes through DrawList commands.

@@ -1,4 +1,4 @@
-//! Markdown parser
+﻿//! Markdown parser
 //! Ported from core/markdown.hpp
 
 #[derive(Debug, Clone, PartialEq)]

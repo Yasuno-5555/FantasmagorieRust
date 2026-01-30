@@ -1,4 +1,4 @@
-//! Windowed demo to show off Visual Revolution features
+﻿//! Windowed demo to show off Visual Revolution features
 
 use fanta_rust::backend::{GraphicsBackend, OpenGLBackend};
 use fanta_rust::prelude::*;

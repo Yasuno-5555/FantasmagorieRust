@@ -1,4 +1,4 @@
-use wgpu::util::DeviceExt;
+﻿use wgpu::util::DeviceExt;
 use std::sync::Arc;
 use crate::backend::hal::{GpuResourceProvider, BufferUsage, TextureDescriptor, TextureFormat};
 

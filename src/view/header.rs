@@ -1,4 +1,4 @@
-//! ViewHeader - Common structure for all views
+﻿//! ViewHeader - Common structure for all views
 //! Ported from definitions.hpp
 //!
 //! Uses Cell<T> for layout outputs to enable interior mutability

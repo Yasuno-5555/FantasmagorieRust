@@ -1,4 +1,4 @@
-//! ValueDragger widget - Professional numeric input with drag and type support
+﻿//! ValueDragger widget - Professional numeric input with drag and type support
 use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use std::cell::Cell;

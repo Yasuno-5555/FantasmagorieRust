@@ -1,4 +1,4 @@
-//! Core types and infrastructure
+﻿//! Core types and infrastructure
 
 pub mod a11y;
 mod arena;

@@ -1,4 +1,4 @@
-//! Engine context and state management
+﻿//! Engine context and state management
 //! Ported from context.hpp
 
 use super::{FrameArena, Rectangle, Vec2, ID};

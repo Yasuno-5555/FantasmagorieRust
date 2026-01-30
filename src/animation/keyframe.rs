@@ -1,4 +1,4 @@
-//! Keyframe-based animation system
+﻿//! Keyframe-based animation system
 //!
 //! Provides timeline animation with:
 //! - Keyframe interpolation

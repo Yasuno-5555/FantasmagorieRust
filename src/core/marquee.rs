@@ -1,4 +1,4 @@
-//! Marquee selection system
+﻿//! Marquee selection system
 //!
 //! Provides rectangular selection (marquee/lasso) functionality for selecting
 //! multiple items in a canvas or list.

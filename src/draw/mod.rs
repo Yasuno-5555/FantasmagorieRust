@@ -1,4 +1,4 @@
-//! Draw module - DrawList and rendering commands
+﻿//! Draw module - DrawList and rendering commands
 
 mod drawlist;
 pub mod path;

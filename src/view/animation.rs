@@ -1,4 +1,4 @@
-//! Animation logic - Easing, Springs, and Transitions
+﻿//! Animation logic - Easing, Springs, and Transitions
 //! Ported from animation.hpp and spring_physics.hpp
 
 use crate::core::Vec2;

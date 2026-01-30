@@ -1,4 +1,4 @@
-//! Node Editor Demo - showcases Canvas, Node, and Socket widgets
+﻿//! Node Editor Demo - showcases Canvas, Node, and Socket widgets
 
 use fanta_rust::backend::{GraphicsBackend, OpenGLBackend};
 use fanta_rust::prelude::*;

@@ -1,4 +1,4 @@
-use crate::core::Vec2;
+﻿use crate::core::Vec2;
 use serde::{Deserialize, Serialize};
 
 /// Simple AABB Collider for spatial triggers.

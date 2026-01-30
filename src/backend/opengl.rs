@@ -1,4 +1,4 @@
-//! OpenGL backend using glow
+﻿//! OpenGL backend using glow
 //! Ported from opengl_backend.cpp
 //!
 //! Renders DrawList commands using SDF shaders

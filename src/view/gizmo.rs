@@ -1,4 +1,4 @@
-use crate::core::Vec3;
+﻿use crate::core::Vec3;
 use std::cell::Cell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

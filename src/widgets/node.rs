@@ -1,4 +1,4 @@
-use crate::core::persistence::PersistenceManager;
+﻿use crate::core::persistence::PersistenceManager;
 use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use std::cell::Cell;

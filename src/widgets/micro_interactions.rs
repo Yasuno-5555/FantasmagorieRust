@@ -1,4 +1,4 @@
-//! Micro-Interactions - Premium UI polish
+﻿//! Micro-Interactions - Premium UI polish
 //! Ghost Scrollbar, Glass Toast, Laser Tooltip
 use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::ViewHeader;

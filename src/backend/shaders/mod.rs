@@ -1,4 +1,4 @@
-//! Shader module - Cross-platform shader definitions
+﻿//! Shader module - Cross-platform shader definitions
 //! 
 //! Architecture:
 //! - GLSL 450 as source (written in WGSL-compatible style)

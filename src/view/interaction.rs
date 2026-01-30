@@ -1,4 +1,4 @@
-//! Interaction detection - hot/active/focus states
+﻿//! Interaction detection - hot/active/focus states
 //! Ported from interaction.hpp
 
 use crate::core::{Rectangle, Vec2, ID};

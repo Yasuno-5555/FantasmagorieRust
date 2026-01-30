@@ -1,4 +1,4 @@
-//! Spring physics animation
+﻿//! Spring physics animation
 //!
 //! Provides spring-based animation with:
 //! - Configurable stiffness, damping, and mass

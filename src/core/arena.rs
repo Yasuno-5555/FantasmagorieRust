@@ -1,4 +1,4 @@
-//! FrameArena - Linear allocator reset every frame
+﻿//! FrameArena - Linear allocator reset every frame
 //! Ported from memory.hpp
 //!
 //! Uses bumpalo for zero-cost bump allocation.

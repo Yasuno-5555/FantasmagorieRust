@@ -1,4 +1,4 @@
-//! Phase 4: Node Editor (Lattice) Demo
+﻿//! Phase 4: Node Editor (Lattice) Demo
 //! Showcases Dynamic Grid, Draggable Nodes, Sockets, and Bezier Wires.
 
 use fanta_rust::backend::{GraphicsBackend, OpenGLBackend};

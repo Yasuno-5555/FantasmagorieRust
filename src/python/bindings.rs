@@ -1,4 +1,4 @@
-//! PyO3 bindings for Fantasmagorie
+﻿//! PyO3 bindings for Fantasmagorie
 //!
 //! Wraps Rust types for Python access, enabling the Ouroboros hot-reload workflow.
 //!

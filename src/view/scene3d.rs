@@ -1,4 +1,4 @@
-use crate::core::{Vec3, ID};
+﻿use crate::core::{Vec3, ID};
 use std::cell::Cell;
 
 pub struct Scene3DData {

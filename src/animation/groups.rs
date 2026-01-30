@@ -1,4 +1,4 @@
-//! Animation groups
+﻿//! Animation groups
 //!
 //! Provides sequential and parallel animation composition:
 //! - Sequential groups (one after another)

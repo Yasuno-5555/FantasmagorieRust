@@ -1,4 +1,4 @@
-//! Shared resources for multi-window contexts
+﻿//! Shared resources for multi-window contexts
 //!
 //! Holds Gloabl/Shared handles for OpenGL/Vulkan resources that are shared across
 //! window contexts (via context sharing).

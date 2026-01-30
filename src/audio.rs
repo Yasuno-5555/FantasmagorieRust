@@ -1,4 +1,4 @@
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+﻿use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use realfft::RealFftPlanner;
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;

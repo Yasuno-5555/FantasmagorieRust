@@ -1,4 +1,4 @@
-//! Undo/Redo System
+﻿//! Undo/Redo System
 //!
 //! Provides command pattern based undo/redo with:
 //! - Command trait for actions

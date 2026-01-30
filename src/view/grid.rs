@@ -1,4 +1,4 @@
-use crate::core::ColorF;
+﻿use crate::core::ColorF;
 use std::cell::Cell;
 
 pub struct GridData {

@@ -1,4 +1,4 @@
-use crate::core::{Rectangle, Vec2};
+﻿use crate::core::{Rectangle, Vec2};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug)]

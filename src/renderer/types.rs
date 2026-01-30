@@ -1,4 +1,4 @@
-use super::super::core::{ColorF, Vec2};
+﻿use super::super::core::{ColorF, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {

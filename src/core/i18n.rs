@@ -1,4 +1,4 @@
-//! Localization (I18n) Manager
+﻿//! Localization (I18n) Manager
 //! Ported from i18n.hpp
 
 use std::cell::RefCell;

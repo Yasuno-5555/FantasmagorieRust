@@ -1,4 +1,4 @@
-use ash::vk;
+﻿use ash::vk;
 use std::sync::Arc;
 
 /// Centralized Vulkan context to be shared between renderer and compute (Tracea)

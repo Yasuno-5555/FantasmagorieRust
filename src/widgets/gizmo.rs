@@ -1,4 +1,4 @@
-use crate::core::{Vec3, ID};
+﻿use crate::core::{Vec3, ID};
 use crate::view::gizmo::{GizmoData, GizmoMode};
 use crate::view::header::{ViewHeader, ViewType};
 use crate::widgets::UIContext;

@@ -1,4 +1,4 @@
-//! Collapsible Container widget - Expandable panel with spring animation
+﻿//! Collapsible Container widget - Expandable panel with spring animation
 use crate::core::{ColorF, ID};
 use crate::view::header::ViewHeader;
 

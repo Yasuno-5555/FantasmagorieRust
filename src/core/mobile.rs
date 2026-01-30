@@ -1,4 +1,4 @@
-//! Mobile-first features
+﻿//! Mobile-first features
 //!
 //! Platform-specific features for mobile devices:
 //! - IME (Input Method Editor) positioning

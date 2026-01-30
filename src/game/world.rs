@@ -1,4 +1,4 @@
-use crate::core::Vec2;
+﻿use crate::core::Vec2;
 use std::sync::atomic::{AtomicU64, Ordering};
 use super::interaction::{Collider, InteractionState, intersects, get_proximity};
 use super::animation::{AnimationComponent, EntityState, AnimationClip};

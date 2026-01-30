@@ -1,4 +1,4 @@
-//! Vulkan backend - Native Vulkan rendering via ash
+﻿//! Vulkan backend - Native Vulkan rendering via ash
 //!
 //! Full implementation using ash crate for Vulkan 1.2+ support.
 //! Targets: Windows (Vulkan), Linux (Vulkan), Android (Vulkan)

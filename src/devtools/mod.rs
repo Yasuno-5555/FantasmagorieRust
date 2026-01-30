@@ -1,4 +1,4 @@
-//! Developer tools module
+﻿//! Developer tools module
 //!
 //! Provides debugging and development utilities:
 //! - UI Inspector for widget hierarchy

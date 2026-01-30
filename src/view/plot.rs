@@ -1,4 +1,4 @@
-use crate::core::{ColorF, Vec2};
+﻿use crate::core::{ColorF, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Colormap {

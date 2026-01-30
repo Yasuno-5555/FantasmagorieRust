@@ -1,4 +1,4 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 use crate::backend::hal::GpuPipelineProvider;
 
 pub struct WgpuPipelineProvider {

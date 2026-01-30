@@ -1,4 +1,4 @@
-use fanta_rust::prelude::*;
+﻿use fanta_rust::prelude::*;
 use std::sync::Arc;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};

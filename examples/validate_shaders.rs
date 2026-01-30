@@ -1,4 +1,4 @@
-use naga::front::wgsl;
+﻿use naga::front::wgsl;
 use std::fs;
 use std::path::Path;
 

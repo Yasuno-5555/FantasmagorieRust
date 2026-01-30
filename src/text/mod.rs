@@ -1,4 +1,4 @@
-use self::atlas::{FontAtlas, GlyphInfo};
+﻿use self::atlas::{FontAtlas, GlyphInfo};
 use crate::core::Vec2;
 use std::cell::RefCell;
 use std::fs;

@@ -1,4 +1,4 @@
-//! Accessibility (A11y) Support
+﻿//! Accessibility (A11y) Support
 //!
 //! Provides:
 //! - Screen reader integration

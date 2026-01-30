@@ -1,4 +1,4 @@
-use fanta_rust::prelude::*;
+﻿use fanta_rust::prelude::*;
 use fanta_rust::backend::vulkan::backend::VulkanBackend;
 use fanta_rust::tracea::runtime::manager::RuntimeManager;
 use fanta_rust::text::FontManager;

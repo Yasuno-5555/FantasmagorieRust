@@ -1,4 +1,4 @@
-//! Renderer V1 Demo - verifies the Renderer → GraphicsBackend flow
+﻿//! Renderer V1 Demo - verifies the Renderer → GraphicsBackend flow
 //! 
 //! This demo creates a minimal GraphicsBackend stub to test the pipeline.
 

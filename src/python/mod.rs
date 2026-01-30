@@ -1,4 +1,4 @@
-//! Python bindings for Fantasmagorie
+﻿//! Python bindings for Fantasmagorie
 //!
 //! Provides PyO3 bindings to enable Python hot-reload workflow (Ouroboros)
 
