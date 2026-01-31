@@ -34,15 +34,17 @@ Tracea interprets the "Lie" told by the User API. It optimizes the draw commands
 
 ### 3. Renderer (The Boundary)
 Located in `src/renderer`.
-The Renderer serves as an abstraction layer between Tracea and the physical hardware. It manages frames, swapchains, and camera projections, ensuring that the visual output matches the intended game state.
+Under the **V5 Crystal** architecture, the Renderer is simplified. It uses the `RenderOrchestrator` to plan execution steps and dispatches them to a single, unified backend interface. It no longer manages complex state transitions directly, delegating that responsibility to the "Muscle".
 
 ### 4. Backend (The Muscle)
 Located in `src/backend`.
-The Backend implements the actual GPU calls. Whether it's Vulkan, OpenGL, or DX12, this layer is responsible for submitting commands, managing pipelines, and handling resource transitions.
+The Backend is consolidated into the `GpuExecutor` trait. Fragmentation (separate providers for resources, pipelines, and compute) has been removed. A single backend implementation (like `WgpuBackend`) handles the entire lifecycle of GPU resources and command submission, ensuring extreme stability and predictable state management.
 
-## Philosophy: The Friendly Lie vs. The Strict Truth
+## Philosophy: The V5 Crystal (The Unified Truth)
 
-*   **The Friendly Lie:** You tell the engine "Draw a button with a blue background and a radius of 8". You don't care how it's drawn.
-*   **The Strict Truth:** The engine translates this into a set of SDF parameters, a font atlas lookup, a coordinate transformation, and ultimately a series of triangles or compute dispatches.
+In previous versions, the Boundary and Muscle were fragmented. V5 Crystal unifies them:
+-   **Centralized Execution:** Every GPU command flows through the `GpuExecutor`.
+-   **Arc Ownership:** Backends own their window surfaces via `Arc<Window>`, ensuring `'static` stability across threads.
+-   **SDF First:** Rendering is driven by Signed Distance Fields, allowing for infinite resolution UI and complex effects (Glassmorphism, Aurora) with minimal overhead.
 
 This separation ensures that the user API remains stable even when the underlying rendering technology changes radically.

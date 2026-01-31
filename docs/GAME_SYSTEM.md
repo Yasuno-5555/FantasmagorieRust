@@ -17,9 +17,9 @@ world.transforms[player_id].position = Vec2::new(100.0, 100.0);
 world.entity_states[player_id] = EntityState::Idle;
 ```
 
-## Animation: Motion Morphing
+### Animation: Motion Morphing
 
-Fantasmagorie uses a unique **Motion Morphing** system. Instead of simple sprite flipping, it can interpolate between animations using SDF (Signed Distance Fields) or custom blending weights.
+Fantasmagorie uses a unique **Motion Morphing** system. Instead of simple sprite flipping, it can interpolate between animations using SDF (Signed Distance Fields). This enables smooth, liquid-like transitions between character poses, handled entirely on the GPU via the WGPU/Metal pipelines.
 
 ### Animation Clips
 An `AnimationClip` defines a sequence of frames.

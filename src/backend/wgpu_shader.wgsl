@@ -105,7 +105,8 @@ fn mode_solid(col: vec4<f32>) -> vec4<f32> {
 
 fn mode_sdf_text(col: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
     let dist = textureSample(u_texture, u_sampler, uv).r;
-    let alpha = smoothstep(0.48, 0.52, dist); // Sharper text
+    let width = fwidth(dist);
+    let alpha = smoothstep(0.5 - width, 0.5 + width, dist);
     return vec4<f32>(col.rgb, col.a * alpha);
 }
 
@@ -332,6 +333,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     else if (uniforms.mode == 9) { final_color = mode_aurora(in.clip_position, in.uv); }
     else { final_color = in.color; }
 
-    // Linear -> sRGB
-    return final_color;
+    // Linear -> sRGB (Manual conversion)
+    let s_rgb = select(
+        1.055 * pow(final_color.rgb, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055),
+        final_color.rgb * 12.92,
+        final_color.rgb <= vec3<f32>(0.0031308)
+    );
+    return vec4<f32>(s_rgb, final_color.a);
 }

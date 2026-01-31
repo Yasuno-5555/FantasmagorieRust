@@ -16,16 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build(&event_loop)?;
 
     let window = Arc::new(window);
-
-    // WGPU Setup
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
-        ..Default::default()
-    });
-
-    let surface = unsafe { instance.create_surface(window.clone()) }?;
-
-    // Block on async creation
     let size = window.inner_size();
     
     // Initialize fonts
@@ -33,13 +23,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fm.borrow_mut().init_fonts();
     });
 
-    let mut backend = pollster::block_on(WgpuBackend::new_async(
-        &instance,
-        surface,
+    let mut backend: WgpuBackend = WgpuBackend::new_async(
+        window.clone(),
         size.width,
         size.height,
-    ))
-    .map_err(|e| format!("WGPU creation failed: {}", e))?;
+    )
+    .map_err(|e: String| -> Box<dyn std::error::Error> { Box::from(e) })?;
 
     let mut current_width = size.width;
     let mut current_height = size.height;

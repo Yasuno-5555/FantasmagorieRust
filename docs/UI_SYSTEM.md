@@ -56,20 +56,20 @@ if ButtonBuilder::new("Click Me")
 }
 ```
 
-## Styling & Effects
+## Rendering Backend: The SDF Revolution
 
-Fantasmagorie supports modern visual effects directly in the UI API:
+All UI elements in Fantasmagorie are rendered using **Signed Distance Fields (SDF)**. This allows for:
+-   **Infinite Resolution:** Corners and text stay sharp regardless of zoom or scale.
+-   **Low Overhead:** Complex shapes (Rounded Boxes, Squircles, Arcs) are calculated in the fragment shader.
+-   **Visual Effects:** Features like `backdrop_blur` (Glassmorphism), `glow`, and `aurora` (Dynamic Procedural Gradients) are native to the SDF pipeline.
 
--   **Radius & Squircle:** Smooth rounded corners.
--   **Backdrop Blur:** Glassmorphism effects.
--   **Glow:** Material radiance.
--   **Aurora:** Dynamic gradient effects.
+### WGPU Integration
+The UI system is optimized for the **WGPU** backend, taking advantage of modern GPU features like `Storage Textures` for backdrop capture and `Linear-to-sRGB` manual gamma correction for consistent high-dynamic-range (HDR) colors.
 
-Example:
 ```rust
 ctx.column()
-   .backdrop_blur(10.0)
+   .backdrop_blur(10.0) // Glassmorphism
    .border(1.0, ColorF::GRAY)
-   .aurora()
+   .aurora()            // Dynamic procedural noise
    .build(|| { ... });
 ```

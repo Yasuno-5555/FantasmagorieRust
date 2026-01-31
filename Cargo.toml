@@ -16,8 +16,6 @@ crate-type = ["cdylib", "rlib"]  # Python extension + Rust library
 default = ["opengl"]
 opengl = ["glow", "glutin", "glutin-winit", "raw-window-handle"]
 wgpu = ["dep:wgpu"]
-vulkan = ["dep:ash", "dep:ash-window", "dep:naga", "dep:gpu-allocator", "dep:shaderc"]
-dx12 = ["dep:windows", "dep:naga"]
 metal = ["dep:metal", "dep:objc", "dep:block", "dep:naga", "dep:cocoa"]
 python = ["pyo3", "tracea/python"]
 cpp = []
@@ -38,29 +36,13 @@ fontdue = "0.8"
 glow = { version = "0.13", optional = true }
 glutin = { version = "0.31", optional = true }
 glutin-winit = { version = "0.4", optional = true }
-raw-window-handle = { version = "0.5", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 
 # wgpu backend (optional)
 wgpu = { version = "0.19", optional = true }
+pollster = "0.3"
 bytemuck = { version = "1.14", features = ["derive"] }
 
-# Vulkan backend (optional)
-ash = { version = "0.38", optional = true }
-ash-window = { version = "0.13", optional = true }
-gpu-allocator = { version = "0.27", optional = true, features = ["vulkan"] }
-shaderc = { version = "0.8", optional = true }
-
-# DirectX 12 backend (optional, Windows only)
-windows = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Direct3D",
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Security",
-    "Win32_System_Threading",
-    "Win32_Graphics_Direct3D_Fxc",
-], optional = true }
 metal = { version = "0.29", optional = true }
 objc = { version = "0.2", optional = true }
 block = { version = "0.1", optional = true }
@@ -92,7 +74,6 @@ cc = "1.0"
 
 [dev-dependencies]
 image = "0.24"
-pollster = "0.3"
 
 [[example]]
 name = "visual_demo"

@@ -56,53 +56,7 @@ impl RenderOrchestrator {
 
         executor.begin_execute()?;
         
-
-        // Helper to create quad vertices
-        fn quad_vertices(pos: Vec2, size: Vec2, color: ColorF) -> Vec<u8> {
-             let c = [color.r, color.g, color.b, color.a];
-             let mut data = Vec::with_capacity(6 * 32);
-             let mk_v = |x, y, u, v| {
-                 let mut v_data = Vec::new();
-                 v_data.extend_from_slice(bytemuck::bytes_of(&[x, y]));
-                 v_data.extend_from_slice(bytemuck::bytes_of(&[u, v]));
-                 v_data.extend_from_slice(bytemuck::bytes_of(&c));
-                 v_data
-             };
-             
-             // Triangle 1: V0, V3, V2 (CCW)
-             data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
-             data.extend(mk_v(pos.x, pos.y + size.y, 0.0, 1.0));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
-             // Triangle 2: V0, V2, V1 (CCW)
-             data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
-             data.extend(mk_v(pos.x + size.x, pos.y, 1.0, 0.0));
-             data
-        }
-
-        fn quad_vertices_uv(pos: Vec2, size: Vec2, uv: [f32;4], color: ColorF) -> Vec<u8> {
-             let c = [color.r, color.g, color.b, color.a];
-             let mut data = Vec::with_capacity(6 * 32);
-             let mk_v = |x, y, u, v| {
-                 let mut v_data = Vec::new();
-                 v_data.extend_from_slice(bytemuck::bytes_of(&[x, y]));
-                 v_data.extend_from_slice(bytemuck::bytes_of(&[u, v]));
-                 v_data.extend_from_slice(bytemuck::bytes_of(&c));
-                 v_data
-             };
-             
-             // Triangle 1: V0, V3, V2 (CCW)
-             data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
-             data.extend(mk_v(pos.x, pos.y + size.y, uv[0], uv[3]));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
-             // Triangle 2: V0, V2, V1 (CCW)
-             data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
-             data.extend(mk_v(pos.x + size.x, pos.y, uv[2], uv[1]));
-             data
-        }
-
-        let proj_matrix = create_projection(width as f32, height as f32, true, (-1.0, 1.0));
+        let proj_matrix = create_projection(width as f32, height as f32, executor.y_flip(), (-1.0, 1.0));
         let proj: [f32; 16] = *bytemuck::cast_ref(&proj_matrix);
 
         for task in tasks {
@@ -198,9 +152,9 @@ impl RenderOrchestrator {
                     }
                 }
                 FantaRenderTask::CaptureBackdrop => {
-                    // Logic to capture and generate mipmaps
+                    executor.resolve().ok(); 
                 }
-                FantaRenderTask::ComputeEffect { effect_name, params } => {
+                FantaRenderTask::ComputeEffect { .. } => {
                     // Logic to dispatch compute effect
                 }
                 FantaRenderTask::Resolve => {
@@ -216,4 +170,53 @@ impl RenderOrchestrator {
         }
         Ok(())
     }
+}
+
+// Helper to create quad vertices (CCW winding for Y-up systems)
+fn quad_vertices(pos: Vec2, size: Vec2, color: ColorF) -> Vec<u8> {
+    let c = [color.r, color.g, color.b, color.a];
+    let mut data = Vec::with_capacity(6 * 32);
+    let mk_v = |x, y, u, v| {
+        let mut v_data = Vec::new();
+        v_data.extend_from_slice(bytemuck::bytes_of(&[x, y]));
+        v_data.extend_from_slice(bytemuck::bytes_of(&[u, v]));
+        v_data.extend_from_slice(bytemuck::bytes_of(&c));
+        v_data
+    };
+    
+    // Triangle 1: V0, V1, V2 (CCW in Y-up)
+    // V0: TL (0,0), V1: BL (0,H), V2: BR (W,H)
+    data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
+    data.extend(mk_v(pos.x, pos.y + size.y, 0.0, 1.0));
+    data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
+
+    // Triangle 2: V0, V2, V3 (CCW in Y-up)
+    // V0: TL (0,0), V2: BR (W,H), V3: TR (W,0)
+    data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
+    data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
+    data.extend(mk_v(pos.x + size.x, pos.y, 1.0, 0.0));
+    data
+}
+
+fn quad_vertices_uv(pos: Vec2, size: Vec2, uv: [f32; 4], color: ColorF) -> Vec<u8> {
+    let c = [color.r, color.g, color.b, color.a];
+    let mut data = Vec::with_capacity(6 * 32);
+    let mk_v = |x, y, u, v| {
+        let mut v_data = Vec::new();
+        v_data.extend_from_slice(bytemuck::bytes_of(&[x, y]));
+        v_data.extend_from_slice(bytemuck::bytes_of(&[u, v]));
+        v_data.extend_from_slice(bytemuck::bytes_of(&c));
+        v_data
+    };
+    
+    // Triangle 1: V0, V1, V2 (CCW)
+    data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
+    data.extend(mk_v(pos.x, pos.y + size.y, uv[0], uv[3]));
+    data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
+    
+    // Triangle 2: V0, V2, V3 (CCW)
+    data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
+    data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
+    data.extend(mk_v(pos.x + size.x, pos.y, uv[2], uv[1]));
+    data
 }

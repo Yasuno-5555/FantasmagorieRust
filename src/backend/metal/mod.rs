@@ -11,7 +11,8 @@ pub mod resource_provider;
 pub mod pipeline_provider;
 
 use resource_provider::MetalResourceProvider;
-use pipeline_provider::MetalPipelineProvider;
+use pipeline_provider::{MetalPipelineProvider, MetalBindGroup, MetalBindGroupLayout};
+use crate::backend::hal::{GpuResourceProvider, GpuPipelineProvider, GpuExecutor, BufferUsage, TextureDescriptor, TextureFormat, TextureUsage};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -369,5 +370,119 @@ impl GraphicsBackend for MetalBackend {
 
     fn capture_screenshot(&mut self, path: &str) {
         *self.screenshot_path.lock().unwrap() = Some(path.to_string());
+    }
+}
+
+impl GpuResourceProvider for MetalBackend {
+    type Buffer = Buffer;
+    type Texture = Texture;
+    type TextureView = Texture;
+    type Sampler = SamplerState;
+
+    fn create_buffer(&self, size: u64, usage: BufferUsage, label: &str) -> Result<Self::Buffer, String> {
+        self.resources.create_buffer(size, usage, label)
+    }
+    fn create_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String> {
+        self.resources.create_texture(desc)
+    }
+    fn create_texture_view(&self, texture: &Self::Texture) -> Result<Self::TextureView, String> {
+        self.resources.create_texture_view(texture)
+    }
+    fn create_sampler(&self, label: &str) -> Result<Self::Sampler, String> {
+        self.resources.create_sampler(label)
+    }
+    fn write_buffer(&self, buffer: &Self::Buffer, offset: u64, data: &[u8]) {
+        self.resources.write_buffer(buffer, offset, data)
+    }
+    fn write_texture(&self, texture: &Self::Texture, data: &[u8], width: u32, height: u32) {
+        self.resources.write_texture(texture, data, width, height)
+    }
+    fn destroy_buffer(&self, buffer: Self::Buffer) {
+        self.resources.destroy_buffer(buffer)
+    }
+    fn destroy_texture(&self, texture: Self::Texture) {
+        self.resources.destroy_texture(texture)
+    }
+}
+
+impl GpuPipelineProvider for MetalBackend {
+    type RenderPipeline = RenderPipelineState;
+    type ComputePipeline = ComputePipelineState;
+    type BindGroupLayout = MetalBindGroupLayout;
+    type BindGroup = MetalBindGroup;
+
+    fn create_render_pipeline(&self, label: &str, wgsl: &str, layout: Option<&Self::BindGroupLayout>) -> Result<Self::RenderPipeline, String> {
+        self.pipelines.create_render_pipeline(label, wgsl, layout)
+    }
+    fn create_compute_pipeline(&self, label: &str, wgsl: &str, layout: Option<&Self::BindGroupLayout>) -> Result<Self::ComputePipeline, String> {
+        self.pipelines.create_compute_pipeline(label, wgsl, layout)
+    }
+    fn destroy_bind_group(&self, bind_group: Self::BindGroup) {
+        self.pipelines.destroy_bind_group(bind_group)
+    }
+}
+
+impl GpuExecutor for MetalBackend {
+    fn begin_execute(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn end_execute(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn draw(
+        &self,
+        _pipeline: &Self::RenderPipeline,
+        _bind_group: Option<&Self::BindGroup>,
+        _vertex_buffer: &Self::Buffer,
+        _vertex_count: u32,
+        _uniform_data: &[u8],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn dispatch(
+        &self,
+        _pipeline: &Self::ComputePipeline,
+        _bind_group: Option<&Self::BindGroup>,
+        _groups: [u32; 3],
+        _push_constants: &[u8],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn copy_texture(&self, _src: &Self::Texture, _dst: &Self::Texture) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn generate_mipmaps(&self, _texture: &Self::Texture) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn create_bind_group(
+        &self,
+        _layout: &Self::BindGroupLayout,
+        _buffers: &[&Self::Buffer],
+        _textures: &[&Self::TextureView],
+        _samplers: &[&Self::Sampler],
+    ) -> Result<Self::BindGroup, String> {
+        Ok(MetalBindGroup {
+            buffers: vec![],
+            textures: vec![],
+            samplers: vec![],
+        })
+    }
+
+    fn get_font_view(&self) -> &Self::TextureView { self.font_texture.as_ref().unwrap() }
+    fn get_backdrop_view(&self) -> &Self::TextureView { self.backdrop_texture.as_ref().unwrap() }
+    fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { panic!("No default layout") }
+    fn get_default_render_pipeline(&self) -> &Self::RenderPipeline { &self.main_pipeline }
+    fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
+
+    fn resolve(&mut self) -> Result<(), String> { Ok(()) }
+    fn present(&self) -> Result<(), String> { Ok(()) }
+    fn y_flip(&self) -> bool {
+        false // Metal is Y-up NDC
     }
 }

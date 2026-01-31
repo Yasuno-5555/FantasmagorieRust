@@ -147,10 +147,10 @@ impl ProjectionParams {
     }
     
     pub fn wgpu() -> Self {
-        Self { flip_y: true, z_range: (0.0, 1.0) }
+        Self { flip_y: false, z_range: (0.0, 1.0) }
     }
     
     pub fn dx12() -> Self {
-        Self { flip_y: true, z_range: (0.0, 1.0) }
+        Self { flip_y: false, z_range: (0.0, 1.0) }
     }
 }

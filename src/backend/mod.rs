@@ -1,4 +1,4 @@
-﻿//! Backend module - GPU rendering backends
+//! Backend module - GPU rendering backends
 //! 
 //! GraphicsBackend is the "Muscle" - it strictly executes drawing commands.
 //! All GPU rendering goes through this trait, which is under Tracea's coordination.
@@ -62,18 +62,6 @@ pub mod wgpu;
 
 #[cfg(feature = "wgpu")]
 pub use self::wgpu::WgpuBackend;
-
-#[cfg(feature = "vulkan")]
-pub mod vulkan;
-
-#[cfg(feature = "vulkan")]
-pub use vulkan::VulkanBackend;
-
-#[cfg(feature = "dx12")]
-pub mod dx12;
-
-#[cfg(feature = "dx12")]
-pub use dx12::Dx12Backend;
 
 #[cfg(feature = "metal")]
 pub mod metal;

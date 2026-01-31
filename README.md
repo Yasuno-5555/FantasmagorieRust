@@ -8,18 +8,16 @@ Fantasmagorie is designed to bridge the gap between "Logic" (the abstract game w
 
 -   **Dual-Persona:** Lite mode for efficiency (embedded, mobile) and Cinema mode for high-end visuals.
 -   **Friendly API:** Fluent builders for UI and Sprites ("The Friendly Lie").
--   **GPU Native:** Built with a focus on modern graphics APIs (Vulkan, DX12, Metal).
--   **SDF Morphing:** Advanced animation system using Signed Distance Fields for smooth transitions.
+-   **WGPU Unified Backend:** Modern, stable, and cross-platform rendering (Web, Windows, Linux, macOS).
+-   **SDF Visual Revolution:** High-performance UI rendering using Signed Distance Fields with Glassmorphism and Aurora effects.
 -   **Immediate Mode UI:** Lightweight, responsive UI system with a Flex-like layout.
 
 ## 🏗️ Architecture
 
-The engine is structured into four distinct layers:
+The engine uses the **V5 Crystal** architecture, consolidating implementation into two primary domains:
 
-1.  **Layer 1 (User API):** Fluent API / Builder pattern (The Friendly Lie)
-2.  **Layer 2 (Tracea):** Optimization, compute, meaning interpretation (The Brain)
-3.  **Layer 3 (Renderer):** Abstraction and translation (The Boundary)
-4.  **Layer 4 (Backend):** GPU command execution (The Muscle)
+1.  **The Brain (Tracea):** Logic optimization and meaning interpretation.
+2.  **The Muscle (Unified Backend):** GPU execution via a centralized `GpuExecutor`.
 
 See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for more details.
 
@@ -27,23 +25,15 @@ See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for more details.
 
 ```rust
 use fanta_rust::prelude::*;
+use fanta_rust::backend::WgpuBackend;
 
-fn main() {
-    let mut renderer = Renderer::new_lite(create_backend()); // Choose your backend
+fn main() -> Result<(), String> {
+    // Pulse of the engine: WGPU Backend
+    let backend = pollster::block_on(WgpuBackend::new_async(window_handle, 1280, 720))?;
+    let mut renderer = Renderer::new(backend);
     
-    loop {
-        let mut frame = renderer.begin_frame();
-        
-        // Build UI
-        UIContext::new(&mut frame).column().padding(20).bg(ColorF::DARK_GRAY).build(|| {
-            TextBuilder::new("Hello, Fantasmagorie!").font_size(24.0).build();
-            if ButtonBuilder::new("Click Me").build().clicked() {
-                println!("Button clicked!");
-            }
-        });
-
-        renderer.end_frame(frame, 1280, 720);
-    }
+    // ... Frame loop logic ...
+    Ok(())
 }
 ```
 

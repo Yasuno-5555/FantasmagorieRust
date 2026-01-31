@@ -44,13 +44,19 @@ bitflags::bitflags! {
     }
 }
 
-/// Core Resource Provider Trait
-pub trait GpuResourceProvider: Send + Sync {
-    type Buffer;
-    type Texture;
-    type TextureView;
-    type Sampler;
+/// GpuExecutor - The unified "Muscle" that provides resources, pipelines, and executes primitive GPU operations.
+/// All logic for "how to render a frame" is moved to the Orchestrator.
+pub trait GpuExecutor: Send + Sync {
+    type Buffer: Send + Sync;
+    type Texture: Send + Sync;
+    type TextureView: Send + Sync;
+    type Sampler: Send + Sync;
+    type RenderPipeline: Send + Sync;
+    type ComputePipeline: Send + Sync;
+    type BindGroupLayout: Send + Sync;
+    type BindGroup: Send + Sync;
 
+    // --- Resource Management ---
     fn create_buffer(&self, size: u64, usage: BufferUsage, label: &str) -> Result<Self::Buffer, String>;
     fn create_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String>;
     fn create_texture_view(&self, texture: &Self::Texture) -> Result<Self::TextureView, String>;
@@ -61,15 +67,9 @@ pub trait GpuResourceProvider: Send + Sync {
     
     fn destroy_buffer(&self, buffer: Self::Buffer);
     fn destroy_texture(&self, texture: Self::Texture);
-}
+    fn destroy_bind_group(&self, bind_group: Self::BindGroup);
 
-/// Core Pipeline Provider Trait
-pub trait GpuPipelineProvider: Send + Sync {
-    type RenderPipeline;
-    type ComputePipeline;
-    type BindGroupLayout;
-    type BindGroup;
-
+    // --- Pipeline Management ---
     fn create_render_pipeline(
         &self,
         label: &str,
@@ -84,21 +84,7 @@ pub trait GpuPipelineProvider: Send + Sync {
         layout: Option<&Self::BindGroupLayout>,
     ) -> Result<Self::ComputePipeline, String>;
 
-    fn destroy_bind_group(&self, bind_group: Self::BindGroup);
-}
-
-/// Command Submission Trait
-pub trait GpuCommandEncoder: Send + Sync {
-    type CommandBuffer;
-    
-    fn begin_frame(&mut self) -> Result<(), String>;
-    fn end_frame(&mut self) -> Result<Self::CommandBuffer, String>;
-    fn submit(&self, cmd: Self::CommandBuffer);
-}
-
-/// GpuExecutor - The "Muscle" that executes primitive GPU operations.
-/// All logic for "how to render a frame" is moved to the Orchestrator.
-pub trait GpuExecutor: GpuResourceProvider + GpuPipelineProvider + Send + Sync {
+    // --- Command Execution ---
     /// Start a new rendering frame/command list
     fn begin_execute(&self) -> Result<(), String>;
 
@@ -119,7 +105,7 @@ pub trait GpuExecutor: GpuResourceProvider + GpuPipelineProvider + Send + Sync {
     fn dispatch(
         &self,
         pipeline: &Self::ComputePipeline,
-        bind_group: Option<&Self::BindGroupLayout>,
+        bind_group: Option<&Self::BindGroup>,
         groups: [u32; 3],
         push_constants: &[u8],
     ) -> Result<(), String>;
@@ -142,6 +128,7 @@ pub trait GpuExecutor: GpuResourceProvider + GpuPipelineProvider + Send + Sync {
         samplers: &[&Self::Sampler],
     ) -> Result<Self::BindGroup, String>;
 
+    // --- Standard Resource Access ---
     /// Get the standard font atlas texture view
     fn get_font_view(&self) -> &Self::TextureView;
 
@@ -157,11 +144,15 @@ pub trait GpuExecutor: GpuResourceProvider + GpuPipelineProvider + Send + Sync {
     /// Get the default sampler
     fn get_default_sampler(&self) -> &Self::Sampler;
 
+    // --- Global Operations ---
     /// Perform final resolve/composition pass
     fn resolve(&mut self) -> Result<(), String>;
 
     /// Present the frame
     fn present(&self) -> Result<(), String>;
+
+    /// Check if the backend requires a Y-flip in projection (UI space to NDC)
+    fn y_flip(&self) -> bool;
 }
 
 /// A single step in the rendering process
