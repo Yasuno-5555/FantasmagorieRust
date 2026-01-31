@@ -34,7 +34,8 @@ pub mod game;
     feature = "opengl",
     feature = "wgpu",
     feature = "vulkan",
-    feature = "dx12"
+    feature = "dx12",
+    feature = "metal"
 ))]
 pub mod backend;
 

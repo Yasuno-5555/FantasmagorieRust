@@ -77,7 +77,7 @@ pub struct DrawUniforms {
     /// Time in seconds (4 bytes)
     pub time: f32,
     /// Padding (8 bytes)
-    pub _pad: [f32; 2],
+    pub viewport_size: [f32; 2],
 }
 // Total: 16*4 + 8 + 4*7 + 4 = 104 bytes ✅ Under 128B limit
 

@@ -1,7 +1,7 @@
 pub use crate::backend::hal::FantaRenderTask;
 use crate::backend::hal::{GpuExecutor, BufferUsage, TextureDescriptor, TextureUsage, TextureFormat};
 use crate::draw::{DrawCommand, DrawList};
-use crate::backend::shaders::types::DrawUniforms;
+use crate::backend::shaders::types::{DrawUniforms, create_projection};
 use crate::core::{ColorF, Vec2};
 use bytemuck; // Ensure bytemuck is available
 
@@ -69,12 +69,14 @@ impl RenderOrchestrator {
                  v_data
              };
              
+             // Triangle 1: V0, V3, V2 (CCW)
              data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
-             data.extend(mk_v(pos.x + size.x, pos.y, 1.0, 0.0));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
-             data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
              data.extend(mk_v(pos.x, pos.y + size.y, 0.0, 1.0));
+             data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
+             // Triangle 2: V0, V2, V1 (CCW)
+             data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
+             data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
+             data.extend(mk_v(pos.x + size.x, pos.y, 1.0, 0.0));
              data
         }
 
@@ -89,30 +91,19 @@ impl RenderOrchestrator {
                  v_data
              };
              
+             // Triangle 1: V0, V3, V2 (CCW)
              data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
-             data.extend(mk_v(pos.x + size.x, pos.y, uv[2], uv[1]));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
-             data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
-             data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
              data.extend(mk_v(pos.x, pos.y + size.y, uv[0], uv[3]));
+             data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
+             // Triangle 2: V0, V2, V1 (CCW)
+             data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
+             data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
+             data.extend(mk_v(pos.x + size.x, pos.y, uv[2], uv[1]));
              data
         }
 
-        fn ortho(l: f32, r: f32, b: f32, t: f32, n: f32, f: f32) -> [f32; 16] {
-             let tx = -(r + l) / (r - l);
-             let ty = -(t + b) / (t - b);
-             let tz = -(f + n) / (f - n);
-             let w = r - l;
-             let h = t - b;
-             let d = f - n;
-             [
-                 2.0/(r-l), 0.0, 0.0, 0.0,
-                 0.0, 2.0/(b-t), 0.0, 0.0,
-                 0.0, 0.0, -2.0/d, 0.0,
-                 tx, ty, tz, 1.0,
-             ]
-        }
-        let proj = ortho(0.0, width as f32, height as f32, 0.0, -1.0, 1.0);
+        let proj_matrix = create_projection(width as f32, height as f32, true, (-1.0, 1.0));
+        let proj: [f32; 16] = *bytemuck::cast_ref(&proj_matrix);
 
         for task in tasks {
             match task {
@@ -141,7 +132,7 @@ impl RenderOrchestrator {
                                      mode: 2, // Shape
                                      is_squircle: if *is_squircle { 1 } else { 0 },
                                      time: time,
-                                     _pad: [0.0; 2],
+                                     viewport_size: [width as f32, height as f32],
                                  }, quad_vertices(*pos, *size, *color))
                              }
                              DrawCommand::Text { pos, size, uv, color } => {
@@ -160,7 +151,7 @@ impl RenderOrchestrator {
                                      mode: 1, // Text
                                      is_squircle: 0,
                                      time: time,
-                                     _pad: [0.0; 2],
+                                     viewport_size: [width as f32, height as f32],
                                  }, quad_vertices_uv(*pos, *size, *uv, *color))
                              }
                              DrawCommand::Aurora { pos, size } => {
@@ -179,7 +170,7 @@ impl RenderOrchestrator {
                                      mode: 9, // Aurora
                                      is_squircle: 0,
                                      time: time,
-                                     _pad: [0.0; 2],
+                                     viewport_size: [width as f32, height as f32],
                                  }, quad_vertices(*pos, *size, ColorF::white()))
                              }
                              _ => continue,

@@ -74,3 +74,9 @@ pub mod dx12;
 
 #[cfg(feature = "dx12")]
 pub use dx12::Dx12Backend;
+
+#[cfg(feature = "metal")]
+pub mod metal;
+
+#[cfg(feature = "metal")]
+pub use self::metal::MetalBackend;
