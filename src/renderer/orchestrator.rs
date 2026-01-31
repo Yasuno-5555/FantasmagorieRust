@@ -69,8 +69,22 @@ impl RenderOrchestrator {
                     let backdrop_view = executor.get_backdrop_view();
 
                     for cmd in commands {
-                         let (uniforms, verts) = match cmd {
-                             DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, .. } => {
+                         let (uniforms, verts, custom_pipeline) = match cmd {
+                             DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, wobble: _, glow_strength, glow_color, shader_inject } => {
+                                 let mut mode = 2; // Shape
+                                 let mut cp = None;
+                                 if let Some(source) = shader_inject {
+                                     match executor.get_custom_render_pipeline(source) {
+                                         Ok(p) => {
+                                             cp = Some(p);
+                                             mode = 100; // Custom
+                                         }
+                                         Err(e) => {
+                                             eprintln!("Shader Injection Error: {}", e);
+                                         }
+                                     };
+                                 }
+
                                  (DrawUniforms {
                                      projection: proj,
                                      rect: [pos.x, pos.y, size.x, size.y],
@@ -83,11 +97,11 @@ impl RenderOrchestrator {
                                      elevation: *elevation,
                                      glow_strength: *glow_strength,
                                      lut_intensity: 0.0,
-                                     mode: 2, // Shape
+                                     mode: mode, 
                                      is_squircle: if *is_squircle { 1 } else { 0 },
                                      time: time,
                                      viewport_size: [width as f32, height as f32],
-                                 }, quad_vertices(*pos, *size, *color))
+                                 }, quad_vertices(*pos, *size, *color), cp)
                              }
                              DrawCommand::Text { pos, size, uv, color } => {
                                  (DrawUniforms {
@@ -106,7 +120,7 @@ impl RenderOrchestrator {
                                      is_squircle: 0,
                                      time: time,
                                      viewport_size: [width as f32, height as f32],
-                                 }, quad_vertices_uv(*pos, *size, *uv, *color))
+                                 }, quad_vertices_uv(*pos, *size, *uv, *color), None)
                              }
                              DrawCommand::Aurora { pos, size } => {
                                  (DrawUniforms {
@@ -125,10 +139,12 @@ impl RenderOrchestrator {
                                      is_squircle: 0,
                                      time: time,
                                      viewport_size: [width as f32, height as f32],
-                                 }, quad_vertices(*pos, *size, ColorF::white()))
+                                 }, quad_vertices(*pos, *size, ColorF::white()), None)
                              }
                              _ => continue,
                          };
+
+                         let p = custom_pipeline.as_ref().unwrap_or(pipeline);
 
                          let u_buf = executor.create_buffer(bytemuck::bytes_of(&uniforms).len() as u64, BufferUsage::Uniform, "Uniforms")?;
                          executor.write_buffer(&u_buf, 0, bytemuck::bytes_of(&uniforms));
@@ -143,7 +159,7 @@ impl RenderOrchestrator {
                              &[sampler],
                          )?;
 
-                         executor.draw(pipeline, Some(&bg), &v_buf, 6, &[])?;
+                         executor.draw(p, Some(&bg), &v_buf, 6, &[])?;
 
                          // Clean up temporary resources
                          executor.destroy_bind_group(bg);

@@ -7,42 +7,9 @@ use winit::window::WindowBuilder;
 
 #[cfg(feature = "wgpu")]
 use fanta_rust::backend::WgpuBackend;
-#[cfg(feature = "vulkan")]
-use fanta_rust::backend::VulkanBackend;
-#[cfg(feature = "dx12")]
-use fanta_rust::backend::{Dx12Backend, GraphicsBackend as _};
-#[cfg(feature = "opengl")]
-use fanta_rust::backend::OpenGLBackend;
-
-#[cfg(feature = "opengl")]
-use glutin::{
-    config::ConfigTemplateBuilder,
-    context::{ContextApi, ContextAttributesBuilder, Version},
-    display::GetGlDisplay,
-    prelude::*,
-    surface::{SurfaceAttributesBuilder, WindowSurface},
-};
-#[cfg(feature = "opengl")]
-use glutin_winit::DisplayBuilder;
-#[cfg(feature = "opengl")]
-use raw_window_handle::HasRawWindowHandle;
-#[cfg(feature = "opengl")]
-use std::ffi::CString;
-#[cfg(feature = "opengl")]
-use std::num::NonZeroU32;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    let backend_name = if args.len() > 1 {
-        args[1].to_lowercase()
-    } else {
-        let mut name = "none";
-        #[cfg(feature = "wgpu")] { name = "wgpu"; }
-        #[cfg(all(not(feature = "wgpu"), feature = "vulkan"))] { name = "vulkan"; }
-        #[cfg(all(not(feature = "wgpu"), not(feature = "vulkan"), feature = "opengl"))] { name = "opengl"; }
-        #[cfg(all(not(feature = "wgpu"), not(feature = "vulkan"), not(feature = "opengl"), feature = "dx12"))] { name = "dx12"; }
-        name.to_string()
-    };
+    let backend_name = "wgpu";
 
     println!("🚀 Fantasmagorie Ultimate Demo - Backend: {}", backend_name);
 
@@ -51,19 +18,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_title(format!("Fantasmagorie Ultimate Demo ({})", backend_name))
         .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
 
-    let (window, mut backend): (Arc<winit::window::Window>, Box<dyn fanta_rust::backend::GraphicsBackend>) = match backend_name.as_str() {
-        #[cfg(feature = "wgpu")]
-        "wgpu" => {
-            let window = Arc::new(window_builder.build(&event_loop)?);
-            let size = window.inner_size();
-            let b = Box::new(WgpuBackend::new_async(
-                window.clone(),
-                size.width,
-                size.height,
-            ).map_err(|e| format!("WGPU creation failed: {}", e))?);
-            (window, b)
-        }
-        _ => panic!("Unsupported backend or feature not enabled: {}", backend_name),
+    let (window, mut backend): (Arc<winit::window::Window>, Box<dyn fanta_rust::backend::GraphicsBackend>) = {
+        let window = Arc::new(window_builder.build(&event_loop)?);
+        let size = window.inner_size();
+        let b = Box::new(fanta_rust::backend::WgpuBackend::new_async(
+            window.clone(),
+            size.width,
+            size.height,
+        ).map_err(|e| format!("WGPU creation failed: {}", e))?);
+        (window, b)
     };
     let size = window.inner_size();
 

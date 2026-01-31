@@ -51,12 +51,6 @@ pub trait GraphicsBackend {
     }
 }
 
-#[cfg(feature = "opengl")]
-pub mod opengl;
-
-#[cfg(feature = "opengl")]
-pub use opengl::OpenGLBackend;
-
 #[cfg(feature = "wgpu")]
 pub mod wgpu;
 

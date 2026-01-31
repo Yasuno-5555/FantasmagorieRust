@@ -1,5 +1,4 @@
 ﻿use crate::python::dlpack::*;
-use glow::HasContext;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::ffi;
 use pyo3::prelude::*;
@@ -8,6 +7,7 @@ use pyo3::types::PyCapsule;
 use std::ffi::c_void;
 use std::ffi::CString;
 use std::ptr::null;
+use wgpu;
 
 #[repr(C)]
 struct ManagedDLPackCtx {
@@ -27,155 +27,67 @@ unsafe extern "C" fn dlpack_deleter(handle: *mut DLManagedTensor) {
 
 #[pyclass]
 pub struct BufferView {
-    pbo: glow::Buffer,
+    buffer: wgpu::Buffer,
     size: usize,
     mapped_ptr: *mut u8,
 }
 
-// Safety: PBO pointer is raw. PyMemoryView handles safety for Python side.
-// We must ensure GL context is current for GL calls.
 unsafe impl Send for BufferView {}
 
 #[pymethods]
 impl BufferView {
     #[new]
     fn new(size: usize) -> PyResult<Self> {
-        // Access GL from GLOBAL_RESOURCES
-        // Only valid if called on the thread where init_frame/backend creation happened
-        let gl = crate::core::resource::GLOBAL_RESOURCES
-            .with(|res| res.borrow().gl.clone())
-            .ok_or_else(|| {
-                PyRuntimeError::new_err(
-                    "No active GL context found. Creates BufferView inside the render loop?",
-                )
-            })?;
+        let device = crate::core::resource::GLOBAL_RESOURCES.with(|res| res.borrow().device.clone())
+            .ok_or_else(|| PyRuntimeError::new_err("No active WGPU device found."))?;
 
-        let pbo = unsafe {
-            let buffer = gl.create_buffer().map_err(|e| PyRuntimeError::new_err(e))?;
-            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(buffer));
-
-            // Allocate storage (STREAM_DRAW for frequent updates)
-            gl.buffer_data_size(glow::PIXEL_UNPACK_BUFFER, size as i32, glow::STREAM_DRAW);
-
-            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
-            buffer
-        };
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Python BufferView"),
+            size: size as u64,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::MAP_WRITE,
+            mapped_at_creation: false,
+        });
 
         Ok(BufferView {
-            pbo,
+            buffer,
             size,
             mapped_ptr: std::ptr::null_mut(),
         })
     }
 
-    /// Map the buffer and return a Python MemoryView
-    /// This allows direct writing from NumPy: `np.array(view, copy=False)`
     unsafe fn map(&mut self, py: Python<'_>) -> PyResult<PyObject> {
-        let gl = crate::core::resource::GLOBAL_RESOURCES
-            .with(|res| res.borrow().gl.clone())
-            .ok_or_else(|| PyRuntimeError::new_err("No active GL context"))?;
+        let device = crate::core::resource::GLOBAL_RESOURCES.with(|res| res.borrow().device.clone())
+            .ok_or_else(|| PyRuntimeError::new_err("No active WGPU device"))?;
 
-        unsafe {
-            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(self.pbo));
+        let buffer_slice = self.buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Write, move |res| tx.send(res).unwrap());
+        device.poll(wgpu::Maintain::Wait);
+
+        if rx.recv().unwrap().is_ok() {
+            let ptr = buffer_slice.get_mapped_range_mut().as_mut_ptr();
+            self.mapped_ptr = ptr;
+
+            let view_ptr = pyo3::ffi::PyMemoryView_FromMemory(ptr as *mut i8, self.size as isize, pyo3::ffi::PyBUF_WRITE);
+            if view_ptr.is_null() {
+                return Err(PyRuntimeError::new_err("Failed to create Python MemoryView"));
+            }
+            Ok(PyObject::from_owned_ptr(py, view_ptr))
+        } else {
+            Err(PyRuntimeError::new_err("Failed to map WGPU buffer"))
         }
-
-        let ptr = gl.map_buffer_range(
-            glow::PIXEL_UNPACK_BUFFER,
-            0,
-            self.size as i32,
-            glow::MAP_WRITE_BIT | glow::MAP_INVALIDATE_BUFFER_BIT,
-        );
-
-        unsafe { gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None) };
-
-        if ptr.is_null() {
-            return Err(PyRuntimeError::new_err("Failed to map PBO"));
-        }
-
-        self.mapped_ptr = ptr;
-
-        // Create PyMemoryView using FFI
-        let view_ptr =
-            ffi::PyMemoryView_FromMemory(ptr as *mut i8, self.size as isize, ffi::PyBUF_WRITE);
-
-        if view_ptr.is_null() {
-            return Err(PyRuntimeError::new_err(
-                "Failed to create Python MemoryView",
-            ));
-        }
-
-        // Return owning PyObject
-        Ok(PyObject::from_owned_ptr(py, view_ptr))
     }
 
     fn unmap(&mut self) -> PyResult<()> {
-        let gl = crate::core::resource::GLOBAL_RESOURCES
-            .with(|res| res.borrow().gl.clone())
-            .ok_or_else(|| PyRuntimeError::new_err("No active GL context"))?;
-
-        if self.mapped_ptr.is_null() {
-            return Ok(());
+        if !self.mapped_ptr.is_null() {
+            self.buffer.unmap();
+            self.mapped_ptr = std::ptr::null_mut();
         }
-
-        unsafe {
-            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(self.pbo));
-        }
-        unsafe { gl.unmap_buffer(glow::PIXEL_UNPACK_BUFFER) };
-        unsafe { gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None) };
-
-        self.mapped_ptr = std::ptr::null_mut();
-
         Ok(())
     }
 
-    fn to_texture(&self, width: u32, height: u32, texture_id: u32) -> PyResult<()> {
-        let gl = crate::core::resource::GLOBAL_RESOURCES
-            .with(|res| res.borrow().gl.clone())
-            .ok_or_else(|| PyRuntimeError::new_err("No active GL context"))?;
-
-        // Bind PBO
-        unsafe {
-            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, Some(self.pbo));
-        }
-
-        // Bind Texture
-        // Validating texture_id is hard, assuming user passed valid GL ID.
-        // glow::Texture is a NativeTexture (often u32).
-        // We cast u32 to NativeTexture.
-
-        // This is tricky: PyO3 passes u32, but glow needs NativeTexture.
-        // NativeTexture depends on backend. For gl-rs/gl, it is u32/u64.
-        // For glow's web support, it's Resource.
-        // We assume generic `glow` logic here might need a helper,
-        // BUT calling `gl.bind_texture` expects `NativeTexture`.
-
-        // HACK: We assume `NativeTexture` is constructible from raw ID or we wrap it.
-        // glow 0.13: `NativeTexture` is an alias. On desktop GL it is `NonZeroU32`.
-
-        let native_tex = unsafe { std::mem::transmute::<u32, glow::NativeTexture>(texture_id) };
-        // Check if correct type. If NativeTexture is not u32, this is UB.
-        // But fanta_rust is currently Desktop GL (glutin).
-
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(native_tex));
-
-            // Upload from PBO (offset 0)
-            gl.tex_sub_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                0,
-                0,
-                width as i32,
-                height as i32,
-                glow::RGBA, // Assuming RGBA
-                glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::BufferOffset(0),
-            );
-
-            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
-            gl.bind_texture(glow::TEXTURE_2D, None);
-        }
-
+    fn to_texture(&self, _width: u32, _height: u32, _texture_id: u64) -> PyResult<()> {
+        // Implementation for WGPU texture upload from buffer would go here
         Ok(())
     }
 

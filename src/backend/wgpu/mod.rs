@@ -37,7 +37,7 @@ pub struct WgpuBackend {
     pub surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
     
-    pub main_pipeline: wgpu::RenderPipeline,
+    pub main_pipeline: Arc<wgpu::RenderPipeline>,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub pipeline_layout: wgpu::PipelineLayout,
     
@@ -49,7 +49,7 @@ pub struct WgpuBackend {
     pub hdr_view: wgpu::TextureView,
     pub backdrop_texture: wgpu::Texture,
     
-    pub k4_pipeline: wgpu::RenderPipeline, // Resolve/Post-process
+    pub k4_pipeline: Arc<wgpu::RenderPipeline>, // Resolve/Post-process
     pub k4_bind_group_layout: wgpu::BindGroupLayout,
     
     pub current_encoder: Mutex<Option<wgpu::CommandEncoder>>,
@@ -58,6 +58,7 @@ pub struct WgpuBackend {
     
     pub start_time: std::time::Instant,
     pub screenshot_requested: Mutex<Option<String>>,
+    pub pipeline_cache: Mutex<std::collections::HashMap<String, Arc<wgpu::RenderPipeline>>>,
 }
 
 impl GpuExecutor for WgpuBackend {
@@ -65,7 +66,7 @@ impl GpuExecutor for WgpuBackend {
     type Texture = wgpu::Texture;
     type TextureView = wgpu::TextureView;
     type Sampler = wgpu::Sampler;
-    type RenderPipeline = wgpu::RenderPipeline;
+    type RenderPipeline = Arc<wgpu::RenderPipeline>;
     type ComputePipeline = wgpu::ComputePipeline;
     type BindGroupLayout = wgpu::BindGroupLayout;
     type BindGroup = wgpu::BindGroup;
@@ -160,7 +161,7 @@ impl GpuExecutor for WgpuBackend {
             push_constant_ranges: &[],
         });
 
-        Ok(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        Ok(Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[Vertex::desc()] },
@@ -177,7 +178,7 @@ impl GpuExecutor for WgpuBackend {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-        }))
+        })))
     }
 
     fn create_compute_pipeline(&self, label: &str, wgsl_source: &str, layout: Option<&Self::BindGroupLayout>) -> Result<Self::ComputePipeline, String> {
@@ -286,6 +287,77 @@ impl GpuExecutor for WgpuBackend {
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline { &self.main_pipeline }
     fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
 
+    fn get_custom_render_pipeline(
+        &self,
+        shader_source: &str,
+    ) -> Result<Self::RenderPipeline, String> {
+        let mut cache = self.pipeline_cache.lock().unwrap();
+        if let Some(pipeline) = cache.get(shader_source) {
+            return Ok(pipeline.clone());
+        }
+
+        // Transpile GLSL to WGSL if it looks like GLSL
+        let wgsl: String = if shader_source.contains("#version") || shader_source.contains("void main") {
+            // Use naga to transpile
+            let mut parser = naga::front::glsl::Frontend::default();
+            let module = parser.parse(
+                &naga::front::glsl::Options {
+                    stage: naga::ShaderStage::Fragment,
+                    defines: Default::default(),
+                },
+                shader_source,
+            ).map_err(|e| format!("GLSL Parse Error: {:?}", e))?;
+
+            let mut validator = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            );
+            let info = validator.validate(&module).map_err(|e| format!("Naga Validation Error: {:?}", e))?;
+
+            let mut wgsl_out = String::new();
+            let mut writer = naga::back::wgsl::Writer::new(&mut wgsl_out, naga::back::wgsl::WriterFlags::empty());
+            writer.write(&module, &info).map_err(|e| format!("WGSL Write Error: {:?}", e))?;
+            Ok::<String, String>(wgsl_out)
+        } else {
+            Ok::<String, String>(shader_source.to_string())
+        }?;
+
+        // Create the specialized shader module
+        // We need to inject the uniforms and vertex structures
+        let full_source = format!(
+            "{}\n\n{}",
+            include_str!("../wgpu_shader.wgsl"),
+            wgsl
+        );
+
+        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Custom Shader"),
+            source: wgpu::ShaderSource::Wgsl(full_source.into()),
+        });
+
+        let pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Custom Render Pipeline"),
+            layout: Some(&self.pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[Vertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        cache.insert(shader_source.to_string(), pipeline.clone());
+        Ok(pipeline)
+    }
+
     fn resolve(&mut self) -> Result<(), String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
@@ -321,7 +393,7 @@ impl GpuExecutor for WgpuBackend {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        rpass.set_pipeline(&self.k4_pipeline);
+        rpass.set_pipeline(&*self.k4_pipeline);
         rpass.set_bind_group(0, &k4_bind_group, &[]);
         rpass.draw(0..3, 0..1); // Full screen triangle
         
@@ -343,7 +415,7 @@ impl GpuExecutor for WgpuBackend {
 }
 
 impl WgpuBackend {
-    pub fn new_async(window: Arc<impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + std::marker::Send + std::marker::Sync + 'static>, width: u32, height: u32) -> Result<Self, String> {
+    pub fn new_async(window: Arc<impl winit::raw_window_handle::HasWindowHandle + winit::raw_window_handle::HasDisplayHandle + std::marker::Send + std::marker::Sync + 'static>, width: u32, height: u32) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
         
         let surface = unsafe { instance.create_surface(window) }
@@ -412,7 +484,7 @@ impl WgpuBackend {
             push_constant_ranges: &[],
         });
 
-        let main_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let main_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Main Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState { module: &main_shader, entry_point: "vs_main", buffers: &[Vertex::desc()] },
@@ -429,7 +501,7 @@ impl WgpuBackend {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-        });
+        }));
 
         // --- HDR Resources ---
         let hdr_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -501,7 +573,7 @@ impl WgpuBackend {
             push_constant_ranges: &[],
         });
 
-        let k4_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let k4_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Resolve Render Pipeline"),
             layout: Some(&k4_pipeline_layout),
             vertex: wgpu::VertexState { module: &k4_shader, entry_point: "vs_main", buffers: &[] },
@@ -518,9 +590,9 @@ impl WgpuBackend {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-        });
+        }));
 
-        Ok(Self {
+        let backend = WgpuBackend {
             device,
             queue,
             surface,
@@ -541,7 +613,17 @@ impl WgpuBackend {
             current_view: Mutex::new(None),
             start_time: std::time::Instant::now(),
             screenshot_requested: Mutex::new(None),
-        })
+            pipeline_cache: Mutex::new(std::collections::HashMap::new()),
+        };
+
+        // Populate GLOBAL_RESOURCES for Python bindings
+        crate::core::resource::GLOBAL_RESOURCES.with(|res| {
+            let mut borrow = res.borrow_mut();
+            borrow.device = Some(backend.device.clone());
+            borrow.queue = Some(backend.queue.clone());
+        });
+
+        Ok(backend)
     }
 
     fn perform_screenshot(&self, path: &str) -> Result<(), String> {
@@ -607,7 +689,7 @@ impl WgpuBackend {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            rpass.set_pipeline(&self.k4_pipeline); // Re-use the resolve pipeline
+            rpass.set_pipeline(&*self.k4_pipeline); // Re-use the resolve pipeline
             rpass.set_bind_group(0, &k4_bg, &[]);
             rpass.draw(0..3, 0..1);
         }

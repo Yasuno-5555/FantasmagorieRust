@@ -181,6 +181,7 @@ impl Renderer {
                         crate::core::Vec2::ZERO,
                         gs,
                         gc,
+                        None,
                     );
                 }
                 RenderCommand::SetScissor(rect) => {

@@ -5,9 +5,9 @@
 #[cfg(feature = "python")]
 pub mod bindings;
 
-#[cfg(all(feature = "python", feature = "opengl"))]
+#[cfg(all(feature = "python", feature = "wgpu"))]
 pub mod buffer;
-#[cfg(all(feature = "python", feature = "opengl"))]
+#[cfg(all(feature = "python", feature = "wgpu"))]
 pub mod dlpack;
-#[cfg(all(feature = "python", feature = "opengl"))]
+#[cfg(all(feature = "python", feature = "wgpu"))]
 pub mod window;

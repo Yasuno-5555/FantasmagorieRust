@@ -23,6 +23,7 @@ pub enum DrawCommand {
         // Visual Revolution Additions
         glow_strength: f32,
         glow_color: ColorF,
+        shader_inject: Option<String>,
     },
 
     /// Text glyph (SDF)
@@ -217,6 +218,7 @@ impl DrawList {
             wobble: Vec2::ZERO,
             glow_strength: 0.0,
             glow_color: ColorF::transparent(),
+            shader_inject: None,
         });
     }
 
@@ -233,6 +235,7 @@ impl DrawList {
         wobble: Vec2,
         glow_strength: f32,
         glow_color: ColorF,
+        shader_inject: Option<String>,
     ) {
         self.commands.push(DrawCommand::RoundedRect {
             pos,
@@ -246,6 +249,7 @@ impl DrawList {
             wobble,
             glow_strength,
             glow_color,
+            shader_inject,
         });
     }
 
@@ -263,6 +267,7 @@ impl DrawList {
         wobble: Vec2,
         glow_strength: f32,
         glow_color: ColorF,
+        shader_inject: Option<String>,
     ) {
         self.commands.push(DrawCommand::RoundedRect {
             pos,
@@ -276,6 +281,7 @@ impl DrawList {
             wobble,
             glow_strength,
             glow_color,
+            shader_inject,
         });
     }
 
@@ -300,6 +306,7 @@ impl DrawList {
             Vec2::ZERO,
             0.0,
             ColorF::transparent(),
+            None,
         );
     }
 

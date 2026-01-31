@@ -98,7 +98,7 @@ use pyo3::prelude::*;
 fn fanta_rust(py: Python, m: &PyModule) -> PyResult<()> {
     python::bindings::register(py, m)?;
 
-    #[cfg(feature = "opengl")]
+    #[cfg(feature = "wgpu")]
     {
         m.add_function(pyo3::wrap_pyfunction!(python::window::py_run_window, m)?)?;
     }

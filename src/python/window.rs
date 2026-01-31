@@ -9,31 +9,19 @@
 //!    - Runs Render pass (render_ui)
 //!    - Draws with OpenGL backend
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-
-use std::ffi::CString;
-use std::num::NonZeroU32;
-
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
+use winit::window::WindowBuilder;
+use std::sync::Arc;
+use pyo3::exceptions::PyRuntimeError;
 
-use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextApi, ContextAttributesBuilder, Version};
-use glutin::display::GetGlDisplay;
-use glutin::prelude::*;
-use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
-
-use glutin_winit::DisplayBuilder;
-use raw_window_handle::HasRawWindowHandle;
-
-use crate::backend::{Backend, OpenGLBackend};
+use crate::backend::{GraphicsBackend, WgpuBackend};
 use crate::draw::DrawList;
 use crate::view::render_ui;
 
-use super::bindings::PY_CONTEXTS;
+use super::bindings::context::{PY_CONTEXTS, CURRENT_WINDOW, PyContextInner};
 
 /// Initialize global context before each frame
 fn init_frame(width: u32, height: u32) {
@@ -42,13 +30,13 @@ fn init_frame(width: u32, height: u32) {
         // Use ID 0 for the main window runner
         let inner = borrow
             .entry(0)
-            .or_insert_with(|| super::bindings::PyContextInner::new(width, height));
+            .or_insert_with(|| PyContextInner::new(width, height));
         inner.width = width;
         inner.height = height;
         inner.reset();
 
         // Ensure CURRENT_WINDOW is 0
-        super::bindings::CURRENT_WINDOW.with(|cw| *cw.borrow_mut() = 0);
+        CURRENT_WINDOW.with(|cw| *cw.borrow_mut() = 0);
     });
 }
 
@@ -104,82 +92,15 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to create event loop: {}", e)))?;
 
     // Window builder
-    let window_builder = WindowBuilder::new()
+    let window = Arc::new(WindowBuilder::new()
         .with_title(title)
-        .with_inner_size(LogicalSize::new(width, height));
+        .with_inner_size(LogicalSize::new(width, height))
+        .build(&event_loop)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create window: {}", e)))?);
 
-    // Glutin config template
-    // Standard opaque window
-    let template = ConfigTemplateBuilder::new()
-        .with_transparency(false);
-
-    let display_builder = DisplayBuilder::new().with_window_builder(Some(window_builder));
-
-    // Build display and window
-    let (window, gl_config) = display_builder
-        .build(&event_loop, template, |configs| {
-            configs
-                .reduce(|accum, config| {
-                    if config.num_samples() > accum.num_samples() {
-                        config
-                    } else {
-                        accum
-                    }
-                })
-                .unwrap()
-        })
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to build display: {}", e)))?;
-
-    let window = window.ok_or_else(|| PyRuntimeError::new_err("No window created"))?;
-    let raw_window_handle = window.raw_window_handle();
-
-    // Create OpenGL context
-    let context_attributes = ContextAttributesBuilder::new()
-        .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
-        .build(Some(raw_window_handle));
-
-    let gl_display = gl_config.display();
-
-    let not_current_gl_context = unsafe {
-        gl_display
-            .create_context(&gl_config, &context_attributes)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create context: {}", e)))?
-    };
-
-    // Create surface
-    let size = window.inner_size();
-    let surface_attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-        raw_window_handle,
-        NonZeroU32::new(size.width).unwrap(),
-        NonZeroU32::new(size.height).unwrap(),
-    );
-
-    let surface = unsafe {
-        gl_display
-            .create_window_surface(&gl_config, &surface_attributes)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create surface: {}", e)))?
-    };
-
-    // Make context current
-    let gl_context = not_current_gl_context
-        .make_current(&surface)
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to make context current: {}", e)))?;
-
-    // Load OpenGL functions
-    let gl = unsafe {
-        glow::Context::from_loader_function(|s| {
-            let c_str = CString::new(s).unwrap();
-            gl_display.get_proc_address(&c_str) as *const _
-        })
-    };
-
-    // Create OpenGL backend
-    let mut backend: Box<dyn Backend> = unsafe {
-        Box::new(
-            OpenGLBackend::new(gl)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to create backend: {}", e)))?,
-        )
-    };
+    // Create WGPU backend
+    let mut backend = WgpuBackend::new_async(window.clone(), width, height)
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create WGPU backend: {}", e)))?;
 
     // State for the loop
     let mut current_width = width;
@@ -218,11 +139,14 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
                     if size.width > 0 && size.height > 0 {
                         current_width = size.width;
                         current_height = size.height;
-                        surface.resize(
-                            &gl_context,
-                            NonZeroU32::new(size.width).unwrap(),
-                            NonZeroU32::new(size.height).unwrap(),
-                        );
+                    if size.width > 0 && size.height > 0 {
+                        current_width = size.width;
+                        current_height = size.height;
+                        // WGPU surface reconfiguration is handled inside backend.render or explicitly
+                        backend.surface_config.width = size.width;
+                        backend.surface_config.height = size.height;
+                        backend.surface.configure(&backend.device, &backend.surface_config);
+                    }
                     }
                 }
                 Event::WindowEvent {
@@ -375,9 +299,7 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
                     */
 
                     // 5. SWAP BUFFERS
-                    if let Err(e) = surface.swap_buffers(&gl_context) {
-                        println!("❌ Swap Buffers Failed: {}", e);
-                    }
+                    backend.present();
                     
                     // Check GL Error
                     /*

@@ -13,9 +13,8 @@ name = "fanta_rust"
 crate-type = ["cdylib", "rlib"]  # Python extension + Rust library
 
 [features]
-default = ["opengl"]
-opengl = ["glow", "glutin", "glutin-winit", "raw-window-handle"]
-wgpu = ["dep:wgpu"]
+default = ["wgpu"]
+wgpu = ["dep:wgpu", "dep:naga", "naga/glsl-in", "naga/wgsl-in", "naga/wgsl-out", "naga/spv-out"]
 metal = ["dep:metal", "dep:objc", "dep:block", "dep:naga", "dep:cocoa"]
 python = ["pyo3", "tracea/python"]
 cpp = []
@@ -32,12 +31,6 @@ memmap2 = "0.9"
 # Font rendering
 fontdue = "0.8"
 
-# OpenGL backend (default)
-glow = { version = "0.13", optional = true }
-glutin = { version = "0.31", optional = true }
-glutin-winit = { version = "0.4", optional = true }
-raw-window-handle = { version = "0.6", optional = true }
-
 # wgpu backend (optional)
 wgpu = { version = "0.19", optional = true }
 pollster = "0.3"
@@ -49,13 +42,13 @@ block = { version = "0.1", optional = true }
 cocoa = { version = "0.25", optional = true }
 
 # Windowing
-winit = "0.29"
+winit = "0.30"
 
 # Python bindings (optional)
 pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
 image = "0.24"
 pulldown-cmark = "0.10"
-naga = { version = "0.19", features = ["glsl-in", "wgsl-in", "spv-out", "hlsl-out"], optional = true }
+naga = { version = "0.19", features = ["glsl-in", "wgsl-in", "wgsl-out", "spv-out", "hlsl-out"], optional = true }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

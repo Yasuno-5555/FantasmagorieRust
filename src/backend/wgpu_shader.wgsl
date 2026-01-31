@@ -293,26 +293,33 @@ fn mode_heatmap(uv: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(result, 1.0);
 }
 
-fn mode_aurora(clip_pos: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
-    let t = uniforms.time;
-    let p = uv * 2.0 - 1.0;
-    var color = vec3<f32>(0.0);
+fn mode_aurora(uv: vec2<f32>) -> vec4<f32> {
+    let t = uniforms.time * 0.5;
+    let p = uv;
     
-    for (var i = 1.0; i < 4.0; i += 1.0) {
-        let shifted_uv = p + vec2<f32>(
-            sin(t * 0.2 + i * 1.5) * 0.5,
-            cos(t * 0.3 + i * 2.1) * 0.5
+    // Lush, flowing aurora logic
+    var col = vec3<f32>(0.0);
+    let n = 5.0;
+    for (var i = 1.0; i < n; i += 1.0) {
+        let uv_i = p + vec2<f32>(
+            sin(t * 0.1 + i * 0.8) * 0.4,
+            cos(t * 0.15 + i * 1.2) * 0.3
         );
-        let dist = length(shifted_uv);
-        let wave = sin(dist * 5.0 - t * 2.0) * 0.5 + 0.5;
-        
-        let hue = fract(t * 0.05 + i * 0.2);
-        let c = hsv2rgb(vec3<f32>(hue, 0.7, 0.8));
-        color += c * (0.15 / (dist + 0.1)) * wave;
+        let d = length(uv_i - 0.5);
+        let hue = fract(t * 0.02 + i * 0.15);
+        let rgb = hsv2rgb(vec3<f32>(hue, 0.8, 0.7));
+        col += rgb * (0.1 / (d + 0.15)) * (0.5 + 0.5 * sin(d * 10.0 - t * 2.0));
     }
     
-    color = clamp(color * 0.5, vec3<f32>(0.05), vec3<f32>(0.6));
-    return vec4<f32>(color, 1.0);
+    // Blend with a deep space base
+    let base = mix(vec3<f32>(0.02, 0.02, 0.05), vec3<f32>(0.05, 0.02, 0.1), p.y);
+    return vec4<f32>(base + col * 0.6, 1.0);
+}
+
+// Placeholder for custom effect injection
+// User-provided code should override this if using mode 100
+fn custom_effect(color: vec4<f32>, world_pos: vec2<f32>, uv: vec2<f32>, time: f32) -> vec4<f32> {
+    return color;
 }
 
 // ========== Main Fragment Shader ==========
@@ -326,11 +333,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     else if (uniforms.mode == 2) { final_color = mode_shape(in.color, in.world_pos); }
     else if (uniforms.mode == 3) { final_color = mode_image(in.color, in.uv, in.world_pos); }
     else if (uniforms.mode == 4) { final_color = mode_blur(in.color, in.world_pos, in.uv); }
-    else if (uniforms.mode == 5) { final_color = mode_aurora(in.clip_position, in.uv); }
+    else if (uniforms.mode == 5) { final_color = mode_aurora(in.uv); }
     else if (uniforms.mode == 6) { final_color = mode_arc(in.color, in.world_pos); }
     else if (uniforms.mode == 7) { final_color = mode_plot(in.color); }
     else if (uniforms.mode == 8) { final_color = mode_heatmap(in.uv); }
-    else if (uniforms.mode == 9) { final_color = mode_aurora(in.clip_position, in.uv); }
+    else if (uniforms.mode == 9) { final_color = mode_aurora(in.uv); }
+    else if (uniforms.mode == 100) { final_color = custom_effect(in.color, in.world_pos, in.uv, uniforms.time); }
     else { final_color = in.color; }
 
     // Linear -> sRGB (Manual conversion)

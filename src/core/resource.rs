@@ -3,14 +3,13 @@
 //! Holds Gloabl/Shared handles for OpenGL/Vulkan resources that are shared across
 //! window contexts (via context sharing).
 
-use glow::NativeTexture;
+use std::sync::Arc;
 use std::cell::RefCell;
-use std::rc::Rc;
 
 #[derive(Default)]
 pub struct SharedResources {
-    pub gl: Option<Rc<glow::Context>>,
-    pub font_texture: Option<NativeTexture>,
+    pub device: Option<Arc<wgpu::Device>>,
+    pub queue: Option<Arc<wgpu::Queue>>,
 }
 
 thread_local! {

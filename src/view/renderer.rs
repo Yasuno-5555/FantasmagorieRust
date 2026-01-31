@@ -74,6 +74,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             Vec2::new(view.wobble_x.get(), view.wobble_y.get()),
             view.glow_strength.get(),
             view.glow_color.get(),
+            view.custom_shader.get().map(|s| s.to_string()),
         );
     }
 
@@ -258,6 +259,7 @@ fn render_button(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         Vec2::ZERO,
         view.glow_strength.get(),
         view.glow_color.get(),
+        None,
     );
 
     // Render Label and Icon (Centered)
@@ -780,6 +782,7 @@ fn render_slider(view: &ViewHeader, dl: &mut DrawList) {
         Vec2::ZERO,
         0.0,
         ColorF::transparent(),
+        None,
     );
 }
 
@@ -802,6 +805,7 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager)
             Vec2::ZERO,
             0.0,
             ColorF::transparent(),
+            None,
         );
     }
 
@@ -1437,6 +1441,7 @@ fn render_fader(view: &ViewHeader, dl: &mut DrawList) {
             0.0
         }, // Glow when dragging
         view.fg_color.get(),
+        None,
     );
 
     // Handle Center Line (White)
@@ -1618,6 +1623,7 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, fm: &mut FontM
             0.0
         },
         view.fg_color.get().with_alpha(0.5),
+        None,
     );
 
     // 2. Header
@@ -1634,6 +1640,7 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, fm: &mut FontM
         Vec2::ZERO,
         0.0,
         ColorF::transparent(),
+        None,
     );
 
     // 3. Title
@@ -1738,6 +1745,7 @@ fn render_context_menu(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mu
         Vec2::ZERO,
         view.glow_strength.get(),
         view.glow_color.get(),
+        None,
     );
 
     // 4. Render children (menu items)
@@ -1844,6 +1852,7 @@ fn render_collapsible(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut
         Vec2::ZERO,
         0.0,
         ColorF::transparent(),
+        None,
     );
 
     // 2. Header bar - use simple rounded rect
@@ -1951,6 +1960,7 @@ fn render_toast(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         Vec2::ZERO,
         2.0, // Subtle glow
         view.glow_color.get().with_alpha(0.3 * alpha),
+        None,
     );
 
     // Color indicator bar on left
@@ -2005,6 +2015,7 @@ fn render_tooltip(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
             Vec2::ZERO,
             glow_strength,
             view.glow_color.get().with_alpha(0.5 * alpha),
+            None,
         );
     }
 
@@ -2023,6 +2034,7 @@ fn render_tooltip(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         Vec2::ZERO,
         0.0,
         ColorF::transparent(),
+        None,
     );
 
     // Text

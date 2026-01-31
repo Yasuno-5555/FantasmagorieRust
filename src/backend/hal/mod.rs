@@ -144,6 +144,12 @@ pub trait GpuExecutor: Send + Sync {
     /// Get the default sampler
     fn get_default_sampler(&self) -> &Self::Sampler;
 
+    /// Get or create a custom render pipeline from shader source (GLSL/WGSL)
+    fn get_custom_render_pipeline(
+        &self,
+        shader_source: &str,
+    ) -> Result<Self::RenderPipeline, String>;
+
     // --- Global Operations ---
     /// Perform final resolve/composition pass
     fn resolve(&mut self) -> Result<(), String>;

@@ -140,6 +140,7 @@ pub struct ViewHeader<'a> {
     pub wobble_x: Cell<f32>,
     pub wobble_y: Cell<f32>,
     pub font_size: Cell<f32>,
+    pub custom_shader: Cell<Option<&'a str>>,
 
     // String refs are Copy (impl Copy for &str), Cell requires Copy.
     // &str is Copy.
@@ -243,6 +244,7 @@ impl<'a> Default for ViewHeader<'a> {
             wobble_x: Cell::new(0.0),
             wobble_y: Cell::new(0.0),
             font_size: Cell::new(14.0),
+            custom_shader: Cell::new(None),
             aurora: Cell::new(false),
             text: Cell::new(""),
             icon: Cell::new(""),

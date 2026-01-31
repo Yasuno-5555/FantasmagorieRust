@@ -95,6 +95,7 @@ pub enum ShaderMode {
     Plot = 7,
     Heatmap = 8,
     Aurora = 9,
+    Custom = 100,
 }
 
 /// Render pass types (Blur handled separately from modes)

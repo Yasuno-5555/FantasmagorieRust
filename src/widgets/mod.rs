@@ -155,6 +155,11 @@ impl<'a> BoxBuilder<'a> {
         self
     }
 
+    pub fn shader(self, source: &'a str) -> Self {
+        self.view.custom_shader.set(Some(source));
+        self
+    }
+
     pub fn build(self) -> &'a ViewHeader<'a> {
         self.view
     }
