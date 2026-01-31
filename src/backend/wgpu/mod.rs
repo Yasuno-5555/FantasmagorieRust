@@ -334,9 +334,8 @@ impl GpuExecutor for WgpuBackend {
 
         // 3. Handle screenshot after frame
         let mut req_guard = self.screenshot_requested.lock().unwrap();
-        if let Some(_path) = req_guard.take() {
-            // Simplified capture for now: just log
-            println!("Screenshot captured (dummy)");
+        if let Some(path) = req_guard.take() {
+            self.perform_screenshot(&path)?;
         }
         Ok(())
     }
@@ -543,6 +542,130 @@ impl WgpuBackend {
             start_time: std::time::Instant::now(),
             screenshot_requested: Mutex::new(None),
         })
+    }
+
+    fn perform_screenshot(&self, path: &str) -> Result<(), String> {
+        let width = self.surface_config.width;
+        let height = self.surface_config.height;
+
+        // 1. Create a buffer to copy the texture to
+        let bytes_per_pixel = 4; // Rgba8Unorm
+        let unpadded_bytes_per_row = width * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+
+        let output_buffer_desc = wgpu::BufferDescriptor {
+            size: (padded_bytes_per_row * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            label: Some("Screenshot Buffer"),
+            mapped_at_creation: false,
+        };
+        let output_buffer = self.device.create_buffer(&output_buffer_desc);
+
+        // 2. Create a temporary texture using the SAME format as the resolve pipeline
+        let format = self.surface_config.format;
+        
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Screenshot Encoder"),
+        });
+
+        // Create a 8-bit texture to resolve into
+        let temp_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Temp Screenshot Texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let k4_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.k4_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Screenshot Resolve Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &temp_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.k4_pipeline); // Re-use the resolve pipeline
+            rpass.set_bind_group(0, &k4_bg, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                aspect: wgpu::TextureAspect::All,
+                texture: &temp_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &output_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        self.queue.submit(Some(encoder.finish()));
+
+        // 3. Map buffer and save
+        let buffer_slice = output_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |res| tx.send(res).unwrap());
+        self.device.poll(wgpu::Maintain::Wait);
+
+        if rx.recv().unwrap().is_ok() {
+            let data = buffer_slice.get_mapped_range();
+            let mut raw_pixels = Vec::with_capacity((width * height * 4) as usize);
+            for chunk in data.chunks(padded_bytes_per_row as usize) {
+                raw_pixels.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
+            }
+            
+            // Handle BGRA to RGBA if needed
+            if format == wgpu::TextureFormat::Bgra8Unorm || format == wgpu::TextureFormat::Bgra8UnormSrgb {
+                for i in (0..raw_pixels.len()).step_by(4) {
+                    raw_pixels.swap(i, i + 2);
+                }
+            }
+
+            image::save_buffer(
+                path,
+                &raw_pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            ).map_err(|e| e.to_string())?;
+            
+            println!("✨ Screenshot saved to: {}", path);
+            drop(data);
+            output_buffer.unmap();
+        }
+
+        Ok(())
     }
 }
 

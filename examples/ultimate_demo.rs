@@ -51,95 +51,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_title(format!("Fantasmagorie Ultimate Demo ({})", backend_name))
         .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
 
-    // --- WINDOW AND BACKEND INITIALIZATION ---
     let (window, mut backend): (Arc<winit::window::Window>, Box<dyn fanta_rust::backend::GraphicsBackend>) = match backend_name.as_str() {
-        #[cfg(feature = "opengl")]
-        "opengl" => {
-            let template = ConfigTemplateBuilder::new().with_alpha_size(8);
-            let display_builder = DisplayBuilder::new().with_window_builder(Some(window_builder));
-            let (window, gl_config) = display_builder.build(&event_loop, template, |configs| {
-                configs.reduce(|accum, config| if config.num_samples() > accum.num_samples() { config } else { accum }).unwrap()
-            })?;
-            let window = Arc::new(window.ok_or("No window created")?);
-            let raw_window_handle = window.raw_window_handle();
-            let context_attributes = ContextAttributesBuilder::new()
-                .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
-                .build(Some(raw_window_handle));
-            let gl_display = gl_config.display();
-            let not_current_gl_context = unsafe { gl_display.create_context(&gl_config, &context_attributes)? };
-            let size = window.inner_size();
-            let surface_attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-                raw_window_handle,
-                NonZeroU32::new(size.width).unwrap(),
-                NonZeroU32::new(size.height).unwrap(),
-            );
-            let surface = unsafe { gl_display.create_window_surface(&gl_config, &surface_attributes)? };
-            let gl_context = not_current_gl_context.make_current(&surface)?;
-            let gl = unsafe {
-                glow::Context::from_loader_function(|s| {
-                    let c_str = CString::new(s).unwrap();
-                    gl_display.get_proc_address(&c_str) as *const _
-                })
-            };
-            
-            // Leak these to keep them alive (it's a demo)
-            Box::leak(Box::new(gl_context));
-            Box::leak(Box::new(surface));
-
-            (window, Box::new(unsafe { OpenGLBackend::new(gl)? }))
-        }
         #[cfg(feature = "wgpu")]
         "wgpu" => {
             let window = Arc::new(window_builder.build(&event_loop)?);
             let size = window.inner_size();
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::PRIMARY,
-                ..Default::default()
-            });
-            let surface = unsafe { instance.create_surface(window.clone()) }?;
-            let b = Box::new(pollster::block_on(WgpuBackend::new_async(
-                &instance,
-                surface,
+            let b = Box::new(WgpuBackend::new_async(
+                window.clone(),
                 size.width,
                 size.height,
-            )).map_err(|e| format!("WGPU creation failed: {}", e))?);
+            ).map_err(|e| format!("WGPU creation failed: {}", e))?);
             (window, b)
-        }
-        #[cfg(feature = "vulkan")]
-        "vulkan" => {
-            let window = Arc::new(window_builder.build(&event_loop)?);
-            let size = window.inner_size();
-            #[cfg(target_os = "windows")]
-            {
-                use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-                use std::ffi::c_void;
-                let (hwnd, hinstance) = match window.raw_window_handle() {
-                    RawWindowHandle::Win32(handle) => {
-                        (handle.hwnd as *mut c_void, handle.hinstance as *mut c_void)
-                    }
-                    _ => panic!("Not running on Windows/Win32"),
-                };
-                (window, Box::new(unsafe { VulkanBackend::new(hwnd, hinstance, size.width, size.height)? }))
-            }
-            #[cfg(not(target_os = "windows"))]
-            panic!("Vulkan backend in this demo currently requires Windows.")
-        }
-        #[cfg(feature = "dx12")]
-        "dx12" => {
-            let window = Arc::new(window_builder.build(&event_loop)?);
-            let size = window.inner_size();
-            #[cfg(target_os = "windows")]
-            {
-                use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-                use windows::Win32::Foundation::HWND;
-                let hwnd = match window.raw_window_handle() {
-                    RawWindowHandle::Win32(handle) => HWND(handle.hwnd as isize),
-                    _ => panic!("Not running on Windows/Win32"),
-                };
-                (window, Box::new(unsafe { Dx12Backend::new(hwnd, size.width, size.height)? }))
-            }
-            #[cfg(not(target_os = "windows"))]
-            panic!("DX12 backend requires Windows.")
         }
         _ => panic!("Unsupported backend or feature not enabled: {}", backend_name),
     };
@@ -291,7 +213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         fanta_rust::view::renderer::render_ui(root_node, current_width as f32, current_height as f32, &mut dl, &mut fm);
                         
                         if fm.texture_dirty {
-                            backend.update_font_texture(fm.atlas.width, fm.atlas.height, &fm.atlas.texture_data);
+                            backend.update_font_texture(fm.atlas.width as u32, fm.atlas.height as u32, &fm.atlas.texture_data);
                             fm.texture_dirty = false;
                         }
                     });
@@ -300,10 +222,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 frame_count += 1;
-                if frame_count == 100 {
+                if frame_count == 30 {
                     let filename = format!("ultimate_screenshot_{}.png", backend_name);
                     backend.capture_screenshot(&filename);
-                    println!("✨ Screenshot captured: {}", filename);
+                }
+                if frame_count == 35 {
+                    println!("Demo verification complete.");
+                    elwt.exit();
                 }
             }
             _ => {}
