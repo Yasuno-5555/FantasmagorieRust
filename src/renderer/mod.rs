@@ -4,6 +4,8 @@ pub mod frame;
 pub mod orchestrator;
 pub mod packet;
 pub mod types;
+pub mod graph;
+pub mod layer;
 
 pub use api::{Renderer, FrameContext};
 pub use types::*;

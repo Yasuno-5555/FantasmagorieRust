@@ -13,9 +13,10 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
-use winit::window::WindowBuilder;
 use std::sync::Arc;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::Python;
+use pyo3::prelude::*;
 
 use crate::backend::{GraphicsBackend, WgpuBackend};
 use crate::draw::DrawList;
@@ -99,7 +100,7 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to create window: {}", e)))?);
 
     // Create WGPU backend
-    let mut backend = WgpuBackend::new_async(window.clone(), width, height)
+    let mut backend = WgpuBackend::new_async(&*window, width, height)
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to create WGPU backend: {}", e)))?;
 
     // State for the loop
@@ -114,6 +115,10 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
     let mut mouse_pressed = false;
     let mut right_mouse_pressed = false;
     let mut middle_mouse_pressed = false;
+    
+    // --- The Constitution: MasterClock ---
+    let mut clock = crate::core::time::MasterClock::new();
+    let mut last_frame = std::time::Instant::now();
 
     println!("🪟 Window created: {}x{}", width, height);
     println!("🎨 OpenGL backend initialized");
@@ -139,14 +144,10 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
                     if size.width > 0 && size.height > 0 {
                         current_width = size.width;
                         current_height = size.height;
-                    if size.width > 0 && size.height > 0 {
-                        current_width = size.width;
-                        current_height = size.height;
                         // WGPU surface reconfiguration is handled inside backend.render or explicitly
                         backend.surface_config.width = size.width;
                         backend.surface_config.height = size.height;
                         backend.surface.configure(&backend.device, &backend.surface_config);
-                    }
                     }
                 }
                 Event::WindowEvent {
@@ -249,6 +250,12 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
                     ..
                 } => {
                     frame_count += 1;
+                    
+                    let now = std::time::Instant::now();
+                    let dt = now.duration_since(last_frame).as_secs_f64();
+                    last_frame = now;
+                    clock.tick(dt);
+                    let time = clock.time().seconds;
 
                     // ═══════════════════════════════════════════════════════════════
                     // FRAME PIPELINE
@@ -287,26 +294,11 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
                     let draw_list = end_frame(current_width, current_height);
 
                     // 4. BACKEND DRAW: DrawCommands → OpenGL
-                    backend.render(&draw_list, current_width, current_height);
-
-                    // Handle Screenshot Request
-                    // Handle Screenshot Request
-                    // (Disabled during Multi-Window verification to avoid gl ownership issues)
-                    /*
-                    if let Some(path) = crate::view::interaction::get_screenshot_request() {
-                         // ...
-                    }
-                    */
+                    backend.render(&draw_list, current_width, current_height, time);
 
                     // 5. SWAP BUFFERS
                     backend.present();
                     
-                    // Check GL Error
-                    /*
-                    let err = unsafe { backend.get_error() }; // Need to expose get_error or just use gl context if I can access it. 
-                    // Backend owns gl. I need to add get_error to Backend trait or just print it inside render.
-                    */
-
                     // Debug output every 60 frames
                     if frame_count % 60 == 0 {
                         println!(

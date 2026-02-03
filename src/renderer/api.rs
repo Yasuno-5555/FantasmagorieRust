@@ -90,7 +90,9 @@ impl Renderer {
 
     /// Submits the frame.
     /// In Lite mode, this transmutes RenderCommands into DrawCommands for the backend.
-    pub fn end_frame(&mut self, frame: FrameContext, width: u32, height: u32) {
+    /// Submits the frame.
+    /// In Lite mode, this transmutes RenderCommands into DrawCommands for the backend.
+    pub fn end_frame(&mut self, frame: FrameContext, width: u32, height: u32, time: f64) {
         let description = frame.finish();
         
         // The Fork: Profile determines how we process the frame
@@ -102,7 +104,7 @@ impl Renderer {
                 self.transmute_to_drawlist(&description, &mut dl);
 
                 // Execute via immediate-mode backend interface
-                self.backend.render(&dl, width, height);
+                self.backend.render(&dl, width, height, time);
                 self.backend.present();
 
                 // K11: Update Profiler Stats

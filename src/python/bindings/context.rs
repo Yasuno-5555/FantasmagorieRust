@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use crate::core::{ColorF, FrameArena, ID};
 use crate::draw::DrawList;
 use crate::view::header::{ViewHeader, ViewType};
-use crate::view::{Context, render_ui};
+use crate::view::render_ui;
+use crate::widgets::UIContext;
 use crate::view::plot::PlotItem;
 
 use super::widgets::{PyToggleBuilder, PyCheckboxBuilder, PyRadioBuilder, PyDropdownBuilder};
@@ -29,7 +30,7 @@ pub struct PyContextInner {
     pub font_manager: crate::text::FontManager,
     pub width: u32,
     pub height: u32,
-    pub context: Context, // Stateful interaction context
+    // pub context: UIContext, // Removed to avoid self-reference
     
     pub last_view: Option<u64>,
     pub plot_items: HashMap<u64, Vec<PlotItem<'static>>>,
@@ -45,7 +46,7 @@ impl PyContextInner {
             next_id: 1,
             draw_list: DrawList::new(),
             font_manager: crate::text::FontManager::new(),
-            context: Context::default(), // Assuming Default works, or Context::new()
+            // context: UIContext::default(), 
             width,
             height,
             last_view: None,
@@ -234,29 +235,33 @@ impl PyContext {
          let mut new_val = value;
          
          let builder = with_current_context(|inner| {
-                // Assuming inner.context has toggle method that returns a widget builder logic
-                // But wait, inner.context is stateless Context. 
-                // The original code was: `inner.context.toggle(&mut new_val)`
-                // We need to implement that or rely on it existing.
-                // For now, let's replicate the original binding logic logic if possible.
-                // But wait, the original logic created a view implicitly?
-                // `inner.context.toggle` suggests immediate mode logic.
+                // Create temp UIContext
+                // ...
+                let arena = unsafe { std::mem::transmute::<&FrameArena, &'static FrameArena>(&inner.arena) };
+                let views = &mut inner.views;
+                let parent_stack = &inner.parent_stack;
+                let current_next_id = inner.next_id;
                 
-                // Let's assume we can alloc a view here manually if needed, or use the helper.
-                // Original: `let builder = inner.context.toggle(...)` -> This suggests Context returns a builder?
-                // crate::view::Context::toggle likely returns something.
-                
-                // Since I cannot see crate::view::Context right now, I will assume it works as before.
-                // But I added `context: Context` field.
-                
-                let builder = inner.context.toggle(&mut new_val);
-                 
-                let view_id = builder.view.id.get().0;
-                 
-                // Set text immediately
-                let s = inner.arena.alloc_str(&label);
-                builder.view.text.set(std::mem::transmute::<&str, &'static str>(s));
+                let (view_id, final_next_id) = {
+                    let mut ui = UIContext::new(arena);
+                    ui.next_id = current_next_id;
+                    for &id in parent_stack {
+                        if let Some(&ptr) = views.get(&id) { unsafe { ui.begin(&*ptr); } }
+                    }
+                    
+                    let builder = ui.toggle(&mut new_val);
+                    let view_id = builder.view.id.get().0;
+                    let view_ptr = unsafe { std::mem::transmute::<&ViewHeader, *mut ViewHeader<'static>>(builder.view) };
+                    
+                    let s = arena.alloc_str(&label);
+                    builder.view.text.set(unsafe{ std::mem::transmute::<&str, &'static str>(s) });
 
+                    views.insert(view_id, view_ptr);
+                    
+                    (view_id, ui.next_id)
+                }; 
+                inner.next_id = final_next_id;
+                
                 Ok(PyToggleBuilder { view_id })
          })?;
 
@@ -268,10 +273,29 @@ impl PyContext {
          let mut new_val = value;
          
          let builder = with_current_context(|inner| {
-                let builder = inner.context.checkbox(&mut new_val);
-                let view_id = builder.view.id.get().0;
-                let s = inner.arena.alloc_str(&label);
-                builder.view.text.set(std::mem::transmute::<&str, &'static str>(s));
+                let arena = unsafe { std::mem::transmute::<&FrameArena, &'static FrameArena>(&inner.arena) };
+                let views = &mut inner.views;
+                let parent_stack = &inner.parent_stack;
+                let current_next_id = inner.next_id;
+
+                let (view_id, final_next_id) = {
+                    let mut ui = UIContext::new(arena);
+                    ui.next_id = current_next_id;
+                    for &id in parent_stack {
+                        if let Some(&ptr) = views.get(&id) { unsafe { ui.begin(&*ptr); } }
+                    }
+                    
+                    let builder = ui.checkbox(&mut new_val);
+                    let view_id = builder.view.id.get().0;
+                    let view_ptr = unsafe { std::mem::transmute::<&ViewHeader, *mut ViewHeader<'static>>(builder.view) };
+                    let s = arena.alloc_str(&label);
+                    builder.view.text.set(unsafe{ std::mem::transmute::<&str, &'static str>(s) });
+                    
+                    views.insert(view_id, view_ptr);
+                    (view_id, ui.next_id)
+                };
+                inner.next_id = final_next_id;
+                
                 Ok(PyCheckboxBuilder { view_id })
          })?;
 
@@ -283,10 +307,29 @@ impl PyContext {
          let mut new_val = current_value;
          
          let builder = with_current_context(|inner| {
-                 let builder = inner.context.radio(&mut new_val, my_value);
-                 let view_id = builder.view.id.get().0;
-                 let s = inner.arena.alloc_str(&label);
-                 builder.view.text.set(std::mem::transmute::<&str, &'static str>(s));
+                 let arena = unsafe { std::mem::transmute::<&FrameArena, &'static FrameArena>(&inner.arena) };
+                 let views = &mut inner.views;
+                 let parent_stack = &inner.parent_stack;
+                 let current_next_id = inner.next_id;
+
+                 let (view_id, final_next_id) = {
+                     let mut ui = UIContext::new(arena);
+                     ui.next_id = current_next_id;
+                     for &id in parent_stack {
+                         if let Some(&ptr) = views.get(&id) { unsafe { ui.begin(&*ptr); } }
+                     }
+    
+                     let builder = ui.radio(&mut new_val, my_value);
+                     let view_id = builder.view.id.get().0;
+                     let view_ptr = unsafe { std::mem::transmute::<&ViewHeader, *mut ViewHeader<'static>>(builder.view) };
+                     let s = arena.alloc_str(&label);
+                     builder.view.text.set(unsafe{ std::mem::transmute::<&str, &'static str>(s) });
+                     
+                     views.insert(view_id, view_ptr);
+                     (view_id, ui.next_id)
+                 };
+                 inner.next_id = final_next_id;
+                 
                  Ok(PyRadioBuilder { view_id })
          })?;
 
@@ -298,17 +341,29 @@ impl PyContext {
          let mut new_idx = index;
          
          let builder = with_current_context(|inner| {
-             // Need to alloc strings for items
-             let item_strs: Vec<&'static str> = items.iter().map(|s| {
-                 let allocated = inner.arena.alloc_str(s);
-                 unsafe { std::mem::transmute::<&str, &'static str>(allocated) }
-             }).collect();
-             
-             let builder = inner.context.dropdown(&mut new_idx, &item_strs);
-             let view_id = builder.view.id.get().0;
-             let s = inner.arena.alloc_str(&label);
-             builder.view.text.set(std::mem::transmute::<&str, &'static str>(s));
-             
+             let arena = unsafe { std::mem::transmute::<&FrameArena, &'static FrameArena>(&inner.arena) };
+             let views = &mut inner.views;
+             let parent_stack = &inner.parent_stack;
+             let current_next_id = inner.next_id;
+
+             let (view_id, final_next_id) = {
+                 let mut ui = UIContext::new(arena);
+                 ui.next_id = current_next_id;
+                 for &id in parent_stack {
+                     if let Some(&ptr) = views.get(&id) { unsafe { ui.begin(&*ptr); } }
+                 }
+    
+                 let builder = ui.dropdown(items, &mut new_idx);
+                 let view_id = builder.view.id.get().0;
+                 let view_ptr = unsafe { std::mem::transmute::<&ViewHeader, *mut ViewHeader<'static>>(builder.view) };
+                 let s = arena.alloc_str(&label);
+                 builder.view.text.set(unsafe{ std::mem::transmute::<&str, &'static str>(s) });
+                 
+                 views.insert(view_id, view_ptr);
+                 (view_id, ui.next_id)
+             };
+             inner.next_id = final_next_id;
+    
              Ok(PyDropdownBuilder { view_id })
          })?;
          
@@ -318,8 +373,28 @@ impl PyContext {
     #[pyo3(signature = (cols))]
     fn grid(&self, cols: usize) -> PyResult<PyGridLayoutBuilder> {
         let builder = with_current_context(|inner| {
-            let builder = inner.context.grid(cols);
-            Ok(PyGridLayoutBuilder { view_id: builder.view.id.get().0 })
+            let arena = unsafe { std::mem::transmute::<&FrameArena, &'static FrameArena>(&inner.arena) };
+            let views = &mut inner.views;
+            let parent_stack = &inner.parent_stack;
+            let current_next_id = inner.next_id;
+
+            let (view_id, final_next_id) = {
+                let mut ui = UIContext::new(arena);
+                ui.next_id = current_next_id;
+                for &id in parent_stack {
+                    if let Some(&ptr) = views.get(&id) { unsafe { ui.begin(&*ptr); } }
+                }
+   
+               let builder = ui.layout_grid(cols);
+               let view_id = builder.view.id.get().0;
+               let view_ptr = unsafe { std::mem::transmute::<&ViewHeader, *mut ViewHeader<'static>>(builder.view) };
+               
+               views.insert(view_id, view_ptr);
+               (view_id, ui.next_id)
+            };
+            inner.next_id = final_next_id;
+    
+            Ok(PyGridLayoutBuilder { view_id })
         })?;
         Ok(builder)
     }

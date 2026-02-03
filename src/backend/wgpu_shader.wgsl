@@ -17,8 +17,9 @@ struct Uniforms {
     mode: u32,
     is_squircle: u32,
     time: f32,
-    _pad: f32,
-    _pad2: f32,
+    _pad_inner: f32, 
+    viewport_size: vec2<f32>,
+    _pad: array<vec4<f32>, 52>,
 };
 
 @group(0) @binding(0)

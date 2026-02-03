@@ -20,7 +20,12 @@ pub trait GraphicsBackend {
     fn name(&self) -> &str;
 
     /// High-level API: Render a DrawList to the screen (for immediate mode)
-    fn render(&mut self, dl: &DrawList, width: u32, height: u32);
+    fn render(&mut self, dl: &DrawList, width: u32, height: u32, time: f64);
+
+    /// New Composition API: Render a set of layers using the Compositing Pipeline
+    fn render_composition(&mut self, _composition: &crate::renderer::layer::Composition, _width: u32, _height: u32, _time: f64) {
+        // Default no-op for older backends
+    }
     
     /// Low-level API: Submit prepared DrawPackets (for optimized path)
     fn submit(&mut self, _packets: &[DrawPacket]) {

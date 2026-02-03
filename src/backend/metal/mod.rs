@@ -116,7 +116,7 @@ impl GraphicsBackend for MetalBackend {
         self.audio_data = data.to_vec();
     }
 
-    fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
+    fn render(&mut self, dl: &DrawList, width: u32, height: u32, time: f64) {
         let layer = if let Some(l) = self.layer {
             l
         } else {
@@ -157,8 +157,10 @@ impl GraphicsBackend for MetalBackend {
                 lut_intensity: 0.0,
                 mode: 0,
                 is_squircle: 0,
-                time: self.start_time.elapsed().as_secs_f32(),
+                time: time as f32,
                 viewport_size: [width as f32, height as f32],
+                _pad1: [0.0; 16],
+                _pad2: [0.0; 6],
             };
 
             let mut active_encoder = Some(encoder);

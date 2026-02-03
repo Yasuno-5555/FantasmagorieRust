@@ -3,14 +3,14 @@ use crate::view::header::{ViewHeader, ViewType};
 use crate::widgets::UIContext;
 
 pub struct CheckboxBuilder<'b, 'a> {
-    ui: &'b mut UIContext<'a>,
-    view: &'a ViewHeader<'a>,
-    value: &'a mut bool,
-    label: Option<&'a str>,
+    pub ui: &'b mut UIContext<'a>,
+    pub view: &'a ViewHeader<'a>,
+    pub value: &'b mut bool,
+    pub label: Option<&'a str>,
 }
 
 impl<'b, 'a> CheckboxBuilder<'b, 'a> {
-    pub fn new(ui: &'b mut UIContext<'a>, value: &'a mut bool) -> Self {
+    pub fn new(ui: &'b mut UIContext<'a>, value: &'b mut bool) -> Self {
         let id = ID::from_u64(ui.next_id());
         let view = ui.arena.alloc(ViewHeader {
             view_type: ViewType::Checkbox,

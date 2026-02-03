@@ -15,6 +15,7 @@ pub mod theme;
 mod types;
 pub mod undo;
 pub mod wire;
+pub mod time;
 
 pub use a11y::{
     is_high_contrast_mode, AccessibleInfo, AccessibleRole, AccessibleStore, FocusManager,
@@ -31,3 +32,4 @@ pub use theme::{Style, Theme};
 pub use types::{ColorF, Rectangle, Vec2, Vec3, WindowID};
 pub use undo::{BatchCommand, CallbackCommand, Command, CommandStack};
 pub use wire::{Connection, ConnectionResult, Port, PortId, PortType, WireInteraction, WireState};
+pub use time::{MasterClock, Time, TimeEvaluator};

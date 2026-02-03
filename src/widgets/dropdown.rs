@@ -3,14 +3,14 @@ use crate::view::header::{ViewHeader, ViewType};
 use crate::widgets::UIContext;
 
 pub struct DropdownBuilder<'b, 'a> {
-    ui: &'b mut UIContext<'a>,
-    view: &'a ViewHeader<'a>,
-    selected_index: &'a mut usize,
-    items: Vec<String>,
+    pub ui: &'b mut UIContext<'a>,
+    pub view: &'a ViewHeader<'a>,
+    pub selected_index: &'b mut usize,
+    pub items: Vec<String>,
 }
 
 impl<'b, 'a> DropdownBuilder<'b, 'a> {
-    pub fn new(ui: &'b mut UIContext<'a>, items: Vec<String>, selected_index: &'a mut usize) -> Self {
+    pub fn new(ui: &'b mut UIContext<'a>, items: Vec<String>, selected_index: &'b mut usize) -> Self {
         let id = ID::from_u64(ui.next_id());
         
         // 1. Check persistence for Open state

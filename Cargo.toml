@@ -42,7 +42,7 @@ block = { version = "0.1", optional = true }
 cocoa = { version = "0.25", optional = true }
 
 # Windowing
-winit = "0.30"
+winit = "0.29"
 
 # Python bindings (optional)
 pyo3 = { version = "0.21", features = ["extension-module"], optional = true }

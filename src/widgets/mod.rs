@@ -289,11 +289,11 @@ impl<'a> ButtonBuilder<'a> {
 /// It provides a fluent builder API for constructing various widgets.
 pub struct UIContext<'a> {
     pub arena: &'a FrameArena,
-    parent_stack: Vec<&'a ViewHeader<'a>>,
-    root: Option<&'a ViewHeader<'a>>,
+    pub parent_stack: Vec<&'a ViewHeader<'a>>,
+    pub root: Option<&'a ViewHeader<'a>>,
     pub theme: crate::core::theme::Theme,
     pub style: crate::core::theme::Style,
-    next_id: u64,
+    pub next_id: u64,
     pub persistence: Option<&'a PersistenceManager>,
 }
 
@@ -541,36 +541,36 @@ impl<'a> UIContext<'a> {
     }
 
     /// Create toggle switch
-    pub fn toggle(
-        &mut self,
-        value: &'a mut bool,
-    ) -> crate::widgets::toggle::ToggleBuilder<'_, 'a> {
+    pub fn toggle<'b>(
+        &'b mut self,
+        value: &'b mut bool,
+    ) -> crate::widgets::toggle::ToggleBuilder<'b, 'a> {
         crate::widgets::toggle::ToggleBuilder::new(self, value)
     }
 
     /// Create checkbox
-    pub fn checkbox(
-        &mut self,
-        value: &'a mut bool,
-    ) -> crate::widgets::checkbox::CheckboxBuilder<'_, 'a> {
+    pub fn checkbox<'b>(
+        &'b mut self,
+        value: &'b mut bool,
+    ) -> crate::widgets::checkbox::CheckboxBuilder<'b, 'a> {
         crate::widgets::checkbox::CheckboxBuilder::new(self, value)
     }
 
     /// Create radio button
-    pub fn radio(
-        &mut self,
-        value: &'a mut i32,
+    pub fn radio<'b>(
+        &'b mut self,
+        value: &'b mut i32,
         my_value: i32,
-    ) -> crate::widgets::radio::RadioBuilder<'_, 'a> {
+    ) -> crate::widgets::radio::RadioBuilder<'b, 'a> {
         crate::widgets::radio::RadioBuilder::new(self, value, my_value)
     }
 
     /// Create dropdown
-    pub fn dropdown(
-        &mut self,
+    pub fn dropdown<'b>(
+        &'b mut self,
         items: Vec<String>,
-        index: &'a mut usize,
-    ) -> crate::widgets::dropdown::DropdownBuilder<'_, 'a> {
+        index: &'b mut usize,
+    ) -> crate::widgets::dropdown::DropdownBuilder<'b, 'a> {
         crate::widgets::dropdown::DropdownBuilder::new(self, items, index)
     }
 

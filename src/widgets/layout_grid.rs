@@ -3,8 +3,8 @@ use crate::view::header::{ViewHeader, ViewType};
 use crate::widgets::UIContext;
 
 pub struct LayoutGridBuilder<'b, 'a> {
-    ui: &'b mut UIContext<'a>,
-    view: &'a ViewHeader<'a>,
+    pub ui: &'b mut UIContext<'a>,
+    pub view: &'a ViewHeader<'a>,
 }
 
 impl<'b, 'a> LayoutGridBuilder<'b, 'a> {

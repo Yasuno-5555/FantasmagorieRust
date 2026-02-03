@@ -52,10 +52,6 @@ impl RenderOrchestrator {
 
     /// Execute a sequence of tasks using a concrete GPU implementation
     pub fn execute<E: GpuExecutor>(&self, executor: &mut E, tasks: &[crate::backend::hal::FantaRenderTask], time: f32, width: u32, height: u32) -> Result<(), String> {
-        let mut should_present = false;
-
-        executor.begin_execute()?;
-        
         let proj_matrix = create_projection(width as f32, height as f32, executor.y_flip(), (-1.0, 1.0));
         let proj: [f32; 16] = *bytemuck::cast_ref(&proj_matrix);
 
@@ -99,8 +95,8 @@ impl RenderOrchestrator {
                                      lut_intensity: 0.0,
                                      mode: mode, 
                                      is_squircle: if *is_squircle { 1 } else { 0 },
-                                     time: time,
-                                     viewport_size: [width as f32, height as f32],
+                                     time: time, _pad_inner: 0.0, _pad_to_vec2: 0.0,
+                                     viewport_size: [width as f32, height as f32], _pad_to_array: [0.0; 2], _pad: [0.0; 208],
                                  }, quad_vertices(*pos, *size, *color), cp)
                              }
                              DrawCommand::Text { pos, size, uv, color } => {
@@ -118,8 +114,8 @@ impl RenderOrchestrator {
                                      lut_intensity: 0.0,
                                      mode: 1, // Text
                                      is_squircle: 0,
-                                     time: time,
-                                     viewport_size: [width as f32, height as f32],
+                                     time: time, _pad_inner: 0.0, _pad_to_vec2: 0.0,
+                                     viewport_size: [width as f32, height as f32], _pad_to_array: [0.0; 2], _pad: [0.0; 208],
                                  }, quad_vertices_uv(*pos, *size, *uv, *color), None)
                              }
                              DrawCommand::Aurora { pos, size } => {
@@ -137,8 +133,8 @@ impl RenderOrchestrator {
                                      lut_intensity: 0.0,
                                      mode: 9, // Aurora
                                      is_squircle: 0,
-                                     time: time,
-                                     viewport_size: [width as f32, height as f32],
+                                     time: time, _pad_inner: 0.0, _pad_to_vec2: 0.0,
+                                     viewport_size: [width as f32, height as f32], _pad_to_array: [0.0; 2], _pad: [0.0; 208],
                                  }, quad_vertices(*pos, *size, ColorF::white()), None)
                              }
                              _ => continue,
@@ -171,18 +167,11 @@ impl RenderOrchestrator {
                     executor.resolve().ok(); 
                 }
                 FantaRenderTask::ComputeEffect { .. } => {
-                    // Logic to dispatch compute effect
                 }
                 FantaRenderTask::Resolve => {
                     executor.resolve()?;
-                    should_present = true;
                 }
             }
-        }
-        executor.end_execute()?;
-        
-        if should_present {
-            executor.present()?;
         }
         Ok(())
     }

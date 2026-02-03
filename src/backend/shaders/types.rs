@@ -12,15 +12,10 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GlobalUniforms {
-    /// MVP projection matrix (64 bytes)
-    /// Y-flip and Z-range handled here per backend
-    pub projection: [[f32; 4]; 4],
-    /// Viewport size (8 bytes)
-    pub viewport_size: [f32; 2],
-    /// Frame time for animations (4 bytes)
-    pub time: f32,
-    /// Padding (4 bytes)
-    pub _pad: f32,
+    pub projection: [f32; 16],    // 64 (0)
+    pub viewport_size: [f32; 2], // 8 (64)
+    pub time: f32,               // 4 (72)
+    pub _pad: [f32; 237],        // 948 (76) -> Total 1024
 }
 
 /// Cinematic post-processing parameters
@@ -44,42 +39,49 @@ pub struct AudioParams {
 }
 
 /// Per-draw uniforms - updated per draw call (Push Constants or Dynamic UBO)
-/// Must be ≤ 128 bytes for Push Constants compatibility
+/// Must be ≤ 1024 bytes for cross-backend compatibility
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct DrawUniforms {
-    /// MVP projection matrix (64 bytes)
-    pub projection: [f32; 16],
-    /// Rect bounds: x, y, w, h (16 bytes)
-    pub rect: [f32; 4],
-    /// Corner radii: tl, tr, br, bl (16 bytes)  
-    pub radii: [f32; 4],
-    /// Border RGBA (16 bytes)
-    pub border_color: [f32; 4],
-    /// Glow RGBA (16 bytes)
-    pub glow_color: [f32; 4],
-    /// Offset for transform (8 bytes)
-    pub offset: [f32; 2],
-    /// Scale factor (4 bytes)
-    pub scale: f32,
-    /// Border width (4 bytes)
-    pub border_width: f32,
-    /// Elevation for shadow (4 bytes)
-    pub elevation: f32,
-    /// Glow strength (4 bytes)
-    pub glow_strength: f32,
-    /// LUT intensity (4 bytes)
-    pub lut_intensity: f32,
-    /// Rendering mode 0-9 (4 bytes)
-    pub mode: i32,
-    /// Is squircle flag (4 bytes)
-    pub is_squircle: i32,
-    /// Time in seconds (4 bytes)
-    pub time: f32,
-    /// Padding (8 bytes)
-    pub viewport_size: [f32; 2],
+    pub projection: [f32; 16],    // 64 (0)
+    pub rect: [f32; 4],          // 16 (64)
+    pub radii: [f32; 4],         // 16 (80)
+    pub border_color: [f32; 4],  // 16 (96)
+    pub glow_color: [f32; 4],    // 16 (112)
+    pub offset: [f32; 2],        // 8 (128)
+    pub scale: f32,              // 4 (136)
+    pub border_width: f32,       // 4 (140)
+    pub elevation: f32,          // 4 (144)
+    pub glow_strength: f32,      // 4 (148)
+    pub lut_intensity: f32,      // 4 (152)
+    pub mode: i32,               // 4 (156)
+    pub is_squircle: i32,        // 4 (160)
+    pub time: f32,               // 4 (164)
+    pub _pad_inner: f32,         // 4 (168)
+    pub _pad_to_vec2: f32,       // 4 (172) -> Aligns viewport_size to 8
+    pub viewport_size: [f32; 2], // 8 (176)
+    pub _pad_to_array: [f32; 2], // 8 (184) -> Aligns array to 16
+    pub _pad: [f32; 208],        // 832 (192-1024) -> Total 1024
 }
-// Total: 16*4 + 8 + 4*7 + 4 = 104 bytes ✅ Under 128B limit
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct PostProcessUniforms {
+    pub threshold: f32,          // 4 (0)
+    pub _pad_to_vec2: f32,       // 4 (4) -> Aligns direction to 8
+    pub direction: [f32; 2],     // 8 (8)
+    pub intensity: f32,          // 4 (16)
+    pub _pad_to_array: [f32; 3], // 12 (20) -> Aligns array to 32
+    pub _pad: [f32; 248],        // 992 (32-1024) -> Total 1024. 248 * 4 = 992.
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct BlendUniforms {
+    pub opacity: f32,            // 4 (0)
+    pub mode: u32,               // 4 (4)
+    pub _pad: [f32; 254],        // 1016 (8-1024) -> Total 1024
+}
 
 /// Shader rendering modes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

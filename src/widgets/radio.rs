@@ -3,17 +3,17 @@ use crate::view::header::{ViewHeader, ViewType};
 use crate::widgets::UIContext;
 
 pub struct RadioBuilder<'b, 'a> {
-    ui: &'b mut UIContext<'a>,
-    view: &'a ViewHeader<'a>,
-    selected_value: &'a mut i32, // Simplified: integer based selection for now
-    my_value: i32,
-    label: Option<&'a str>,
+    pub ui: &'b mut UIContext<'a>,
+    pub view: &'a ViewHeader<'a>,
+    pub selected_value: &'b mut i32, // Simplified: integer based selection for now
+    pub my_value: i32,
+    pub label: Option<&'a str>,
 }
 
 impl<'b, 'a> RadioBuilder<'b, 'a> {
     // We'll use i32 for selection group value. 
     // Usage: ui.radio("Label", current_value, my_id_value) -> returns new current_value
-    pub fn new(ui: &'b mut UIContext<'a>, selected_value: &'a mut i32, my_value: i32) -> Self {
+    pub fn new(ui: &'b mut UIContext<'a>, selected_value: &'b mut i32, my_value: i32) -> Self {
         let id = ID::from_u64(ui.next_id());
         let view = ui.arena.alloc(ViewHeader {
             view_type: ViewType::Radio,

@@ -100,7 +100,8 @@ fn fanta_rust(py: Python, m: &PyModule) -> PyResult<()> {
 
     #[cfg(feature = "wgpu")]
     {
-        m.add_function(pyo3::wrap_pyfunction!(python::window::py_run_window, m)?)?;
+        use python::window::py_run_window;
+        m.add_function(pyo3::wrap_pyfunction!(py_run_window, m)?)?;
     }
 
     Ok(())

@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
 use std::cell::Cell;
+use crate::resource;
 use crate::core::{ColorF, ID, Vec2, Vec3};
 use crate::view::header::{ViewType, ViewHeader};
 use crate::view::animation::Easing;
