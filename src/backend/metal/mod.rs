@@ -1,4 +1,5 @@
 use metal::*;
+use metal::foreign_types::ForeignTypeRef;
 use std::sync::{Arc, Mutex};
 use crate::core::{ColorF, Vec2};
 use crate::draw::{DrawCommand, DrawList, DrawCommand::*};
@@ -10,9 +11,9 @@ use objc::{msg_send, sel, sel_impl, rc::autoreleasepool};
 pub mod resource_provider;
 pub mod pipeline_provider;
 
-use resource_provider::MetalResourceProvider;
 use pipeline_provider::{MetalPipelineProvider, MetalBindGroup, MetalBindGroupLayout};
-use crate::backend::hal::{GpuResourceProvider, GpuPipelineProvider, GpuExecutor, BufferUsage, TextureDescriptor, TextureFormat, TextureUsage};
+use crate::backend::hal::{GpuExecutor, BufferUsage, TextureDescriptor, TextureFormat, TextureUsage};
+use resource_provider::MetalResourceProvider;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -21,6 +22,16 @@ pub struct Vertex {
     pub uv: [f32; 2],
     pub color: [f32; 4],
 }
+
+#[derive(Clone, Copy)]
+pub struct MetalIdWrapper<T>(pub T);
+unsafe impl<T> Send for MetalIdWrapper<T> {}
+unsafe impl<T> Sync for MetalIdWrapper<T> {}
+
+#[derive(Clone, Copy)]
+pub struct MetalLayerWrapper(pub id);
+unsafe impl Send for MetalLayerWrapper {}
+unsafe impl Sync for MetalLayerWrapper {}
 
 pub struct MetalBackend {
     pub device: Device,
@@ -35,10 +46,15 @@ pub struct MetalBackend {
     font_texture: Option<Texture>,
     backdrop_texture: Option<Texture>,
     pub sampler: SamplerState,
-    pub layer: Option<id>,
+    pub layer: Option<MetalLayerWrapper>,
     pub start_time: std::time::Instant,
     pub audio_data: Vec<f32>,
     pub screenshot_path: Arc<Mutex<Option<String>>>,
+
+    // Command Recording State
+    pub current_command_buffer: Mutex<Option<MetalIdWrapper<CommandBuffer>>>,
+    pub current_drawable: Mutex<Option<MetalIdWrapper<id>>>,
+    pub current_encoder: Mutex<Option<MetalIdWrapper<RenderCommandEncoder>>>,
 }
 
 impl MetalBackend {
@@ -52,9 +68,8 @@ impl MetalBackend {
         
         let main_pipeline = pipelines.create_render_pipeline(
             "Fantasmagorie Main", 
-            "vs_main", 
-            "fs_main", 
-            MTLPixelFormat::BGRA8Unorm // Standard macOS swapchain format
+            "vs_main fs_main", // Heuristic to use default shaders
+            None
         )?;
 
         let uniform_buffer = device.new_buffer(
@@ -72,6 +87,18 @@ impl MetalBackend {
         sampler_desc.set_mag_filter(MTLSamplerMinMagFilter::Nearest);
         let sampler = device.new_sampler(&sampler_desc);
 
+        let font_texture_desc = metal::TextureDescriptor::new();
+        font_texture_desc.set_width(1);
+        font_texture_desc.set_height(1);
+        font_texture_desc.set_pixel_format(MTLPixelFormat::R8Unorm);
+        let font_texture = Some(device.new_texture(&font_texture_desc));
+
+        let backdrop_texture_desc = metal::TextureDescriptor::new();
+        backdrop_texture_desc.set_width(1);
+        backdrop_texture_desc.set_height(1);
+        backdrop_texture_desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        let backdrop_texture = Some(device.new_texture(&backdrop_texture_desc));
+
         Ok(Self {
             device,
             command_queue,
@@ -80,18 +107,21 @@ impl MetalBackend {
             main_pipeline,
             uniform_buffer,
             vertex_buffer,
-            font_texture: None,
-            backdrop_texture: None,
+            font_texture,
+            backdrop_texture,
             sampler,
             layer: None,
             start_time: std::time::Instant::now(),
             audio_data: vec![0.0; 4],
             screenshot_path: Arc::new(Mutex::new(None)),
+            current_command_buffer: Mutex::new(None),
+            current_drawable: Mutex::new(None),
+            current_encoder: Mutex::new(None),
         })
     }
 
     pub fn set_layer(&mut self, layer: *mut objc::runtime::Object) {
-        self.layer = Some(layer as id);
+        self.layer = Some(MetalLayerWrapper(layer as id));
     }
 
 
@@ -117,243 +147,16 @@ impl GraphicsBackend for MetalBackend {
     }
 
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
-        let layer = if let Some(l) = self.layer {
-            l
-        } else {
-            return;
-        };
-
-        autoreleasepool(|| unsafe {
-            let drawable: id = msg_send![layer, nextDrawable];
-            if drawable == cocoa::base::nil { return; }
-
-            let render_pass_descriptor = RenderPassDescriptor::new();
-            let color_attachment = render_pass_descriptor.color_attachments().object_at(0).unwrap();
-            
-            let tex_ptr: id = msg_send![drawable, texture];
-            let _: () = msg_send![color_attachment, setTexture: tex_ptr];
-            
-            color_attachment.set_load_action(MTLLoadAction::Clear);
-            color_attachment.set_clear_color(MTLClearColor::new(0.01, 0.01, 0.02, 1.0));
-            color_attachment.set_store_action(MTLStoreAction::Store);
-
-            let command_buffer = self.command_queue.new_command_buffer();
-            let encoder = command_buffer.new_render_command_encoder(render_pass_descriptor);
-            encoder.set_render_pipeline_state(&self.main_pipeline);
-            encoder.set_fragment_sampler_state(0, Some(&self.sampler));
-
-            let proj = create_projection(width as f32, height as f32, true, (0.0, 1.0));
-            let mut uniforms = DrawUniforms {
-                projection: std::mem::transmute(proj),
-                rect: [0.0; 4],
-                radii: [0.0; 4],
-                border_color: [0.0; 4],
-                glow_color: [0.0; 4],
-                offset: [0.0; 2],
-                scale: 1.0,
-                border_width: 0.0,
-                elevation: 0.0,
-                glow_strength: 0.0,
-                lut_intensity: 0.0,
-                mode: 0,
-                is_squircle: 0,
-                time: self.start_time.elapsed().as_secs_f32(),
-                viewport_size: [width as f32, height as f32],
-            };
-
-            let mut active_encoder = Some(encoder);
-
-            for cmd in dl.commands() {
-                match cmd {
-                    RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, .. } => {
-                        let encoder = active_encoder.as_ref().unwrap();
-                        uniforms.mode = 2;
-                        uniforms.rect = [pos.x, pos.y, size.x, size.y];
-                        uniforms.radii = *radii;
-                        uniforms.border_width = *border_width;
-                        uniforms.border_color = [border_color.r, border_color.g, border_color.b, border_color.a];
-                        uniforms.elevation = *elevation;
-                        uniforms.is_squircle = if *is_squircle { 1 } else { 0 };
-                        uniforms.glow_strength = *glow_strength;
-                        uniforms.glow_color = [glow_color.r, glow_color.g, glow_color.b, glow_color.a];
-                        
-                        let verts = Self::quad_vertices(*pos, *size, *color);
-                        encoder.set_vertex_bytes(0, std::mem::size_of_val(&verts[..]) as u64, verts.as_ptr() as *const _);
-                        encoder.set_vertex_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                        encoder.set_fragment_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
-                    }
-                    Text { pos, size, uv, color } => {
-                        if let Some(ref tex) = self.font_texture {
-                            let encoder = active_encoder.as_ref().unwrap();
-                            uniforms.mode = 1;
-                            let verts = [
-                                Vertex { pos: [pos.x, pos.y], uv: [uv[0], uv[1]], color: [color.r, color.g, color.b, color.a] },
-                                Vertex { pos: [pos.x, pos.y + size.y], uv: [uv[0], uv[3]], color: [color.r, color.g, color.b, color.a] },
-                                Vertex { pos: [pos.x + size.x, pos.y + size.y], uv: [uv[2], uv[3]], color: [color.r, color.g, color.b, color.a] },
-                                Vertex { pos: [pos.x, pos.y], uv: [uv[0], uv[1]], color: [color.r, color.g, color.b, color.a] },
-                                Vertex { pos: [pos.x + size.x, pos.y + size.y], uv: [uv[2], uv[3]], color: [color.r, color.g, color.b, color.a] },
-                                Vertex { pos: [pos.x + size.x, pos.y], uv: [uv[2], uv[1]], color: [color.r, color.g, color.b, color.a] },
-                            ];
-                            encoder.set_vertex_bytes(0, std::mem::size_of_val(&verts) as u64, verts.as_ptr() as *const _);
-                            encoder.set_vertex_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                            encoder.set_fragment_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                            encoder.set_fragment_texture(0, Some(tex));
-                            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
-                        }
-                    }
-                    Aurora { pos, size } => {
-                        let encoder = active_encoder.as_ref().unwrap();
-                        uniforms.mode = 9;
-                        uniforms.rect = [pos.x, pos.y, size.x, size.y];
-                        let verts = Self::quad_vertices(*pos, *size, ColorF::WHITE);
-                        encoder.set_vertex_bytes(0, std::mem::size_of_val(&verts[..]) as u64, verts.as_ptr() as *const _);
-                        encoder.set_vertex_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                        encoder.set_fragment_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
-                    }
-                    BlurRect { pos, size, radii, sigma, .. } => {
-                        // 1. End current encoder
-                        if let Some(enc) = active_encoder.take() {
-                            enc.end_encoding();
-                        }
-
-                        // 2. Capture background to backdrop_texture
-                        let tex_ptr: id = msg_send![drawable, texture];
-                        let src_tex: &TextureRef = std::mem::transmute(tex_ptr);
-                        
-                        // Ensure backdrop texture exists and matches size
-                        if self.backdrop_texture.is_none() || 
-                           self.backdrop_texture.as_ref().unwrap().width() != width as u64 ||
-                           self.backdrop_texture.as_ref().unwrap().height() != height as u64 {
-                            let desc = TextureDescriptor::new();
-                            desc.set_pixel_format(src_tex.pixel_format());
-                            desc.set_width(width as u64);
-                            desc.set_height(height as u64);
-                            desc.set_usage(MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite | MTLTextureUsage::RenderTarget);
-                            self.backdrop_texture = Some(self.device.new_texture(&desc));
-                        }
-
-                        if let Some(ref dst_tex) = self.backdrop_texture {
-                            let blit = command_buffer.new_blit_command_encoder();
-                            blit.copy_from_texture(
-                                src_tex, 0, 0,
-                                MTLOrigin { x: 0, y: 0, z: 0 },
-                                MTLSize { width: width as u64, height: height as u64, depth: 1 },
-                                dst_tex, 0, 0,
-                                MTLOrigin { x: 0, y: 0, z: 0 }
-                            );
-                            blit.end_encoding();
-                        }
-
-                        // 3. Start new encoder (LoadAction::Load to keep previous drawing)
-                        let next_desc = RenderPassDescriptor::new();
-                        let next_ca = next_desc.color_attachments().object_at(0).unwrap();
-                        let _: () = msg_send![next_ca, setTexture: tex_ptr];
-                        next_ca.set_load_action(MTLLoadAction::Load);
-                        next_ca.set_store_action(MTLStoreAction::Store);
-                        
-                        let next_encoder = command_buffer.new_render_command_encoder(next_desc);
-                        next_encoder.set_render_pipeline_state(&self.main_pipeline);
-                        next_encoder.set_fragment_sampler_state(0, Some(&self.sampler));
-                        if let Some(ref backdrop) = self.backdrop_texture {
-                            next_encoder.set_fragment_texture(1, Some(backdrop));
-                        }
-
-                        // 4. Draw the BlurRect
-                        uniforms.mode = 4;
-                        uniforms.rect = [pos.x, pos.y, size.x, size.y];
-                        uniforms.radii = *radii;
-                        uniforms.elevation = *sigma;
-                        let verts = Self::quad_vertices(*pos, *size, ColorF::WHITE);
-                        next_encoder.set_vertex_bytes(0, std::mem::size_of_val(&verts[..]) as u64, verts.as_ptr() as *const _);
-                        next_encoder.set_vertex_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                        next_encoder.set_fragment_bytes(1, std::mem::size_of::<DrawUniforms>() as u64, &uniforms as *const DrawUniforms as *const _);
-                        next_encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 6);
-
-                        active_encoder = Some(next_encoder);
-                    }
-                    _ => {}
-                }
-            }
-
-            if let Some(enc) = active_encoder {
-                enc.end_encoding();
-            }
-
-            let screenshot_req = self.screenshot_path.lock().unwrap().take();
-            if let Some(path) = screenshot_req {
-                let blit_encoder = command_buffer.new_blit_command_encoder();
-                let tex_ptr: id = msg_send![drawable, texture];
-                let tex: &TextureRef = unsafe { std::mem::transmute(tex_ptr) };
-                
-                let bytes_per_row = (width * 4) as u64;
-                let bytes_total = bytes_per_row * (height as u64);
-                let staging_buffer = self.device.new_buffer(bytes_total, MTLResourceOptions::StorageModeShared);
-
-                blit_encoder.copy_from_texture_to_buffer(
-                    tex,
-                    0,
-                    0,
-                    MTLOrigin { x: 0, y: 0, z: 0 },
-                    MTLSize { width: width as u64, height: height as u64, depth: 1 },
-                    &staging_buffer,
-                    0,
-                    bytes_per_row,
-                    bytes_total,
-                    MTLBlitOption::None,
-                );
-                blit_encoder.end_encoding();
-                
-                let _: () = msg_send![command_buffer, presentDrawable: drawable];
-                command_buffer.commit();
-                command_buffer.wait_until_completed();
-
-                let ptr = staging_buffer.contents() as *mut u8;
-                let len = bytes_total as usize;
-                let mut data = vec![0u8; len];
-                unsafe {
-                    std::ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), len);
-                }
-                
-                // BGRA to RGBA and Flip Rows (Needed for Y-up CALayer)
-                let mut flipped_data = vec![0u8; len];
-                for y in 0..height {
-                    let src_y = height - 1 - y;
-                    let src_offset = (src_y as usize) * (width as usize) * 4;
-                    let dst_offset = (y as usize) * (width as usize) * 4;
-                    
-                    for x in 0..(width as usize) {
-                        let s = src_offset + x * 4;
-                        let d = dst_offset + x * 4;
-                        flipped_data[d] = data[s + 2];     // R
-                        flipped_data[d + 1] = data[s + 1]; // G
-                        flipped_data[d + 2] = data[s];     // B
-                        flipped_data[d + 3] = data[s + 3]; // A
-                    }
-                }
-                
-                // Convert to RGB
-                let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-                for i in (0..len).step_by(4) {
-                    rgb_data.push(flipped_data[i]);
-                    rgb_data.push(flipped_data[i+1]);
-                    rgb_data.push(flipped_data[i+2]);
-                }
-                
-                if let Some(img) = image::RgbImage::from_raw(width as u32, height as u32, rgb_data) {
-                    let _ = img.save(&path);
-                    println!("Screenshot saved (Validated Orientation): {}", path);
-                }
-            } else {
-                let _: () = msg_send![command_buffer, presentDrawable: drawable];
-                command_buffer.commit();
-            }
-        });
+        let orchestrator = crate::renderer::orchestrator::RenderOrchestrator::new();
+        let tasks = orchestrator.plan(dl);
+        let time = self.start_time.elapsed().as_secs_f32();
+        if let Err(e) = orchestrator.execute(self, &tasks, time, width, height) {
+            eprintln!("Metal render error: {}", e);
+        }
     }
 
     fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
-        let desc = TextureDescriptor::new();
+        let desc = metal::TextureDescriptor::new();
         desc.set_pixel_format(MTLPixelFormat::R8Unorm);
         desc.set_width(width as u64);
         desc.set_height(height as u64);
@@ -373,12 +176,20 @@ impl GraphicsBackend for MetalBackend {
     }
 }
 
-impl GpuResourceProvider for MetalBackend {
+
+// Trait implementations are now flattened into GpuExecutor
+
+impl GpuExecutor for MetalBackend {
     type Buffer = Buffer;
     type Texture = Texture;
     type TextureView = Texture;
     type Sampler = SamplerState;
+    type RenderPipeline = RenderPipelineState;
+    type ComputePipeline = ComputePipelineState;
+    type BindGroupLayout = MetalBindGroupLayout;
+    type BindGroup = MetalBindGroup;
 
+    // Resource provider implementation
     fn create_buffer(&self, size: u64, usage: BufferUsage, label: &str) -> Result<Self::Buffer, String> {
         self.resources.create_buffer(size, usage, label)
     }
@@ -403,14 +214,8 @@ impl GpuResourceProvider for MetalBackend {
     fn destroy_texture(&self, texture: Self::Texture) {
         self.resources.destroy_texture(texture)
     }
-}
 
-impl GpuPipelineProvider for MetalBackend {
-    type RenderPipeline = RenderPipelineState;
-    type ComputePipeline = ComputePipelineState;
-    type BindGroupLayout = MetalBindGroupLayout;
-    type BindGroup = MetalBindGroup;
-
+    // Pipeline provider implementation
     fn create_render_pipeline(&self, label: &str, wgsl: &str, layout: Option<&Self::BindGroupLayout>) -> Result<Self::RenderPipeline, String> {
         self.pipelines.create_render_pipeline(label, wgsl, layout)
     }
@@ -420,25 +225,95 @@ impl GpuPipelineProvider for MetalBackend {
     fn destroy_bind_group(&self, bind_group: Self::BindGroup) {
         self.pipelines.destroy_bind_group(bind_group)
     }
-}
 
-impl GpuExecutor for MetalBackend {
     fn begin_execute(&self) -> Result<(), String> {
-        Ok(())
+        let wrapper = self.layer.ok_or("No CALayer set")?;
+        let layer = wrapper.0;
+        autoreleasepool(|| unsafe {
+            let drawable: id = msg_send![layer, nextDrawable];
+            if drawable == cocoa::base::nil {
+                return Err("Failed to get next drawable".into());
+            }
+            // Retain the drawable to ensure it stays alive until end_execute
+            let _: () = msg_send![drawable, retain];
+            *self.current_drawable.lock().unwrap() = Some(MetalIdWrapper(drawable));
+            
+            let command_buffer = self.command_queue.new_command_buffer().to_owned();
+            *self.current_command_buffer.lock().unwrap() = Some(MetalIdWrapper(command_buffer));
+            
+            Ok(())
+        })
     }
 
     fn end_execute(&self) -> Result<(), String> {
+        if let Some(wrapper) = self.current_encoder.lock().unwrap().take() {
+            wrapper.0.end_encoding();
+        }
+        
+        if let Some(cb_wrapper) = self.current_command_buffer.lock().unwrap().take() {
+            let command_buffer = cb_wrapper.0;
+            if let Some(d_wrapper) = self.current_drawable.lock().unwrap().take() {
+                let drawable = d_wrapper.0;
+                unsafe {
+                    let _: () = msg_send![command_buffer, presentDrawable: drawable];
+                    // Release the drawable held by begin_execute
+                    let _: () = msg_send![drawable, release];
+                }
+            }
+            command_buffer.commit();
+        }
         Ok(())
     }
 
     fn draw(
         &self,
-        _pipeline: &Self::RenderPipeline,
-        _bind_group: Option<&Self::BindGroup>,
-        _vertex_buffer: &Self::Buffer,
-        _vertex_count: u32,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        vertex_count: u32,
         _uniform_data: &[u8],
     ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        if encoder_guard.is_none() {
+            let d_wrapper = self.current_drawable.lock().unwrap();
+            let drawable = d_wrapper.as_ref().ok_or("No drawable for encoder")?.0;
+            let command_buffer_guard = self.current_command_buffer.lock().unwrap();
+            let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
+            
+            let render_pass_descriptor = RenderPassDescriptor::new();
+            let color_attachment = render_pass_descriptor.color_attachments().object_at(0).unwrap();
+            
+            unsafe {
+                let tex_ptr: id = msg_send![drawable, texture];
+                let _: () = msg_send![color_attachment, setTexture: tex_ptr];
+            }
+            
+            color_attachment.set_load_action(MTLLoadAction::Load);
+            color_attachment.set_store_action(MTLStoreAction::Store);
+
+            let encoder = command_buffer.new_render_command_encoder(render_pass_descriptor).to_owned();
+            *encoder_guard = Some(MetalIdWrapper(encoder));
+        }
+
+        let encoder = &encoder_guard.as_ref().unwrap().0;
+        encoder.set_render_pipeline_state(pipeline);
+        encoder.set_vertex_buffer(0, Some(vertex_buffer), 0);
+        encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+
+        if let Some(bg) = bind_group {
+            for (i, buf) in bg.buffers.iter().enumerate() {
+                encoder.set_vertex_buffer(1 + i as u64, Some(buf), 0);
+                encoder.set_fragment_buffer(1 + i as u64, Some(buf), 0);
+            }
+            for (i, tex) in bg.textures.iter().enumerate() {
+                encoder.set_fragment_texture(i as u64, Some(tex));
+            }
+            for (i, samp) in bg.samplers.iter().enumerate() {
+                encoder.set_fragment_sampler_state(i as u64, Some(samp));
+            }
+        }
+
+        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, vertex_count as u64);
         Ok(())
     }
 
@@ -452,7 +327,23 @@ impl GpuExecutor for MetalBackend {
         Ok(())
     }
 
-    fn copy_texture(&self, _src: &Self::Texture, _dst: &Self::Texture) -> Result<(), String> {
+    fn copy_texture(&self, src: &Self::Texture, dst: &Self::Texture) -> Result<(), String> {
+        if let Some(wrapper) = self.current_encoder.lock().unwrap().take() {
+            wrapper.0.end_encoding();
+        }
+
+        let command_buffer_guard = self.current_command_buffer.lock().unwrap();
+        let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
+        
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.copy_from_texture(
+            src, 0, 0,
+            MTLOrigin { x: 0, y: 0, z: 0 },
+            MTLSize { width: src.width(), height: src.height(), depth: 1 },
+            dst, 0, 0,
+            MTLOrigin { x: 0, y: 0, z: 0 }
+        );
+        blit.end_encoding();
         Ok(())
     }
 
@@ -463,26 +354,61 @@ impl GpuExecutor for MetalBackend {
     fn create_bind_group(
         &self,
         _layout: &Self::BindGroupLayout,
-        _buffers: &[&Self::Buffer],
-        _textures: &[&Self::TextureView],
-        _samplers: &[&Self::Sampler],
+        buffers: &[&Self::Buffer],
+        textures: &[&Self::TextureView],
+        samplers: &[&Self::Sampler],
     ) -> Result<Self::BindGroup, String> {
         Ok(MetalBindGroup {
-            buffers: vec![],
-            textures: vec![],
-            samplers: vec![],
+            buffers: buffers.iter().map(|&b| b.to_owned()).collect(),
+            textures: textures.iter().map(|&t| t.to_owned()).collect(),
+            samplers: samplers.iter().map(|&s| s.to_owned()).collect(),
         })
     }
 
     fn get_font_view(&self) -> &Self::TextureView { self.font_texture.as_ref().unwrap() }
     fn get_backdrop_view(&self) -> &Self::TextureView { self.backdrop_texture.as_ref().unwrap() }
-    fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { panic!("No default layout") }
+    fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { 
+        static DUMMY_LAYOUT: MetalBindGroupLayout = MetalBindGroupLayout { entries: Vec::new() };
+        &DUMMY_LAYOUT
+    }
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline { &self.main_pipeline }
     fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
 
-    fn resolve(&mut self) -> Result<(), String> { Ok(()) }
-    fn present(&self) -> Result<(), String> { Ok(()) }
+    fn resolve(&mut self) -> Result<(), String> {
+        if let Some(wrapper) = self.current_encoder.lock().unwrap().take() {
+            wrapper.0.end_encoding();
+        }
+        
+        let d_wrapper_opt = *self.current_drawable.lock().unwrap();
+        if let (Some(d_wrapper), Some(ref backdrop)) = (d_wrapper_opt, &self.backdrop_texture) {
+            let drawable_ptr = d_wrapper.0;
+            unsafe {
+                let tex_ptr: id = msg_send![drawable_ptr, texture];
+                let src_tex: &TextureRef = TextureRef::from_ptr(tex_ptr as *mut _);
+                
+                let command_buffer_guard = self.current_command_buffer.lock().unwrap();
+                let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
+                
+                let blit = command_buffer.new_blit_command_encoder();
+                blit.copy_from_texture(
+                    src_tex, 0, 0,
+                    MTLOrigin { x: 0, y: 0, z: 0 },
+                    MTLSize { width: backdrop.width(), height: backdrop.height(), depth: 1 },
+                    backdrop, 0, 0,
+                    MTLOrigin { x: 0, y: 0, z: 0 }
+                );
+                blit.end_encoding();
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn present(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     fn y_flip(&self) -> bool {
-        false // Metal is Y-up NDC
+        false 
     }
 }

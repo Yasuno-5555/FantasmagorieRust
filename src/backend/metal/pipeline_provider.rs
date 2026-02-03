@@ -1,6 +1,6 @@
 use metal::*;
 use std::sync::Arc;
-use crate::backend::hal::GpuPipelineProvider;
+
 
 pub struct MetalBindGroupLayout {
     pub entries: Vec<u32>, // Binding indices
@@ -26,33 +26,70 @@ impl MetalPipelineProvider {
         Ok(Self { device, library })
     }
 
-impl GpuPipelineProvider for MetalPipelineProvider {
-    type RenderPipeline = RenderPipelineState;
-    type ComputePipeline = ComputePipelineState;
-    type BindGroupLayout = MetalBindGroupLayout;
-    type BindGroup = MetalBindGroup;
-
-    fn create_render_pipeline(
+    pub fn create_render_pipeline(
         &self,
         label: &str,
         wgsl_source: &str,
-        layout: Option<&Self::BindGroupLayout>,
-    ) -> Result<Self::RenderPipeline, String> {
-        // In a full implementation, we would use Naga to transpile WGSL to MSL here.
-        // For now, this is a placeholder/structural compliance.
-        Err("WGSL to MSL transpilation NOT implemented for Metal HAL yet".into())
+        _layout: Option<&MetalBindGroupLayout>,
+    ) -> Result<RenderPipelineState, String> {
+        // Simple heuristic: if it mentions 'vs_main' and 'fs_main', use the library's defaults
+        // In a real scenario, we'd transpile the WGSL here.
+        if wgsl_source.contains("vs_main") && wgsl_source.contains("fs_main") {
+            let vs = self.library.get_function("vs_main", None).map_err(|e| e.to_string())?;
+            let fs = self.library.get_function("fs_main", None).map_err(|e| e.to_string())?;
+            
+            let desc = RenderPipelineDescriptor::new();
+            desc.set_label(label);
+            desc.set_vertex_function(Some(&vs));
+            desc.set_fragment_function(Some(&fs));
+            
+            let color_attachment = desc.color_attachments().object_at(0).unwrap();
+            color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+            color_attachment.set_blending_enabled(true);
+            color_attachment.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+            color_attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+            
+            let vertex_desc = VertexDescriptor::new();
+            
+            // Attribute 0: pos (float2)
+            let attr0 = vertex_desc.attributes().object_at(0).unwrap();
+            attr0.set_format(MTLVertexFormat::Float2);
+            attr0.set_offset(0);
+            attr0.set_buffer_index(0);
+            
+            // Attribute 1: uv (float2)
+            let attr1 = vertex_desc.attributes().object_at(1).unwrap();
+            attr1.set_format(MTLVertexFormat::Float2);
+            attr1.set_offset(8);
+            attr1.set_buffer_index(0);
+            
+            // Attribute 2: color (float4)
+            let attr2 = vertex_desc.attributes().object_at(2).unwrap();
+            attr2.set_format(MTLVertexFormat::Float4);
+            attr2.set_offset(16);
+            attr2.set_buffer_index(0);
+            
+            let layout0 = vertex_desc.layouts().object_at(0).unwrap();
+            layout0.set_stride(32);
+            
+            desc.set_vertex_descriptor(Some(&vertex_desc));
+            
+            self.device.new_render_pipeline_state(&desc).map_err(|e| e.to_string())
+        } else {
+            Err("Only default vs_main/fs_main supported for now".into())
+        }
     }
 
-    fn create_compute_pipeline(
+    pub fn create_compute_pipeline(
         &self,
         label: &str,
-        wgsl_source: &str,
-        layout: Option<&Self::BindGroupLayout>,
-    ) -> Result<Self::ComputePipeline, String> {
+        _wgsl_source: &str,
+        _layout: Option<&MetalBindGroupLayout>,
+    ) -> Result<ComputePipelineState, String> {
         Err("WGSL to MSL transpilation NOT implemented for Metal HAL yet".into())
     }
 
-    fn destroy_bind_group(&self, _bind_group: Self::BindGroup) {
+    pub fn destroy_bind_group(&self, _bind_group: MetalBindGroup) {
         // Automatic via drop
     }
 }

@@ -1,5 +1,5 @@
 use metal::*;
-use crate::backend::hal::{GpuResourceProvider, BufferUsage, TextureDescriptor};
+use crate::backend::hal::{BufferUsage, TextureDescriptor};
 use std::sync::Arc;
 
 pub struct MetalResourceProvider {
@@ -11,13 +11,7 @@ impl MetalResourceProvider {
         Self { device }
     }
 
-impl GpuResourceProvider for MetalResourceProvider {
-    type Buffer = Buffer;
-    type Texture = Texture;
-    type TextureView = Texture;
-    type Sampler = SamplerState;
-
-    fn create_buffer(&self, size: u64, usage: BufferUsage, _label: &str) -> Result<Self::Buffer, String> {
+    pub fn create_buffer(&self, size: u64, usage: BufferUsage, _label: &str) -> Result<Buffer, String> {
         let options = match usage {
             BufferUsage::Vertex | BufferUsage::Uniform | BufferUsage::Index => MTLResourceOptions::StorageModeShared,
             BufferUsage::Storage => MTLResourceOptions::StorageModePrivate,
@@ -27,7 +21,7 @@ impl GpuResourceProvider for MetalResourceProvider {
         Ok(self.device.new_buffer(size, options))
     }
 
-    fn create_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String> {
+    pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<Texture, String> {
         let mtl_desc = metal::TextureDescriptor::new();
         mtl_desc.set_width(desc.width as u64);
         mtl_desc.set_height(desc.height as u64);
@@ -50,11 +44,11 @@ impl GpuResourceProvider for MetalResourceProvider {
         Ok(self.device.new_texture(&mtl_desc))
     }
 
-    fn create_texture_view(&self, texture: &Self::Texture) -> Result<Self::TextureView, String> {
+    pub fn create_texture_view(&self, texture: &Texture) -> Result<Texture, String> {
         Ok(texture.clone())
     }
 
-    fn create_sampler(&self, label: &str) -> Result<Self::Sampler, String> {
+    pub fn create_sampler(&self, label: &str) -> Result<SamplerState, String> {
         let desc = SamplerDescriptor::new();
         desc.set_label(label);
         desc.set_min_filter(MTLSamplerMinMagFilter::Linear);
@@ -62,14 +56,14 @@ impl GpuResourceProvider for MetalResourceProvider {
         Ok(self.device.new_sampler(&desc))
     }
 
-    fn write_buffer(&self, buffer: &Self::Buffer, offset: u64, data: &[u8]) {
+    pub fn write_buffer(&self, buffer: &Buffer, offset: u64, data: &[u8]) {
         let ptr = buffer.contents() as *mut u8;
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(offset as usize), data.len());
         }
     }
 
-    fn write_texture(&self, texture: &Self::Texture, data: &[u8], width: u32, height: u32) {
+    pub fn write_texture(&self, texture: &Texture, data: &[u8], width: u32, height: u32) {
         let region = MTLRegion {
             origin: MTLOrigin { x: 0, y: 0, z: 0 },
             size: MTLSize { width: width as u64, height: height as u64, depth: 1 },
@@ -78,11 +72,11 @@ impl GpuResourceProvider for MetalResourceProvider {
         texture.replace_region(region, 0, data.as_ptr() as *const _, bytes_per_row);
     }
 
-    fn destroy_buffer(&self, _buffer: Self::Buffer) {
+    pub fn destroy_buffer(&self, _buffer: Buffer) {
         // Automatic via drop
     }
 
-    fn destroy_texture(&self, _texture: Self::Texture) {
+    pub fn destroy_texture(&self, _texture: Texture) {
         // Automatic via drop
     }
 }

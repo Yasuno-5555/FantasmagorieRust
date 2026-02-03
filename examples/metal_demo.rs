@@ -31,16 +31,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Setup CAMetalLayer
     unsafe {
-        use raw_window_handle::HasRawWindowHandle;
-        if let RawWindowHandle::AppKit(handle) = window.raw_window_handle() {
-            let view = handle.ns_view as id;
-            let layer: id = msg_send![objc::class!(CAMetalLayer), new];
-            let device_ptr = backend.device.as_ptr();
-            let _: () = msg_send![layer, setDevice: device_ptr];
-            let _: () = msg_send![view, setLayer: layer];
-            let _: () = msg_send![view, setWantsLayer: cocoa::base::YES];
-            
-            backend.set_layer(layer as *mut _);
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::AppKit(handle) = handle.as_raw() {
+                let view = handle.ns_view.as_ptr() as id;
+                let layer: id = msg_send![objc::class!(CAMetalLayer), new];
+                let device_ptr = backend.device.as_ptr();
+                let _: () = msg_send![layer, setDevice: device_ptr];
+                let _: () = msg_send![view, setLayer: layer];
+                let _: () = msg_send![view, setWantsLayer: cocoa::base::YES];
+                
+                backend.set_layer(layer as *mut _);
+            }
         }
     }
 
