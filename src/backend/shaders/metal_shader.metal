@@ -293,7 +293,40 @@ fragment float4 fs_instanced(VertexOut in [[stage_in]],
     d.border_width = inst.params1.x; d.elevation = inst.params1.y;
     d.glow_strength = inst.params1.z; d.lut_intensity = inst.params1.w;
     d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
+    d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
     return resolve_shape(in, d, tex, tex2, s, glob.time);
+}
+
+struct FragmentOutput {
+    float4 color [[color(0)]];
+    float4 aux [[color(1)]];
+};
+
+fragment FragmentOutput fs_instanced_gbuffer(VertexOut in [[stage_in]],
+                            constant GlobalUniforms &glob [[buffer(1)]],
+                            constant ShapeInstance *instances [[buffer(2)]],
+                            texture2d<float> tex [[texture(0)]],
+                            texture2d<float> tex2 [[texture(1)]],
+                            sampler s [[sampler(0)]]) {
+    constant ShapeInstance &inst = instances[in.iid];
+    ShapeData d;
+    d.rect = inst.rect; d.radii = inst.radii; d.border_color = inst.border_color;
+    d.glow_color = inst.glow_color; 
+    d.border_width = inst.params1.x; d.elevation = inst.params1.y;
+    d.glow_strength = inst.params1.z; d.lut_intensity = inst.params1.w;
+    d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
+    
+    float4 color = resolve_shape(in, d, tex, tex2, s, glob.time);
+    
+    // Aux: Normal(0,0,1) -> (0.5,0.5), Roughness(params2.z), Elevation
+    float nx = 0.5;
+    float ny = 0.5;
+    float roughness = float(inst.params2.z) / 100.0;
+    
+    FragmentOutput out;
+    out.color = color;
+    out.aux = float4(nx, ny, roughness, d.elevation);
+    return out;
 }
 
 struct CinematicParams {

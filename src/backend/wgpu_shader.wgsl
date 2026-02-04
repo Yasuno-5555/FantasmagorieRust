@@ -491,3 +491,30 @@ fn fs_instanced(in: VertexOutput) -> @location(0) vec4<f32> {
     d.viewport_size = glob.viewport_size;
     return resolve_shape(in, d);
 }
+
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+    @location(1) aux: vec4<f32>,
+}
+
+@fragment
+fn fs_instanced_gbuffer(in: VertexOutput) -> FragmentOutput {
+    let inst = instances[in.iid];
+    var d: ShapeData;
+    d.rect = inst.rect; d.radii = inst.radii; d.border_color = inst.border_color;
+    d.glow_color = inst.glow_color; d.border_width = inst.params1.x;
+    d.elevation = inst.params1.y; d.glow_strength = inst.params1.z;
+    d.lut_intensity = inst.params1.w; d.mode = inst.params2.x;
+    d.is_squircle = inst.params2.y; d.time = glob.time;
+    d.viewport_size = glob.viewport_size;
+    
+    let color = resolve_shape(in, d);
+    
+    // Aux: Normal(0,0,1) encoded as 0.5,0.5, Roughness(params2.z), Elevation
+    let nx = 0.5;
+    let ny = 0.5;
+    let roughness = f32(inst.params2.z) / 100.0; 
+    let elevation = d.elevation;
+    
+    return FragmentOutput(color, vec4<f32>(nx, ny, roughness, elevation));
+}

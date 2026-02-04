@@ -22,6 +22,7 @@ pub enum TextureFormat {
     Rgba8Unorm,
     Bgra8Unorm,
     Depth32Float,
+    Rgba16Float,
 }
 
 #[derive(Debug, Clone)]
@@ -77,12 +78,7 @@ pub trait GpuExecutor: Send + Sync {
         layout: Option<&Self::BindGroupLayout>,
     ) -> Result<Self::RenderPipeline, String>;
 
-    fn create_compute_pipeline(
-        &self,
-        label: &str,
-        wgsl_source: &str,
-        layout: Option<&Self::BindGroupLayout>,
-    ) -> Result<Self::ComputePipeline, String>;
+    // Old create_compute_pipeline removed
 
     // --- Command Execution ---
     /// Start a new rendering frame/command list
@@ -112,6 +108,18 @@ pub trait GpuExecutor: Send + Sync {
         instance_count: u32,
     ) -> Result<(), String>;
 
+    /// Perform an instanced draw call with MRT (Main + Aux/Normal)
+    fn draw_instanced_gbuffer(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        vertex_count: u32,
+        instance_count: u32,
+        aux_view: &Self::TextureView,
+    ) -> Result<(), String>;
+
     /// Dispatch a compute kernel
     fn dispatch(
         &self,
@@ -137,6 +145,7 @@ pub trait GpuExecutor: Send + Sync {
     /// Acquire a transient texture from the backend's pool
     fn acquire_transient_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String>;
     
+
     /// Release a transient texture back to the backend's pool
     fn release_transient_texture(&self, texture: Self::Texture, desc: &TextureDescriptor);
 
@@ -163,6 +172,11 @@ pub trait GpuExecutor: Send + Sync {
 
     /// Get the instanced render pipeline (for batched shapes)
     fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline;
+    fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline;
+
+    fn set_reflection_texture(&mut self, texture: &Self::TextureView) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Get the default sampler
     fn get_default_sampler(&self) -> &Self::Sampler;
@@ -172,6 +186,11 @@ pub trait GpuExecutor: Send + Sync {
         &self,
         shader_source: &str,
     ) -> Result<Self::RenderPipeline, String>;
+
+    /// Get or create a custom render pipeline from shader source (GLSL/WGSL)
+    fn create_compute_pipeline(&self, shader_name: &str, shader_source: &str, entry_point: Option<&str>) -> Result<Self::ComputePipeline, String>;
+    
+    fn get_compute_pipeline_layout(&self, pipeline: &Self::ComputePipeline, index: u32) -> Result<Self::BindGroupLayout, String>;
 
     // --- Global Operations ---
     /// Perform final resolve/composition pass

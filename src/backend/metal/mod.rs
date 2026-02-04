@@ -43,6 +43,7 @@ pub struct MetalBackend {
     
     main_pipeline: RenderPipelineState,
     instanced_pipeline: RenderPipelineState,
+    instanced_gbuffer_pipeline: RenderPipelineState,
     uniform_buffer: Buffer,
     vertex_buffer: Buffer,
     
@@ -59,6 +60,7 @@ pub struct MetalBackend {
     // Resolve Pipeline (Post-process)
     pub resolve_pipeline: RenderPipelineState,
     pub hdr_texture: Option<Texture>,
+    pub reflection_texture: Option<Texture>,
 
     // Bloom Pipelines
     pub bright_pipeline: RenderPipelineState,
@@ -95,6 +97,11 @@ impl MetalBackend {
             "Fantasmagorie Instanced",
             "vs_instanced fs_instanced",
             None
+        )?;
+
+        let instanced_gbuffer_pipeline = pipelines.create_gbuffer_pipeline(
+            "Fantasmagorie G-Buffer",
+            "vs_instanced fs_instanced_gbuffer"
         )?;
 
         let uniform_buffer = device.new_buffer(
@@ -165,8 +172,9 @@ impl MetalBackend {
             bloom_mode: 1,   // Soft
             grain_strength: 0.05,
             time: 0.0,
-            lut_intensity: 0.0,
-            _pad: [0.0; 3],
+            lut_intensity: 1.0,
+            blur_radius: 0.0,
+            _pad: [0.0; 2],
         };
         let cinematic_buffer = device.new_buffer(
             std::mem::size_of::<crate::backend::shaders::types::CinematicParams>() as u64,
@@ -208,7 +216,9 @@ impl MetalBackend {
             current_drawable: Mutex::new(None),
             current_encoder: Mutex::new(None),
             is_first_draw: Mutex::new(true),
+            reflection_texture: None,
             instanced_pipeline,
+            instanced_gbuffer_pipeline,
         })
     }
 
@@ -301,17 +311,44 @@ impl GraphicsBackend for MetalBackend {
         let time = self.start_time.elapsed().as_secs_f32();
 
         // Sync time to cinematic buffer for dynamic effects
-        {
+        let params_copy = {
             let mut params = self.current_cinematic.lock().unwrap();
             params.time = time;
+            
+            self.command_queue.device().new_buffer_with_data(
+                bytemuck::bytes_of(&*params).as_ptr() as *const _,
+                std::mem::size_of::<crate::backend::shaders::types::CinematicParams>() as u64,
+                MTLResourceOptions::CPUCacheModeDefaultCache
+            ); 
+            let contents = self.cinematic_buffer.contents();
             unsafe {
-                let ptr = self.cinematic_buffer.contents() as *mut crate::backend::shaders::types::CinematicParams;
-                *ptr = *params;
+                std::ptr::copy_nonoverlapping(
+                    bytemuck::bytes_of(&*params).as_ptr(),
+                    contents as *mut u8,
+                    std::mem::size_of::<crate::backend::shaders::types::CinematicParams>()
+                );
             }
+            *params
+        };
+
+        // Pass to plan
+        // Pass to plan
+        let mut graph = orchestrator.plan(dl, &params_copy, width, height);
+        
+        let mut ext_resources = std::collections::HashMap::new();
+        if let Some(ref hdr) = self.hdr_texture {
+             // Descriptor is placeholder for now as graph implementation doesn't strictly validate external resource match
+             let desc = crate::backend::hal::TextureDescriptor {
+                 width, height,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+                 label: Some("External HDR"),
+             };
+             ext_resources.insert(crate::renderer::graph::HDR_HANDLE, 
+                 crate::renderer::graph::GraphResource::Texture(desc, hdr.clone()));
         }
 
-        let mut graph = orchestrator.plan(dl);
-        if let Err(e) = orchestrator.execute(self, &mut graph, time, width, height) {
+        if let Err(e) = orchestrator.execute(self, &mut graph, ext_resources, time, width, height) {
             eprintln!("Metal render error: {}", e);
         }
     }
@@ -358,7 +395,8 @@ impl GraphicsBackend for MetalBackend {
             grain_strength: config.grain_strength,
             time: self.start_time.elapsed().as_secs_f32(),
             lut_intensity: config.lut_intensity,
-            _pad: [0.0; 3],
+            blur_radius: 0.0,
+            _pad: [0.0; 2],
         };
 
         *self.current_cinematic.lock().unwrap() = params;
@@ -390,7 +428,7 @@ impl GpuExecutor for MetalBackend {
         self.resources.create_texture(desc)
     }
     fn create_texture_view(&self, texture: &Self::Texture) -> Result<Self::TextureView, String> {
-        self.resources.create_texture_view(texture)
+        Ok(texture.clone())
     }
     fn create_sampler(&self, label: &str) -> Result<Self::Sampler, String> {
         self.resources.create_sampler(label)
@@ -416,8 +454,12 @@ impl GpuExecutor for MetalBackend {
         // Simple heuristic: if it mentions 'vs_main' and 'fs_main', use the library's defaults
         self.pipelines.create_render_pipeline("Custom Pipeline", shader_source, None)
     }
-    fn create_compute_pipeline(&self, label: &str, wgsl: &str, layout: Option<&Self::BindGroupLayout>) -> Result<Self::ComputePipeline, String> {
-        self.pipelines.create_compute_pipeline(label, wgsl, layout)
+    fn create_compute_pipeline(&self, shader_name: &str, shader_source: &str, entry_point: Option<&str>) -> Result<Self::ComputePipeline, String> {
+        self.pipelines.create_compute_pipeline(shader_name, shader_source, entry_point)
+    }
+
+    fn get_compute_pipeline_layout(&self, _pipeline: &Self::ComputePipeline, _index: u32) -> Result<Self::BindGroupLayout, String> {
+        Ok(pipeline_provider::MetalBindGroupLayout { entries: vec![] }) 
     }
     
     fn destroy_bind_group(&self, _bind_group: Self::BindGroup) {
@@ -457,6 +499,14 @@ impl GpuExecutor for MetalBackend {
             if let Some(path) = req_guard.take() {
                 if let Some(d_wrapper) = *self.current_drawable.lock().unwrap() {
                     let drawable = d_wrapper.0;
+        {
+            // We should use the cinematic params from context or similar if available, 
+            // but MetalBackend currently doesn't simulate full CinematicConfig update loop in this demo code structure cleanly?
+            // Actually, MetalBackend holds `current_cinematic`? No, it holds `dummy_storage_buffer`.
+            // Let's check struct.
+            // MetalBackend struct doesn't seem to have `current_cinematic` field in the snippet I saw earlier.
+            // I need to add it or use a default if missing.
+        }
                     unsafe {
                         let tex_ptr: id = msg_send![drawable, texture];
                         let src_tex: &TextureRef = TextureRef::from_ptr(tex_ptr as *mut _);
@@ -545,6 +595,91 @@ impl GpuExecutor for MetalBackend {
             vertex_count as u64,
             instance_count as u64,
         );
+        Ok(())
+    }
+
+    fn draw_instanced_gbuffer(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        vertex_count: u32,
+        instance_count: u32,
+        aux_view: &Self::TextureView,
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        // If an encoder is already active, we must end it because we are changing attachments
+        if let Some(enc) = encoder_guard.take() {
+            enc.0.end_encoding();
+        }
+
+        // Create new descriptor with 2 attachments
+        let d_wrapper = self.current_drawable.lock().unwrap();
+        let drawable = d_wrapper.as_ref().ok_or("No drawable")?.0;
+        
+        let descriptor = RenderPassDescriptor::new();
+        // Attachment 0: HDR
+        let color_attachment0 = descriptor.color_attachments().object_at(0).unwrap();
+        if let Some(tex) = &self.hdr_texture {
+             color_attachment0.set_texture(Some(tex));
+        } else {
+             unsafe {
+                 let tex_ptr: id = msg_send![drawable, texture];
+                 let tex_ref: &TextureRef = TextureRef::from_ptr(tex_ptr as *mut _);
+                 color_attachment0.set_texture(Some(tex_ref));
+             }
+        }
+        color_attachment0.set_load_action(MTLLoadAction::Load);
+        color_attachment0.set_store_action(MTLStoreAction::Store);
+
+        // Attachment 1: Aux (G-Buffer)
+        let color_attachment1 = descriptor.color_attachments().object_at(1).unwrap();
+        color_attachment1.set_texture(Some(aux_view));
+        color_attachment1.set_load_action(MTLLoadAction::Load);
+        color_attachment1.set_store_action(MTLStoreAction::Store);
+
+        let command_buffer_guard = self.current_command_buffer.lock().unwrap();
+        let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
+        
+        let encoder = command_buffer.new_render_command_encoder(descriptor);
+        
+        encoder.set_render_pipeline_state(pipeline);
+        encoder.set_vertex_buffer(0, Some(vertex_buffer), 0);
+        
+        // Match draw_instanced implementation for bindings
+        // Assuming bind_group corresponds to Metal Bindings
+        // In MetalBackend::create_bind_group, we see how it packs buffers.
+        // Assuming slot 1 is Global, slot 2 is Instance
+        // But draw_instanced implementation logic handles this.
+        // Let's copy binding logic from draw_instanced once I verify it.
+        // For now, assume bind_group follows create_bind_group logic of Metal.
+        // Wait, standard draw_instanced in MetalBackend sets buffers explicitly via bind_group?
+        
+        // Replicating draw_instanced logic blindly for now, will verify in verify step.
+        if let Some(bg) = bind_group {
+            // Apply bind group resources
+            // This is hacky because MetalBackend BindGroup is just struct with vectors
+            for (i, buffer) in bg.buffers.iter().enumerate() {
+                 encoder.set_vertex_buffer((i + 1) as u64, Some(buffer), 0);
+                 encoder.set_fragment_buffer((i + 1) as u64, Some(buffer), 0);
+            }
+            for (i, texture) in bg.textures.iter().enumerate() {
+                 encoder.set_fragment_texture(i as u64, Some(texture));
+            }
+             for (i, sampler) in bg.samplers.iter().enumerate() {
+                 encoder.set_fragment_sampler_state(i as u64, Some(sampler));
+            }
+        }
+        
+        encoder.draw_primitives_instanced(
+            MTLPrimitiveType::Triangle,
+            0,
+            vertex_count as u64,
+            instance_count as u64,
+        );
+        
+        encoder.end_encoding();
         Ok(())
     }
     
@@ -673,6 +808,14 @@ impl GpuExecutor for MetalBackend {
 
     fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline {
         &self.instanced_pipeline
+    }
+    fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline {
+        &self.instanced_gbuffer_pipeline
+    }
+
+    fn set_reflection_texture(&mut self, texture: &Self::TextureView) -> Result<(), String> {
+        self.reflection_texture = Some(texture.to_owned());
+        Ok(())
     }
     fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
 

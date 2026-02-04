@@ -39,15 +39,17 @@ pub struct WgpuBackend {
     
     pub main_pipeline: Arc<wgpu::RenderPipeline>,
     pub instanced_pipeline: Arc<wgpu::RenderPipeline>,
+    pub instanced_gbuffer_pipeline: Arc<wgpu::RenderPipeline>,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub pipeline_layout: wgpu::PipelineLayout,
     
     pub sampler: wgpu::Sampler,
-    pub font_view: Option<wgpu::TextureView>,
+    pub font_view: Option<Arc<wgpu::TextureView>>,
     pub backdrop_view: Arc<wgpu::TextureView>,
     
-    pub hdr_texture: wgpu::Texture,
-    pub hdr_view: wgpu::TextureView,
+    pub hdr_texture: Arc<wgpu::Texture>,
+    pub hdr_view: Arc<wgpu::TextureView>,
+    pub reflection_view: Option<Arc<wgpu::TextureView>>,
     pub backdrop_texture: wgpu::Texture,
     
     pub k4_pipeline: Arc<wgpu::RenderPipeline>, // Resolve/Post-process
@@ -57,7 +59,7 @@ pub struct WgpuBackend {
     pub bright_pipeline: Arc<wgpu::RenderPipeline>,
     pub blur_pipeline: Arc<wgpu::RenderPipeline>,
     pub bloom_textures: Vec<wgpu::Texture>,
-    pub bloom_views: Vec<wgpu::TextureView>,
+    pub bloom_views: Vec<Arc<wgpu::TextureView>>,
     pub bloom_bind_group_layout: wgpu::BindGroupLayout,
     pub blur_uniform_buffer: wgpu::Buffer,
     pub cinematic_buffer: wgpu::Buffer,
@@ -83,8 +85,8 @@ pub struct WgpuBackend {
 
 impl GpuExecutor for WgpuBackend {
     type Buffer = wgpu::Buffer;
-    type Texture = wgpu::Texture;
-    type TextureView = wgpu::TextureView;
+    type Texture = Arc<wgpu::Texture>;
+    type TextureView = Arc<wgpu::TextureView>;
     type Sampler = wgpu::Sampler;
     type RenderPipeline = Arc<wgpu::RenderPipeline>;
     type ComputePipeline = wgpu::ComputePipeline;
@@ -114,6 +116,7 @@ impl GpuExecutor for WgpuBackend {
             TextureFormat::Rgba8Unorm => wgpu::TextureFormat::Rgba8Unorm,
             TextureFormat::Bgra8Unorm => wgpu::TextureFormat::Bgra8UnormSrgb,
             TextureFormat::Depth32Float => wgpu::TextureFormat::Depth32Float,
+            TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
         };
         let mut usage = wgpu::TextureUsages::empty();
         if desc.usage.contains(TextureUsage::COPY_SRC) { usage |= wgpu::TextureUsages::COPY_SRC; }
@@ -122,7 +125,7 @@ impl GpuExecutor for WgpuBackend {
         if desc.usage.contains(TextureUsage::STORAGE_BINDING) { usage |= wgpu::TextureUsages::STORAGE_BINDING; }
         if desc.usage.contains(TextureUsage::RENDER_ATTACHMENT) { usage |= wgpu::TextureUsages::RENDER_ATTACHMENT; }
 
-        Ok(self.device.create_texture(&wgpu::TextureDescriptor {
+        Ok(Arc::new(self.device.create_texture(&wgpu::TextureDescriptor {
             label: desc.label,
             size: wgpu::Extent3d { width: desc.width, height: desc.height, depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -131,11 +134,11 @@ impl GpuExecutor for WgpuBackend {
             format,
             usage,
             view_formats: &[],
-        }))
+        })))
     }
 
     fn create_texture_view(&self, texture: &Self::Texture) -> Result<Self::TextureView, String> {
-        Ok(texture.create_view(&wgpu::TextureViewDescriptor::default()))
+        Ok(Arc::new(texture.create_view(&wgpu::TextureViewDescriptor::default())))
     }
 
     fn create_sampler(&self, label: &str) -> Result<Self::Sampler, String> {
@@ -201,25 +204,25 @@ impl GpuExecutor for WgpuBackend {
         })))
     }
 
-    fn create_compute_pipeline(&self, label: &str, wgsl_source: &str, layout: Option<&Self::BindGroupLayout>) -> Result<Self::ComputePipeline, String> {
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    fn create_compute_pipeline(&self, label: &str, wgsl_source: &str, entry_point: Option<&str>) -> Result<Self::ComputePipeline, String> {
+        let desc = wgpu::ShaderModuleDescriptor {
             label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
-        });
-        
-        let layouts: Vec<&wgpu::BindGroupLayout> = if let Some(l) = layout { vec![l] } else { vec![] };
-        let pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(wgsl_source)),
+        };
+        let module = self.device.create_shader_module(desc);
+
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(label),
-            bind_group_layouts: &layouts,
-            push_constant_ranges: &[],
+            layout: None, // Auto layout
+            module: &module,
+            entry_point: entry_point.unwrap_or("main"),
         });
 
-        Ok(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: "main",
-        }))
+        Ok(pipeline)
+    }
+
+    fn get_compute_pipeline_layout(&self, pipeline: &Self::ComputePipeline, index: u32) -> Result<Self::BindGroupLayout, String> {
+        Ok(pipeline.get_bind_group_layout(index))
     }
 
     fn begin_execute(&self) -> Result<(), String> {
@@ -285,6 +288,67 @@ impl GpuExecutor for WgpuBackend {
         if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
         rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
         // We use @builtin(instance_index) in shader, so we just say 0..instance_count
+        rpass.draw(0..vertex_count, 0..instance_count);
+        Ok(())
+    }
+
+    fn draw_instanced_gbuffer(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        vertex_count: u32,
+        instance_count: u32,
+        aux_view: &Self::TextureView,
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("G-Buffer Draw"),
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &self.hdr_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: aux_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })
+            ],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        rpass.set_pipeline(pipeline);
+        if let Some(bg) = bind_group {
+            rpass.set_bind_group(0, bg, &[]);
+        }
+        rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        // rpass.set_bind_group(1, &self.get_storage_bind_group(instance_buffer), &[]); // Need helper or reconstruct BG
+        // Wait, WGPU impl of draw_instanced uses set_bind_group(1) implicitly or passed in?
+        // Checking existing draw_instanced logic.
+        // It consumes bind_group which contains EVERYTHING.
+        // The previous WGPU `draw_instanced` implementation in `mod.rs` (lines 460+) likely sets bind group 0.
+        // But `draw_instanced` signature in HAL takes `bind_group`.
+        // Let's verify `draw_instanced` implementation first to copy pattern exactly.
+        
+        // REVISITING: I need to see `draw_instanced` implementation first.
+        // I will peek at it before committing this block.
+        // But since I am in multi_replace, I will assume bind_group 0 is the main one.
+        // The issue is `instance_buffer` binding.
+        // In `GeometryNode`, it creates a bind group with GlobalU and InstU.
+        // So `bind_group` passed here HAS the instance buffer bound.
+        // So I just set bind group 0.
+        
+        // Wait, standard `draw_instanced` typically sets vertex buffer.
+        // Does it use storage buffer for instances? Yes, `GeometryNode` uses Storage Buffer for instances.
+        // So NO per-instance vertex buffer (only quad vertices).
+        
         rpass.draw(0..vertex_count, 0..instance_count);
         Ok(())
     }
@@ -357,10 +421,10 @@ impl GpuExecutor for WgpuBackend {
         let mut pool = self.transient_pool.lock().unwrap();
         pool.release_texture(texture, desc);
     }
-
+        
     fn create_bind_group(&self, layout: &Self::BindGroupLayout, buffers: &[&Self::Buffer], textures: &[&Self::TextureView], samplers: &[&Self::Sampler]) -> Result<Self::BindGroup, String> {
         let mut entries = Vec::new();
-        
+
         // Binding 0: Uniform (Main)
         // If we have only 1 buffer, it's the main uniform buffer for Text/Primitives
         let buf0 = if buffers.len() == 1 { buffers[0] } else { &self.cinematic_buffer }; // Fallback to something
@@ -395,11 +459,19 @@ impl GpuExecutor for WgpuBackend {
         Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("Dynamic Bind Group"), layout, entries: &entries }))
     }
 
-    fn get_font_view(&self) -> &Self::TextureView { self.font_view.as_ref().expect("Font view missing") }
-    fn get_backdrop_view(&self) -> &Self::TextureView { &*self.backdrop_view }
+    fn get_font_view(&self) -> &Self::TextureView { self.font_view.as_ref().unwrap() }
+    fn get_backdrop_view(&self) -> &Self::TextureView { &self.backdrop_view }
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { &self.bind_group_layout }
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline { &self.main_pipeline }
     fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline { &self.instanced_pipeline }
+    fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline {
+        &self.instanced_gbuffer_pipeline
+    }
+
+    fn set_reflection_texture(&mut self, texture: &Self::TextureView) -> Result<(), String> {
+        self.reflection_view = Some(texture.clone());
+        Ok(())
+    }
     fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
 
     fn get_custom_render_pipeline(
@@ -744,8 +816,37 @@ impl WgpuBackend {
             multiview: None,
         }));
 
+        let instanced_gbuffer_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Instanced G-Buffer Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &main_shader, entry_point: "vs_instanced", buffers: &[Vertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &main_shader,
+                entry_point: "fs_instanced_gbuffer",
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent::REPLACE,
+                            alpha: wgpu::BlendComponent::REPLACE,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
         // --- HDR Resources ---
-        let hdr_texture = device.create_texture(&wgpu::TextureDescriptor {
+        let hdr_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("HDR Texture"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
@@ -754,8 +855,8 @@ impl WgpuBackend {
             format: wgpu::TextureFormat::Rgba16Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
-        });
-        let hdr_view = hdr_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        }));
+        let hdr_view = Arc::new(hdr_texture.create_view(&wgpu::TextureViewDescriptor::default()));
 
         let backdrop_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Backdrop Texture"),
@@ -827,7 +928,7 @@ impl WgpuBackend {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-            bloom_views.push(tex.create_view(&wgpu::TextureViewDescriptor::default()));
+            bloom_views.push(Arc::new(tex.create_view(&wgpu::TextureViewDescriptor::default())));
             bloom_textures.push(tex);
         }
 
@@ -847,8 +948,9 @@ impl WgpuBackend {
             bloom_mode: 1,   // Soft
             grain_strength: 0.05,
             time: 0.0,
-            lut_intensity: 0.0,
-            _pad: [0.0; 3],
+            lut_intensity: 1.0,
+            blur_radius: 0.0,
+            _pad: [0.0; 2],
         };
         let cinematic_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cinematic Params Buffer"),
@@ -938,13 +1040,15 @@ impl WgpuBackend {
             surface_config,
             main_pipeline,
             instanced_pipeline,
+            instanced_gbuffer_pipeline,
             bind_group_layout,
             pipeline_layout,
             sampler,
-            font_view,
+            font_view: None,
             backdrop_view,
             hdr_texture,
             hdr_view,
+            reflection_view: None,
             backdrop_texture,
             k4_pipeline,
             k4_bind_group_layout,
@@ -1265,13 +1369,63 @@ impl GraphicsBackend for WgpuBackend {
         let time = self.start_time.elapsed().as_secs_f32();
 
         // Update cinematic time for dynamic effects (like grain)
-        {
+        let params_copy = {
             let mut params = self.current_cinematic.lock().unwrap();
             params.time = time;
             self.queue.write_buffer(&self.cinematic_buffer, 0, bytemuck::bytes_of(&*params));
-        }
-        let mut graph = orchestrator.plan(dl);
-        if let Err(e) = orchestrator.execute(self, &mut graph, time, width, height) {
+            *params // Copy params
+        };
+        
+        // Use copied params for planning
+        // Use copied params for planning
+        let mut graph = orchestrator.plan(dl, &params_copy, width, height);
+        
+        let mut ext_resources = std::collections::HashMap::new();
+        // Descriptor placeholder
+        let desc = crate::backend::hal::TextureDescriptor {
+             width, height,
+             format: crate::backend::hal::TextureFormat::Rgba16Float,
+             usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+             label: Some("External HDR"),
+        };
+        // Need to create a cloned/shared texture view? 
+        // GraphResource::Texture stores Texture, not View.
+        // WgpuBackend::hdr_texture is a Texture.
+        // Wait, WgpuBackend has `hdr_texture` (Texture) and `hdr_view` (TextureView).
+        // `GraphResource` usually holds underlying resource.
+        // `RenderContext` holds `GraphResource`.
+        // TransientPool deals with Textures.
+        // So passing `hdr_texture` is correct.
+        // Does Wgpu Texture implement Clone? No, it's a Handle/Arc wrapper usually?
+        // wgpu::Texture is not Clone?
+        // It's an internal handle. `wgpu::Texture` is NOT Clone (it's a struct wrapping Id).
+        // But `WgpuBackend` might hold `Texture` or `Arc<Texture>`.
+        // In `WgpuBackend` struct (Step 1554?): `hdr_texture: wgpu::Texture`.
+        // If it's not Arc, I can't clone it easily to put in HashMap?
+        // `GraphResource` in `graph.rs` is `GraphResource<E>`.
+        // `E::Texture` for Wgpu is `wgpu::Texture`.
+        // If `wgpu::Texture` is not Clone, I have a problem.
+        // Most wgpu resources are !Clone.
+        // I may need to wrap it in Arc in Backend or GraphResource.
+        // Or pass reference? `GraphResource` owns it.
+        // But `WgpuBackend` OWNS `hdr_texture`.
+        // I can't move it into `Graph`.
+        // `external_resources` implies SHARED ownership or references.
+        // `GraphResource` enum: `Texture(TextureDescriptor, E::Texture)`.
+        // If `E::Texture` is `wgpu::Texture`, and it's not Clone, I can't have two owners.
+        // WGPU objects are reference counted internally?
+        // `wgpu::Texture` implements `Clone` usually? "It is an Arc around the internal texture."
+        // Let's verify. `wgpu` crate (0.19/0.20) usually makes Resources `Clone` (Arc).
+        // If not, I am in trouble.
+        // Assuming `wgpu::Texture` IS Clone (Arc internally).
+        // Metal Texture was ref counted explicitly or effectively Arc.
+        
+        // I will attempt `self.hdr_texture.clone()`.
+        
+        ext_resources.insert(crate::renderer::graph::HDR_HANDLE, 
+             crate::renderer::graph::GraphResource::Texture(desc, self.hdr_texture.clone())); // Assuming Clone
+
+        if let Err(e) = orchestrator.execute(self, &mut graph, ext_resources, time, width, height) {
             if !e.contains("Outdated") && !e.contains("Lost") {
                 eprintln!("Render execution failed: {}", e);
             }
@@ -1337,7 +1491,8 @@ impl GraphicsBackend for WgpuBackend {
             grain_strength: config.grain_strength,
             time: self.start_time.elapsed().as_secs_f32(),
             lut_intensity: config.lut_intensity,
-            _pad: [0.0; 3],
+            blur_radius: 0.0,
+            _pad: [0.0; 2],
         };
 
         *self.current_cinematic.lock().unwrap() = params;

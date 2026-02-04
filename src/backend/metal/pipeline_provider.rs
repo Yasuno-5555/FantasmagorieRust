@@ -94,13 +94,81 @@ impl MetalPipelineProvider {
         self.device.new_render_pipeline_state(&desc).map_err(|e| e.to_string())
     }
 
+    pub fn create_gbuffer_pipeline(
+        &self,
+        label: &str,
+        wgsl_source: &str,
+    ) -> Result<RenderPipelineState, String> {
+        let parts: Vec<&str> = wgsl_source.split_whitespace().collect();
+        if parts.len() < 2 {
+            return Err(format!("Expected 'vs_func fs_func', got '{}'", wgsl_source));
+        }
+        
+        let vs_name = parts[0];
+        let fs_name = parts[1];
+
+        let vs = self.library.get_function(vs_name, None).map_err(|e| format!("VS '{}' not found: {}", vs_name, e))?;
+        let fs = self.library.get_function(fs_name, None).map_err(|e| format!("FS '{}' not found: {}", fs_name, e))?;
+        
+        let desc = RenderPipelineDescriptor::new();
+        desc.set_label(label);
+        desc.set_vertex_function(Some(&vs));
+        desc.set_fragment_function(Some(&fs));
+        
+        // Attachment 0: HDR (Blend enabled)
+        let color0 = desc.color_attachments().object_at(0).unwrap();
+        color0.set_pixel_format(MTLPixelFormat::RGBA16Float);
+        color0.set_blending_enabled(true);
+        color0.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+        color0.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+
+        // Attachment 1: Aux (Replace)
+        let color1 = desc.color_attachments().object_at(1).unwrap();
+        color1.set_pixel_format(MTLPixelFormat::RGBA16Float);
+        color1.set_blending_enabled(false); 
+
+        let vertex_desc = VertexDescriptor::new();
+        
+        // Attribute 0: pos (float2)
+        let attr0 = vertex_desc.attributes().object_at(0).unwrap();
+        attr0.set_format(MTLVertexFormat::Float2); attr0.set_offset(0); attr0.set_buffer_index(0);
+        
+        // Attribute 1: uv (float2)
+        let attr1 = vertex_desc.attributes().object_at(1).unwrap();
+        attr1.set_format(MTLVertexFormat::Float2); attr1.set_offset(8); attr1.set_buffer_index(0);
+        
+        // Attribute 2: color (float4)
+        let attr2 = vertex_desc.attributes().object_at(2).unwrap();
+        attr2.set_format(MTLVertexFormat::Float4); attr2.set_offset(16); attr2.set_buffer_index(0);
+        
+        let layout0 = vertex_desc.layouts().object_at(0).unwrap();
+        layout0.set_stride(32);
+        
+        desc.set_vertex_descriptor(Some(&vertex_desc));
+        
+        self.device.new_render_pipeline_state(&desc).map_err(|e| e.to_string())
+    }
+
     pub fn create_compute_pipeline(
         &self,
         label: &str,
-        _wgsl_source: &str,
-        _layout: Option<&MetalBindGroupLayout>,
+        shader_source: &str, // Assumed MSL if feature=metal
+        entry_point: Option<&str>,
     ) -> Result<ComputePipelineState, String> {
-        Err("WGSL to MSL transpilation NOT implemented for Metal HAL yet".into())
+        let options = CompileOptions::new();
+        let library = self.device.new_library_with_source(shader_source, &options)
+            .map_err(|e| format!("Failed to compile compute shader '{}': {}", label, e))?;
+            
+        let name = entry_point.unwrap_or("main");
+        let kernel = library.get_function(name, None)
+            .map_err(|e| format!("Kernel '{}' not found in '{}': {}", name, label, e))?;
+            
+        let desc = ComputePipelineDescriptor::new();
+        desc.set_label(label);
+        desc.set_compute_function(Some(&kernel));
+        
+        self.device.new_compute_pipeline_state(&desc)
+            .map_err(|e| format!("Failed to create compute pipeline state '{}': {}", label, e))
     }
 
     pub fn destroy_bind_group(&self, _bind_group: MetalBindGroup) {

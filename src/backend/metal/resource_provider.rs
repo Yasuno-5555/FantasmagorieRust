@@ -30,6 +30,7 @@ impl MetalResourceProvider {
             crate::backend::hal::TextureFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
             crate::backend::hal::TextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
             crate::backend::hal::TextureFormat::Depth32Float => MTLPixelFormat::Depth32Float,
+            crate::backend::hal::TextureFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
         });
         
         let mut usage = MTLTextureUsage::ShaderRead;

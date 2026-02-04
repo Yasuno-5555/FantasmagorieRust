@@ -5,6 +5,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, WindowEvent, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 use winit::event_loop::{ControlFlow, EventLoop};
+use fanta_rust::backend::shaders::types::CinematicParams;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Fantasmagorie Rust - Performance Benchmark");
@@ -116,11 +117,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = info_text; // Silence unused warning
                 });
 
+                // Add test blur
+                dl.add_backdrop_blur(
+                    Vec2::new(100.0, 100.0),
+                    Vec2::new(300.0, 200.0),
+                    20.0,
+                    ColorF::white()
+                );
+
                 // --- RENDERING ---
                 let orchestrator = fanta_rust::renderer::orchestrator::RenderOrchestrator::new()
                     .with_batching(batching_enabled);
                 
-                let mut graph = orchestrator.plan(&dl);
+                let mut cinematic_config = CinematicParams::default();
+                cinematic_config.blur_radius = 16.0;
+                let mut graph = orchestrator.plan(&dl, &cinematic_config);
                 if let Err(e) = orchestrator.execute(&mut backend, &mut graph, elapsed, current_width, current_height) {
                     eprintln!("Render error: {}", e);
                 }

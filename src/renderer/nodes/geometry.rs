@@ -8,15 +8,21 @@ use bytemuck::{Pod, Zeroable};
 pub struct GeometryNode {
     pub commands: Vec<DrawCommand>,
     pub batching_enabled: bool,
+    pub aux_handle: Option<crate::renderer::graph::ResourceHandle>,
 }
 
 impl GeometryNode {
     pub fn new(commands: Vec<DrawCommand>) -> Self {
-        Self { commands, batching_enabled: true }
+        Self { commands, batching_enabled: true, aux_handle: None }
     }
     
     pub fn with_batching(mut self, enabled: bool) -> Self {
         self.batching_enabled = enabled;
+        self
+    }
+
+    pub fn with_aux(mut self, handle: crate::renderer::graph::ResourceHandle) -> Self {
+        self.aux_handle = Some(handle);
         self
     }
 }
@@ -146,7 +152,49 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         let v_buf = executor.create_buffer(ui_quad.len() as u64, BufferUsage::Vertex, "QuadV")?;
                         executor.write_buffer(&v_buf, 0, &ui_quad);
                         let bg = executor.create_bind_group(layout, &[&g_buf, &inst_buf], &[font_view, backdrop_view], &[sampler])?;
-                        executor.draw_instanced(instanced_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32)?;
+                        
+                        if let Some(aux_h) = self.aux_handle {
+                             // Look up aux resource
+                             // Note: RenderContext doesn't expose easy lookup of raw view from handle if generic E is opaque?
+                             // But RenderContext.resources has GraphResource::Texture(desc, tex).
+                             // We need E::Texture to create view? Or E::Texture IS the view?
+                             // HAL defines type Texture and TextureView.
+                             // TransientPool returns E::Texture.
+                             // We need a view. GpuExecutor has create_texture_view.
+                             // But we can't create view inside execute easily without mutating resources?
+                             // Let's assume resources map has the texture.
+                             // This part is tricky given current GraphResource definition.
+                             // GraphResource has E::Texture.
+                             // We need a way to get E::TextureView.
+                             // For now, let's assume we create view on fly or Graph stores View?
+                             // Graph stores Resource which owns E::Texture.
+                             // We should probably cache views in Context or GraphResource.
+                             // For this task, I'll create a view temporarily.
+                             if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&aux_h) {
+                                  // This requires E to expose create_texture_view which it does.
+                                  // But execute takes &mut self, ctx. ctx.executor is &mut E.
+                                  // We can call executor.create_texture_view(tex).
+                                  // But tex is borrowed from ctx.resources.
+                                  // Rust borrow checker might complain if we borrow tex (immutable) and executor (mutable).
+                                  // ctx splits borrows?
+                                  // RenderContext struct: { executor, resources, ... }
+                                  // Yes, we can borrow resources independently of executor.
+                             }
+                             // Actually, let's implement the branch:
+                        }
+                        
+                        let aux_view_opt = if let Some(aux_h) = self.aux_handle {
+                             if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&aux_h) {
+                                 Some(executor.create_texture_view(tex)?)
+                             } else { None }
+                        } else { None };
+
+                        if let Some(aux) = &aux_view_opt {
+                             let gb_pipeline = executor.get_instanced_gbuffer_render_pipeline();
+                             executor.draw_instanced_gbuffer(gb_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32, aux)?;
+                        } else {
+                             executor.draw_instanced(instanced_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32)?;
+                        }
                         executor.destroy_bind_group(bg); executor.destroy_buffer(g_buf); executor.destroy_buffer(inst_buf); executor.destroy_buffer(v_buf);
                         i = j;
                     }

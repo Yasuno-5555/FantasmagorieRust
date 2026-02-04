@@ -5,7 +5,9 @@ use std::any::Any;
 /// Handle to a resource within the graph
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ResourceHandle(pub u32);
+pub const HDR_HANDLE: ResourceHandle = ResourceHandle(1);
 pub const BACKDROP_HANDLE: ResourceHandle = ResourceHandle(10);
+pub const REFLECTION_HANDLE: ResourceHandle = ResourceHandle(20);
 
 /// Types of resources managed by the graph
 pub enum ResourceType {
@@ -93,18 +95,40 @@ impl<E: GpuExecutor + 'static> RenderGraph<E> {
         }
     }
 
+    pub fn alloc_texture(&mut self, desc: TextureDescriptor) -> ResourceHandle {
+        self.next_handle += 1;
+        let h = ResourceHandle(self.next_handle);
+        self.resources.insert(h, GraphResourceDesc::Texture(desc));
+        h
+    }
+
     pub fn add_node<N: RenderNode<E> + 'static>(&mut self, node: N) {
         self.nodes.push(Box::new(node));
     }
 
-    pub fn execute(&mut self, executor: &mut E, time: f32, width: u32, height: u32) -> Result<(), String> {
+    pub fn execute(&mut self, executor: &mut E, external_resources: HashMap<ResourceHandle, GraphResource<E>>, time: f32, width: u32, height: u32) -> Result<(), String> {
         let mut ctx = RenderContext {
             executor,
-            resources: HashMap::new(),
+            resources: external_resources,
             time,
             width,
             height,
         };
+
+        // Allocate declared resources
+        for (handle, desc) in &self.resources {
+            match desc {
+                GraphResourceDesc::Texture(tex_desc) => {
+                    let tex = ctx.executor.acquire_transient_texture(tex_desc)?;
+                    ctx.resources.insert(*handle, GraphResource::Texture(tex_desc.clone(), tex));
+                }
+                GraphResourceDesc::Buffer { size, usage, label } => {
+                     // Buffer pool not implemented, direct creation
+                     let buf = ctx.executor.create_buffer(*size, *usage, label)?;
+                     ctx.resources.insert(*handle, GraphResource::Buffer(*size, *usage, buf));
+                }
+            }
+        }
 
         for node in &mut self.nodes {
             node.execute(&mut ctx)?;

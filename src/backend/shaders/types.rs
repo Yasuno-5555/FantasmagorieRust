@@ -30,7 +30,26 @@ pub struct CinematicParams {
     pub grain_strength: f32,
     pub time: f32,
     pub lut_intensity: f32,
-    pub _pad: [f32; 3],
+    pub blur_radius: f32,
+    pub _pad: [f32; 2],
+}
+
+impl Default for CinematicParams {
+    fn default() -> Self {
+        Self {
+            exposure: 1.0,
+            ca_strength: 0.0015,
+            vignette_intensity: 0.7,
+            bloom_intensity: 0.4,
+            tonemap_mode: 1, // Aces
+            bloom_mode: 1,   // Soft
+            grain_strength: 0.05,
+            time: 0.0,
+            lut_intensity: 1.0,
+            blur_radius: 0.0,
+            _pad: [0.0; 2],
+        }
+    }
 }
 
 /// Audio reactive parameters
@@ -40,6 +59,17 @@ pub struct AudioParams {
     pub bass: f32,
     pub mid: f32,
     pub high: f32,
+    pub _pad: f32,
+}
+
+/// Blur pass parameters
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Pod, Zeroable)]
+pub struct BlurParams {
+    /// Direction (1.0, 0.0) or (0.0, 1.0)
+    pub direction: [f32; 2],
+    /// Blur sigma (radius/strength)
+    pub sigma: f32,
     pub _pad: f32,
 }
 
