@@ -2,6 +2,22 @@
 // SDF-based rendering for UI elements
 // Modes: 0=Solid, 1=Text, 2=Shape, 3=Image, 4=Blur, 5=Gradient, 6=Arc, 7=Plot, 8=Heatmap, 9=Aurora
 
+struct GlobalUniforms {
+    projection: mat4x4<f32>,
+    time: f32,
+    viewport_size: vec2<f32>,
+    _pad: f32,
+};
+
+struct ShapeInstance {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    border_color: vec4<f32>,
+    glow_color: vec4<f32>,
+    params1: vec4<f32>, // border_width, elevation, glow_strength, lut_intensity
+    params2: vec4<u32>, // mode, is_squircle, _r1, _r2
+};
+
 struct Uniforms {
     projection: mat4x4<f32>,
     rect: vec4<f32>,
@@ -21,8 +37,9 @@ struct Uniforms {
     _pad2: f32,
 };
 
-@group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(4) var<uniform> glob: GlobalUniforms;
+@group(0) @binding(5) var<storage, read> instances: array<ShapeInstance>;
 
 @group(0) @binding(1)
 var u_texture: texture_2d<f32>;
@@ -44,6 +61,7 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) world_pos: vec2<f32>,
+    @location(3) @interpolate(flat) iid: u32,
 };
 
 @vertex
@@ -53,6 +71,25 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.uv = in.uv;
     out.color = vec4<f32>(pow(in.color.rgb, vec3<f32>(2.2)), in.color.a);
     out.world_pos = in.pos;
+    out.iid = 0xFFFFFFFFu;
+    return out;
+}
+
+@vertex
+fn vs_instanced(
+    in: VertexInput,
+    @builtin(instance_index) instance_index: u32,
+) -> VertexOutput {
+    let inst = instances[instance_index];
+    var out: VertexOutput;
+    
+    // Calculate world position from rect and uv
+    let pos = inst.rect.xy + in.uv * inst.rect.zw;
+    out.clip_position = glob.projection * vec4<f32>(pos, 0.0, 1.0);
+    out.uv = in.uv;
+    out.color = vec4<f32>(pow(in.color.rgb, vec3<f32>(2.2)), in.color.a);
+    out.world_pos = pos;
+    out.iid = instance_index;
     return out;
 }
 
@@ -316,6 +353,22 @@ fn mode_aurora(uv: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(base + col * 0.6, 1.0);
 }
 
+fn mode_grid(world_pos: vec2<f32>) -> vec4<f32> {
+    let pos = world_pos;
+    let t = uniforms.time;
+    
+    // Smooth derivative-based anti-aliasing
+    let grid_size = 50.0;
+    let f = abs(fract(pos / grid_size - 0.5) - 0.5);
+    let g = f / (fwidth(pos / grid_size) + 0.02);
+    let grid = 1.0 - min(min(g.x, g.y), 1.0);
+    
+    let pulse = sin(t * 2.0 - length(pos) * 0.01) * 0.5 + 0.5;
+    // Slightly HDR color (1.2) to trigger a soft cinematic bloom glow
+    let col = mix(vec3<f32>(0.02, 0.02, 0.05), vec3<f32>(0.0, 1.2, 1.5), grid * pulse * 0.5);
+    return vec4<f32>(col, 1.0);
+}
+
 // Placeholder for custom effect injection
 // User-provided code should override this if using mode 100
 fn custom_effect(color: vec4<f32>, world_pos: vec2<f32>, uv: vec2<f32>, time: f32) -> vec4<f32> {
@@ -324,28 +377,117 @@ fn custom_effect(color: vec4<f32>, world_pos: vec2<f32>, uv: vec2<f32>, time: f3
 
 // ========== Main Fragment Shader ==========
 
+struct ShapeData {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    border_color: vec4<f32>,
+    glow_color: vec4<f32>,
+    border_width: f32,
+    elevation: f32,
+    glow_strength: f32,
+    lut_intensity: f32,
+    mode: u32,
+    is_squircle: u32,
+    time: f32,
+    viewport_size: vec2<f32>,
+}
+
+fn resolve_shape(in: VertexOutput, d: ShapeData) -> vec4<f32> {
+    var final_color = vec4<f32>(0.0);
+    let world_pos = in.world_pos;
+    let uv = in.uv;
+    let col = in.color;
+    
+    if (d.mode == 0u) { final_color = col; }
+    else if (d.mode == 1u) {
+        let dist = textureSample(u_texture, u_sampler, uv).r;
+        let width = fwidth(dist);
+        let alpha = smoothstep(0.5 - width, 0.5 + width, dist);
+        final_color = vec4<f32>(col.rgb, col.a * alpha);
+    }
+    else if (d.mode == 2u) {
+        let center = d.rect.xy + d.rect.zw * 0.5;
+        let half_size = d.rect.zw * 0.5;
+        let local = world_pos - center;
+        var dist: f32;
+        if (d.is_squircle == 1u) { dist = sd_squircle(local, half_size, d.radii.x); }
+        else { dist = sd_rounded_box(local, half_size, d.radii); }
+        let alpha = 1.0 - smoothstep(-1.0, 1.0, dist);
+        var bg = col;
+        if (d.border_width > 0.0) {
+            let interior_alpha = 1.0 - smoothstep(-1.0, 1.0, dist + d.border_width);
+            let border_lin = vec4<f32>(pow(d.border_color.rgb, vec3<f32>(2.2)), d.border_color.a);
+            bg = mix(border_lin, col, interior_alpha);
+        }
+        let main_layer = vec4<f32>(bg.rgb, bg.a * alpha);
+        var glow_layer = vec4<f32>(0.0);
+        if (d.glow_strength > 0.0) {
+            let glow_factor = exp(-max(dist, 0.0) * 0.1) * d.glow_strength;
+            let glow_lin = vec4<f32>(pow(d.glow_color.rgb, vec3<f32>(2.2)), d.glow_color.a);
+            glow_layer = glow_lin * glow_factor;
+        }
+        final_color = vec4<f32>(main_layer.rgb * main_layer.a + glow_layer.rgb * (1.0 - main_layer.a), max(glow_layer.a, main_layer.a));
+    }
+    else if (d.mode == 3u) {
+        let center = d.rect.xy + d.rect.zw * 0.5;
+        let half_size = d.rect.zw * 0.5;
+        let local = world_pos - center;
+        var dist: f32;
+        if (d.is_squircle == 1u) { dist = sd_squircle(local, half_size, d.radii.x); }
+        else { dist = sd_rounded_box(local, half_size, d.radii); }
+        let alpha = 1.0 - smoothstep(-1.0, 1.0, dist);
+        let tex_col = textureSample(u_texture, u_sampler, uv) * col;
+        final_color = vec4<f32>(pow(tex_col.rgb, vec3<f32>(2.2)), tex_col.a * alpha);
+    }
+    else if (d.mode == 9u) {
+        let t = d.time * 0.5;
+        var aurora_col = vec3<f32>(0.0);
+        for (var i = 1.0; i < 5.0; i += 1.0) {
+            let uv_i = uv + vec2<f32>(sin(t * 0.1 + i * 0.8) * 0.4, cos(t * 0.15 + i * 1.2) * 0.3);
+            let dist_i = length(uv_i - 0.5);
+            let hue = fract(t * 0.02 + i * 0.15);
+            let rgb = hsv2rgb(vec3<f32>(hue, 0.8, 0.7));
+            aurora_col += rgb * (0.1 / (dist_i + 0.15)) * (0.5 + 0.5 * sin(dist_i * 10.0 - t * 2.0));
+        }
+        final_color = vec4<f32>(aurora_col, 1.0);
+    }
+    else if (d.mode == 12u) {
+        let pos = world_pos;
+        let t = d.time;
+        let grid_size = 50.0;
+        let f = abs(fract(pos / grid_size - 0.5) - 0.5);
+        let g = f / (fwidth(pos / grid_size) + 0.02);
+        let grid = 1.0 - min(min(g.x, g.y), 1.0);
+        let pulse = sin(t * 2.0 - length(pos) * 0.01) * 0.5 + 0.5;
+        let col_grid = mix(vec3<f32>(0.02, 0.02, 0.05), vec3<f32>(0.0, 1.2, 1.5), grid * pulse * 0.5);
+        final_color = vec4<f32>(col_grid, 1.0);
+    }
+    else { final_color = col; }
+
+    return final_color;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    var final_color = vec4<f32>(0.0);
-    
-    if (uniforms.mode == 0) { final_color = mode_solid(in.color); }
-    else if (uniforms.mode == 1) { final_color = mode_sdf_text(in.color, in.uv); }
-    else if (uniforms.mode == 2) { final_color = mode_shape(in.color, in.world_pos); }
-    else if (uniforms.mode == 3) { final_color = mode_image(in.color, in.uv, in.world_pos); }
-    else if (uniforms.mode == 4) { final_color = mode_blur(in.color, in.world_pos, in.uv); }
-    else if (uniforms.mode == 5) { final_color = mode_aurora(in.uv); }
-    else if (uniforms.mode == 6) { final_color = mode_arc(in.color, in.world_pos); }
-    else if (uniforms.mode == 7) { final_color = mode_plot(in.color); }
-    else if (uniforms.mode == 8) { final_color = mode_heatmap(in.uv); }
-    else if (uniforms.mode == 9) { final_color = mode_aurora(in.uv); }
-    else if (uniforms.mode == 100) { final_color = custom_effect(in.color, in.world_pos, in.uv, uniforms.time); }
-    else { final_color = in.color; }
+    var d: ShapeData;
+    d.rect = uniforms.rect; d.radii = uniforms.radii; d.border_color = uniforms.border_color;
+    d.glow_color = uniforms.glow_color; d.border_width = uniforms.border_width;
+    d.elevation = uniforms.elevation; d.glow_strength = uniforms.glow_strength;
+    d.lut_intensity = uniforms.lut_intensity; d.mode = uniforms.mode;
+    d.is_squircle = uniforms.is_squircle; d.time = uniforms.time;
+    d.viewport_size = vec2<f32>(1.0); // Not used yet in simple modes
+    return resolve_shape(in, d);
+}
 
-    // Linear -> sRGB (Manual conversion)
-    let s_rgb = select(
-        1.055 * pow(final_color.rgb, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055),
-        final_color.rgb * 12.92,
-        final_color.rgb <= vec3<f32>(0.0031308)
-    );
-    return vec4<f32>(s_rgb, final_color.a);
+@fragment
+fn fs_instanced(in: VertexOutput) -> @location(0) vec4<f32> {
+    let inst = instances[in.iid];
+    var d: ShapeData;
+    d.rect = inst.rect; d.radii = inst.radii; d.border_color = inst.border_color;
+    d.glow_color = inst.glow_color; d.border_width = inst.params1.x;
+    d.elevation = inst.params1.y; d.glow_strength = inst.params1.z;
+    d.lut_intensity = inst.params1.w; d.mode = inst.params2.x;
+    d.is_squircle = inst.params2.y; d.time = glob.time;
+    d.viewport_size = glob.viewport_size;
+    return resolve_shape(in, d);
 }

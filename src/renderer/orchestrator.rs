@@ -1,23 +1,30 @@
-pub use crate::backend::hal::FantaRenderTask;
+use crate::renderer::graph::{RenderGraph, RenderContext};
+use crate::renderer::nodes::geometry::GeometryNode;
+use crate::renderer::nodes::postprocess::{ResolveNode, CaptureNode};
 use crate::backend::hal::{GpuExecutor, BufferUsage, TextureDescriptor, TextureUsage, TextureFormat};
 use crate::draw::{DrawCommand, DrawList};
-use crate::backend::shaders::types::{DrawUniforms, create_projection};
+use crate::backend::shaders::types::{DrawUniforms, GlobalUniforms, ShapeInstance, create_projection};
 use crate::core::{ColorF, Vec2};
-use bytemuck; // Ensure bytemuck is available
+use bytemuck::{self, Pod, Zeroable};
 
 /// Coordinates the execution of RenderTasks across a GpuExecutor
 pub struct RenderOrchestrator {
-    // Current state, caching, etc.
+    pub batching_enabled: bool,
 }
 
 impl RenderOrchestrator {
     pub fn new() -> Self {
-        Self {}
+        Self { batching_enabled: true }
     }
 
-    /// Convert a high-level DrawList into an optimized sequence of RenderTasks
-    pub fn plan(&self, dl: &DrawList) -> Vec<FantaRenderTask> {
-        let mut tasks = Vec::new();
+    pub fn with_batching(mut self, enabled: bool) -> Self {
+        self.batching_enabled = enabled;
+        self
+    }
+
+    /// Convert a high-level DrawList into an optimized RenderGraph
+    pub fn plan<E: GpuExecutor + 'static>(&self, dl: &DrawList) -> RenderGraph<E> {
+        let mut graph = RenderGraph::new();
         let commands = dl.commands();
         
         let mut current_batch = Vec::new();
@@ -26,12 +33,11 @@ impl RenderOrchestrator {
         for cmd in commands {
             match cmd {
                 DrawCommand::BackdropBlur { .. } | DrawCommand::BlurRect { .. } => {
-                    // Before any blur, we must ensure backdrop is captured
                     if !backdrop_captured {
                         if !current_batch.is_empty() {
-                            tasks.push(FantaRenderTask::DrawGeometry { commands: current_batch.drain(..).collect() });
+                            graph.add_node(GeometryNode::new(current_batch.drain(..).collect()).with_batching(self.batching_enabled));
                         }
-                        tasks.push(FantaRenderTask::CaptureBackdrop);
+                        graph.add_node(CaptureNode);
                         backdrop_captured = true;
                     }
                     current_batch.push(cmd.clone());
@@ -43,196 +49,19 @@ impl RenderOrchestrator {
         }
 
         if !current_batch.is_empty() {
-            tasks.push(FantaRenderTask::DrawGeometry { commands: current_batch });
+            graph.add_node(GeometryNode::new(current_batch).with_batching(self.batching_enabled));
         }
 
-        tasks.push(FantaRenderTask::Resolve);
-        tasks
+        graph.add_node(ResolveNode);
+        graph
     }
 
-    /// Execute a sequence of tasks using a concrete GPU implementation
-    pub fn execute<E: GpuExecutor>(&self, executor: &mut E, tasks: &[crate::backend::hal::FantaRenderTask], time: f32, width: u32, height: u32) -> Result<(), String> {
-        let mut should_present = false;
-
+    /// Execute a planned RenderGraph
+    pub fn execute<E: GpuExecutor + 'static>(&self, executor: &mut E, graph: &mut RenderGraph<E>, time: f32, width: u32, height: u32) -> Result<(), String> {
         executor.begin_execute()?;
-        
-        let proj_matrix = create_projection(width as f32, height as f32, executor.y_flip(), (-1.0, 1.0));
-        let proj: [f32; 16] = *bytemuck::cast_ref(&proj_matrix);
-
-        for task in tasks {
-            match task {
-                FantaRenderTask::DrawGeometry { commands } => {
-                    let pipeline = executor.get_default_render_pipeline();
-                    let layout = executor.get_default_bind_group_layout();
-                    let sampler = executor.get_default_sampler();
-                    let font_view = executor.get_font_view();
-                    let backdrop_view = executor.get_backdrop_view();
-
-                    for cmd in commands {
-                         let (uniforms, verts, custom_pipeline) = match cmd {
-                             DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, wobble: _, glow_strength, glow_color, shader_inject } => {
-                                 let mut mode = 2; // Shape
-                                 let mut cp = None;
-                                 if let Some(source) = shader_inject {
-                                     match executor.get_custom_render_pipeline(source) {
-                                         Ok(p) => {
-                                             cp = Some(p);
-                                             mode = 100; // Custom
-                                         }
-                                         Err(e) => {
-                                             eprintln!("Shader Injection Error: {}", e);
-                                         }
-                                     };
-                                 }
-
-                                 (DrawUniforms {
-                                     projection: proj,
-                                     rect: [pos.x, pos.y, size.x, size.y],
-                                     radii: *radii,
-                                     border_color: [border_color.r, border_color.g, border_color.b, border_color.a],
-                                     glow_color: [glow_color.r, glow_color.g, glow_color.b, glow_color.a],
-                                     offset: [0.0; 2],
-                                     scale: 1.0,
-                                     border_width: *border_width,
-                                     elevation: *elevation,
-                                     glow_strength: *glow_strength,
-                                     lut_intensity: 0.0,
-                                     mode: mode, 
-                                     is_squircle: if *is_squircle { 1 } else { 0 },
-                                     time: time,
-                                     viewport_size: [width as f32, height as f32],
-                                 }, quad_vertices(*pos, *size, *color), cp)
-                             }
-                             DrawCommand::Text { pos, size, uv, color } => {
-                                 (DrawUniforms {
-                                     projection: proj,
-                                     rect: [pos.x, pos.y, size.x, size.y],
-                                     radii: [0.0; 4],
-                                     border_color: [color.r, color.g, color.b, color.a],
-                                     glow_color: [0.0; 4],
-                                     offset: [0.0; 2],
-                                     scale: 1.0,
-                                     border_width: 0.0,
-                                     elevation: 0.0,
-                                     glow_strength: 0.0,
-                                     lut_intensity: 0.0,
-                                     mode: 1, // Text
-                                     is_squircle: 0,
-                                     time: time,
-                                     viewport_size: [width as f32, height as f32],
-                                 }, quad_vertices_uv(*pos, *size, *uv, *color), None)
-                             }
-                             DrawCommand::Aurora { pos, size } => {
-                                 (DrawUniforms {
-                                     projection: proj,
-                                     rect: [pos.x, pos.y, size.x, size.y],
-                                     radii: [0.0; 4],
-                                     border_color: [0.0; 4],
-                                     glow_color: [0.0; 4],
-                                     offset: [0.0; 2],
-                                     scale: 1.0,
-                                     border_width: 0.0,
-                                     elevation: 0.0,
-                                     glow_strength: 0.0,
-                                     lut_intensity: 0.0,
-                                     mode: 9, // Aurora
-                                     is_squircle: 0,
-                                     time: time,
-                                     viewport_size: [width as f32, height as f32],
-                                 }, quad_vertices(*pos, *size, ColorF::white()), None)
-                             }
-                             _ => continue,
-                         };
-
-                         let p = custom_pipeline.as_ref().unwrap_or(pipeline);
-
-                         let u_buf = executor.create_buffer(bytemuck::bytes_of(&uniforms).len() as u64, BufferUsage::Uniform, "Uniforms")?;
-                         executor.write_buffer(&u_buf, 0, bytemuck::bytes_of(&uniforms));
-
-                         let v_buf = executor.create_buffer(verts.len() as u64, BufferUsage::Vertex, "Vertices")?;
-                         executor.write_buffer(&v_buf, 0, &verts);
-
-                         let bg = executor.create_bind_group(
-                             layout,
-                             &[&u_buf],
-                             &[font_view, backdrop_view],
-                             &[sampler],
-                         )?;
-
-                         executor.draw(p, Some(&bg), &v_buf, 6, &[])?;
-
-                         // Clean up temporary resources
-                         executor.destroy_bind_group(bg);
-                         executor.destroy_buffer(u_buf);
-                         executor.destroy_buffer(v_buf);
-                    }
-                }
-                FantaRenderTask::CaptureBackdrop => {
-                    executor.resolve().ok(); 
-                }
-                FantaRenderTask::ComputeEffect { .. } => {
-                    // Logic to dispatch compute effect
-                }
-                FantaRenderTask::Resolve => {
-                    executor.resolve()?;
-                    should_present = true;
-                }
-            }
-        }
+        graph.execute(executor, time, width, height)?;
         executor.end_execute()?;
-        
-        if should_present {
-            executor.present()?;
-        }
+        executor.present()?;
         Ok(())
     }
-}
-
-// Helper to create quad vertices (CCW winding for Y-up systems)
-fn quad_vertices(pos: Vec2, size: Vec2, color: ColorF) -> Vec<u8> {
-    let c = [color.r, color.g, color.b, color.a];
-    let mut data = Vec::with_capacity(6 * 32);
-    let mk_v = |x, y, u, v| {
-        let mut v_data = Vec::new();
-        v_data.extend_from_slice(bytemuck::bytes_of(&[x, y]));
-        v_data.extend_from_slice(bytemuck::bytes_of(&[u, v]));
-        v_data.extend_from_slice(bytemuck::bytes_of(&c));
-        v_data
-    };
-    
-    // Triangle 1: V0, V1, V2 (CCW in Y-up)
-    // V0: TL (0,0), V1: BL (0,H), V2: BR (W,H)
-    data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
-    data.extend(mk_v(pos.x, pos.y + size.y, 0.0, 1.0));
-    data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
-
-    // Triangle 2: V0, V2, V3 (CCW in Y-up)
-    // V0: TL (0,0), V2: BR (W,H), V3: TR (W,0)
-    data.extend(mk_v(pos.x, pos.y, 0.0, 0.0));
-    data.extend(mk_v(pos.x + size.x, pos.y + size.y, 1.0, 1.0));
-    data.extend(mk_v(pos.x + size.x, pos.y, 1.0, 0.0));
-    data
-}
-
-fn quad_vertices_uv(pos: Vec2, size: Vec2, uv: [f32; 4], color: ColorF) -> Vec<u8> {
-    let c = [color.r, color.g, color.b, color.a];
-    let mut data = Vec::with_capacity(6 * 32);
-    let mk_v = |x, y, u, v| {
-        let mut v_data = Vec::new();
-        v_data.extend_from_slice(bytemuck::bytes_of(&[x, y]));
-        v_data.extend_from_slice(bytemuck::bytes_of(&[u, v]));
-        v_data.extend_from_slice(bytemuck::bytes_of(&c));
-        v_data
-    };
-    
-    // Triangle 1: V0, V1, V2 (CCW)
-    data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
-    data.extend(mk_v(pos.x, pos.y + size.y, uv[0], uv[3]));
-    data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
-    
-    // Triangle 2: V0, V2, V3 (CCW)
-    data.extend(mk_v(pos.x, pos.y, uv[0], uv[1]));
-    data.extend(mk_v(pos.x + size.x, pos.y + size.y, uv[2], uv[3]));
-    data.extend(mk_v(pos.x + size.x, pos.y, uv[2], uv[1]));
-    data
 }

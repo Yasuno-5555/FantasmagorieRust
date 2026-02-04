@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 /// Common GPU Resource types (Backend-agnostic descriptors)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BufferUsage {
     Vertex,
     Index,
@@ -16,7 +16,7 @@ pub enum BufferUsage {
     CopyDst,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextureFormat {
     R8Unorm,
     Rgba8Unorm,
@@ -34,7 +34,7 @@ pub struct TextureDescriptor {
 }
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct TextureUsage: u32 {
         const COPY_SRC          = 0x1;
         const COPY_DST          = 0x2;
@@ -101,6 +101,17 @@ pub trait GpuExecutor: Send + Sync {
         uniform_data: &[u8],
     ) -> Result<(), String>;
 
+    /// Perform an instanced draw call
+    fn draw_instanced(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        vertex_count: u32,
+        instance_count: u32,
+    ) -> Result<(), String>;
+
     /// Dispatch a compute kernel
     fn dispatch(
         &self,
@@ -119,6 +130,15 @@ pub trait GpuExecutor: Send + Sync {
 
     /// Generate mipmaps for a texture
     fn generate_mipmaps(&self, texture: &Self::Texture) -> Result<(), String>;
+
+    /// Copy current framebuffer content to a texture
+    fn copy_framebuffer_to_texture(&self, dst: &Self::Texture) -> Result<(), String>;
+
+    /// Acquire a transient texture from the backend's pool
+    fn acquire_transient_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String>;
+    
+    /// Release a transient texture back to the backend's pool
+    fn release_transient_texture(&self, texture: Self::Texture, desc: &TextureDescriptor);
 
     fn create_bind_group(
         &self,
@@ -140,6 +160,9 @@ pub trait GpuExecutor: Send + Sync {
 
     /// Get the default render pipeline
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline;
+
+    /// Get the instanced render pipeline (for batched shapes)
+    fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline;
 
     /// Get the default sampler
     fn get_default_sampler(&self) -> &Self::Sampler;

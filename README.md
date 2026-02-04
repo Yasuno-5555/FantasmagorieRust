@@ -26,13 +26,25 @@ See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for more details.
 ```rust
 use fanta_rust::prelude::*;
 use fanta_rust::backend::WgpuBackend;
+use fanta_rust::config::{EngineConfig, CinematicConfig, Bloom};
 
 fn main() -> Result<(), String> {
-    // Pulse of the engine: WGPU Backend
-    let backend = pollster::block_on(WgpuBackend::new_async(window_handle, 1280, 720))?;
-    let mut renderer = Renderer::new(backend);
+    // 1. Initialize the Muscle (Backend)
+    let backend = WgpuBackend::new_async(window_handle, 1280, 720)?;
+    
+    // 2. Configure the Brain (Cinema Profile)
+    let config = EngineConfig::cinematic()
+        .with_bloom(Bloom::Cinematic)
+        .with_exposure(1.2);
+    
+    // 3. Initialize the Carrier (Renderer)
+    let mut renderer = Renderer::new(Box::new(backend), config);
     
     // ... Frame loop logic ...
+    
+    // Update visuals at runtime (The Operational API)
+    renderer.update_cinematic(CinematicConfig::default());
+    
     Ok(())
 }
 ```

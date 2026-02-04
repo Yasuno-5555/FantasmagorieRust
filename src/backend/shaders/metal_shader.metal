@@ -12,9 +12,26 @@ struct VertexOut {
     float2 uv;
     float4 color;
     float2 world_pos;
+    uint iid [[flat]];
 };
 
-struct Uniforms {
+struct GlobalUniforms {
+    float4x4 projection;
+    float time;
+    float2 viewport_size;
+    float _padding;
+};
+
+struct ShapeInstance {
+    float4 rect;
+    float4 radii;
+    float4 border_color;
+    float4 glow_color;
+    float4 params1; // border_width, elevation, glow_strength, lut_intensity
+    int4 params2;   // mode, is_squircle, _r1, _r2
+};
+
+struct DrawUniforms {
     float4x4 projection;
     float4 rect;       // x, y, w, h
     float4 radii;      // tl, tr, br, bl
@@ -33,14 +50,31 @@ struct Uniforms {
 };
 
 vertex VertexOut vs_main(Vertex v [[stage_in]],
-                         constant Uniforms &u [[buffer(1)]]) {
+                         constant DrawUniforms &u [[buffer(1)]]) {
     VertexOut out;
     float2 pos = (v.pos * u.scale) + u.offset;
     out.position = u.projection * float4(pos, 0.0, 1.0);
     out.uv = v.uv;
-    // Linear Workflow:
     out.color = float4(pow(v.color.rgb, 2.2), v.color.a);
     out.world_pos = pos;
+    out.iid = 0xFFFFFFFF; // Legacy marker
+    return out;
+}
+
+// Instanced vertex shader
+vertex VertexOut vs_instanced(Vertex v [[stage_in]],
+                             constant GlobalUniforms &glob [[buffer(1)]],
+                             constant ShapeInstance *instances [[buffer(2)]],
+                             uint instance_id [[instance_id]]) {
+    constant ShapeInstance &inst = instances[instance_id];
+    VertexOut out;
+    
+    float2 pos = inst.rect.xy + v.uv * inst.rect.zw;
+    out.position = glob.projection * float4(pos, 0.0, 1.0);
+    out.uv = v.uv;
+    out.color = float4(pow(v.color.rgb, 2.2), v.color.a);
+    out.world_pos = pos;
+    out.iid = instance_id;
     return out;
 }
 
@@ -72,11 +106,20 @@ float3 hsv2rgb(float3 c) {
     return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
 
-fragment float4 fs_main(VertexOut in [[stage_in]],
-                         constant Uniforms &u [[buffer(1)]],
-                         texture2d<float> tex [[texture(0)]],
-                         texture2d<float> tex2 [[texture(1)]],
-                         sampler s [[sampler(0)]]) {
+struct ShapeData {
+    float4 rect;
+    float4 radii;
+    float4 border_color;
+    float4 glow_color;
+    float border_width;
+    float elevation;
+    float glow_strength;
+    float lut_intensity;
+    int mode;
+    int is_squircle;
+};
+
+float4 resolve_shape(VertexOut in, ShapeData u, texture2d<float> tex, texture2d<float> tex2, sampler s, float time) {
     float4 color_linear = in.color;
     float4 final_color = float4(0.0);
 
@@ -106,9 +149,10 @@ fragment float4 fs_main(VertexOut in [[stage_in]],
         float4 main_layer = float4(bg.rgb, bg.a * alpha);
         float4 glow_layer = float4(0.0);
         if (u.glow_strength > 0.0) {
-             float glow_factor = exp(-max(d, 0.0) * 0.1) * u.glow_strength;
-             float4 glow_col_lin = float4(pow(u.glow_color.rgb, 2.2), u.glow_color.a);
-             glow_layer = glow_col_lin * glow_factor;
+            float d_glow = d - u.glow_strength * 0.5;
+            float glow_alpha = 1.0 - smoothstep(-u.glow_strength, u.glow_strength, d_glow);
+            float4 glow_col_lin = float4(pow(u.glow_color.rgb, 2.2), u.glow_color.a);
+            glow_layer = float4(glow_col_lin.rgb, glow_col_lin.a * glow_alpha * (1.0 - alpha));
         }
         float4 shadow_layer = float4(0.0);
         if (u.elevation > 0.0) {
@@ -116,10 +160,7 @@ fragment float4 fs_main(VertexOut in [[stage_in]],
             float a1 = (1.0 - smoothstep(-u.elevation*0.5, u.elevation*0.5, d1)) * 0.4;
             shadow_layer = float4(0.0, 0.0, 0.0, a1 * color_linear.a);
         }
-        float4 comp = shadow_layer + glow_layer;
-        comp.rgb = main_layer.rgb * main_layer.a + comp.rgb * (1.0 - main_layer.a);
-        comp.a = max(comp.a, main_layer.a);
-        final_color = comp;
+        final_color = main_layer + glow_layer + shadow_layer;
     }
     else if (u.mode == 3) {
         float2 center = u.rect.xy + u.rect.zw * 0.5;
@@ -207,10 +248,227 @@ fragment float4 fs_main(VertexOut in [[stage_in]],
         float alpha = 1.0 - smoothstep(-0.5, 0.5, d);
         final_color = float4(color_linear.rgb, color_linear.a * alpha);
     }
+    else if (u.mode == 12) {
+        // Cyberpunk Grid Background
+        float2 pos = in.world_pos;
+        float t = u.time;
+        float2 g = abs(fract(pos / 50.0 - 0.5) - 0.5) / (fwidth(pos / 50.0) + 0.02);
+        float grid = 1.0 - min(min(g.x, g.y), 1.0);
+        
+        float pulse = sin(t * 2.0 - length(pos) * 0.01) * 0.5 + 0.5;
+        // Slightly HDR color to trigger a soft glow via bloom
+        float3 col = mix(float3(0.02, 0.02, 0.05), float3(0.0, 1.2, 1.5), grid * pulse * 0.5);
+        final_color = float4(col, 1.0);
+    }
     else {
         final_color = color_linear;
     }
     
-    // Gamma correction for output
-    return float4(pow(final_color.rgb, 1.0/2.2), final_color.a);
+    return final_color;
+}
+
+fragment float4 fs_main(VertexOut in [[stage_in]],
+                         constant DrawUniforms &u [[buffer(1)]],
+                         texture2d<float> tex [[texture(0)]],
+                         texture2d<float> tex2 [[texture(1)]],
+                         sampler s [[sampler(0)]]) {
+    ShapeData d;
+    d.rect = u.rect; d.radii = u.radii; d.border_color = u.border_color;
+    d.glow_color = u.glow_color; d.border_width = u.border_width;
+    d.elevation = u.elevation; d.glow_strength = u.glow_strength;
+    d.lut_intensity = u.lut_intensity; d.mode = u.mode; d.is_squircle = u.is_squircle;
+    return resolve_shape(in, d, tex, tex2, s, u.time);
+}
+
+fragment float4 fs_instanced(VertexOut in [[stage_in]],
+                            constant GlobalUniforms &glob [[buffer(1)]],
+                            constant ShapeInstance *instances [[buffer(2)]],
+                            texture2d<float> tex [[texture(0)]],
+                            texture2d<float> tex2 [[texture(1)]],
+                            sampler s [[sampler(0)]]) {
+    constant ShapeInstance &inst = instances[in.iid];
+    ShapeData d;
+    d.rect = inst.rect; d.radii = inst.radii; d.border_color = inst.border_color;
+    d.glow_color = inst.glow_color; 
+    d.border_width = inst.params1.x; d.elevation = inst.params1.y;
+    d.glow_strength = inst.params1.z; d.lut_intensity = inst.params1.w;
+    d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
+    return resolve_shape(in, d, tex, tex2, s, glob.time);
+}
+
+struct CinematicParams {
+    float exposure;
+    float ca_strength;
+    float vignette_intensity;
+    float bloom_intensity;
+    uint tonemap_mode;
+    uint bloom_mode;
+    float grain_strength;
+    float time;
+    float lut_intensity;
+    float3 _pad;
+};
+
+float3 reinhard(float3 v) {
+    return v / (1.0 + v);
+}
+
+// --- Resolve Pass (HDR to LDR + Tone Mapping + Post-effects) ---
+
+struct ResolveVertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex ResolveVertexOut vs_resolve(uint vid [[vertex_id]]) {
+    ResolveVertexOut out;
+    float x = (vid == 2) ? 3.0 : -1.0;
+    float y = (vid == 1) ? 3.0 : -1.0;
+    out.position = float4(x, y, 0.0, 1.0);
+    out.uv = float2((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+float3 aces_approx(float3 v) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((v*(a*v+b))/(v*(c*v+d)+e), 0.0, 1.0);
+}
+
+fragment float4 fs_resolve(ResolveVertexOut in [[stage_in]],
+                            constant CinematicParams &cinema [[buffer(2)]],
+                            texture2d<float> hdr_tex [[texture(0)]],
+                            sampler s [[sampler(0)]]) {
+    float2 uv = in.uv;
+    float2 dist_from_center = uv - 0.5;
+    
+    // 1. Chromatic Aberration
+    float3 color;
+    float ca = cinema.ca_strength;
+    color.r = hdr_tex.sample(s, uv + dist_from_center * ca).r;
+    color.g = hdr_tex.sample(s, uv).g;
+    color.b = hdr_tex.sample(s, uv - dist_from_center * ca).b;
+    
+    // 2. Exposure
+    color *= cinema.exposure;
+
+    // 3. Tone Mapping
+    if (cinema.tonemap_mode == 1) {
+        color = aces_approx(color);
+    } else if (cinema.tonemap_mode == 2) {
+        color = reinhard(color);
+    }
+    
+    // 4. Vignette
+    float vignette = 1.0 - dot(dist_from_center, dist_from_center) * 1.5;
+    color *= max(vignette, cinema.vignette_intensity);
+    
+    // 5. Film Grain
+    float noise = hash(uv + fract(cinema.time));
+    color += (noise - 0.5) * cinema.grain_strength;
+    
+    // 6. Dithering
+    float dither = hash(uv * 10.0) / 255.0;
+    color += dither;
+    
+    return float4(pow(color, 1.0/2.2), 1.0);
+}
+
+// --- Bloom Pass Shaders ---
+
+fragment float4 fs_bright_pass(ResolveVertexOut in [[stage_in]],
+                               texture2d<float> tex [[texture(0)]],
+                               sampler s [[sampler(0)]]) {
+    float4 color = tex.sample(s, in.uv);
+    float brightness = dot(color.rgb, float3(0.2126, 0.7152, 0.0722));
+    if (brightness > 1.0) {
+        return color;
+    } else {
+        return float4(0.0, 0.0, 0.0, 1.0);
+    }
+}
+
+struct BlurUniforms {
+    int horizontal;
+};
+
+fragment float4 fs_blur(ResolveVertexOut in [[stage_in]],
+                        constant BlurUniforms &u [[buffer(0)]],
+                        texture2d<float> tex [[texture(0)]],
+                        sampler s [[sampler(0)]]) {
+    float weights[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
+    float2 tex_offset = 1.0 / float2(tex.get_width(), tex.get_height());
+    float3 result = tex.sample(s, in.uv).rgb * weights[0];
+    
+    if (u.horizontal == 1) {
+        for (int i = 1; i < 5; ++i) {
+            result += tex.sample(s, in.uv + float2(tex_offset.x * i, 0.0)).rgb * weights[i];
+            result += tex.sample(s, in.uv - float2(tex_offset.x * i, 0.0)).rgb * weights[i];
+        }
+    } else {
+        for (int i = 1; i < 5; ++i) {
+            result += tex.sample(s, in.uv + float2(0.0, tex_offset.y * i)).rgb * weights[i];
+            result += tex.sample(s, in.uv - float2(0.0, tex_offset.y * i)).rgb * weights[i];
+        }
+    }
+    return float4(result, 1.0);
+}
+
+// Update resolve to composite bloom
+fragment float4 fs_resolve_bloom(ResolveVertexOut in [[stage_in]],
+                                 constant CinematicParams &cinema [[buffer(2)]],
+                                 texture2d<float> hdr_tex [[texture(0)]],
+                                 texture2d<float> bloom_tex [[texture(1)]],
+                                 texture3d<float> lut_tex [[texture(2)]],
+                                 sampler s [[sampler(0)]]) {
+    float2 uv = in.uv;
+    float2 dist_from_center = uv - 0.5;
+    
+    // 1. Chromatic Aberration
+    float3 color;
+    float ca = cinema.ca_strength;
+    color.r = hdr_tex.sample(s, uv + dist_from_center * ca).r;
+    color.g = hdr_tex.sample(s, uv).g;
+    color.b = hdr_tex.sample(s, uv - dist_from_center * ca).b;
+    
+    // 2. Exposure
+    color *= cinema.exposure;
+
+    // 3. Add Bloom
+    if (cinema.bloom_mode > 0) {
+        float3 bloom = bloom_tex.sample(s, uv).rgb;
+        color += bloom * cinema.bloom_intensity;
+    }
+    
+    // 4. Tone Mapping
+    if (cinema.tonemap_mode == 1) {
+        color = aces_approx(color);
+    } else if (cinema.tonemap_mode == 2) {
+        color = reinhard(color);
+    }
+    
+    // 5. Vignette
+    float vignette = 1.0 - dot(dist_from_center, dist_from_center) * 1.5;
+    color *= max(vignette, cinema.vignette_intensity);
+    
+    // 6. Film Grain
+    float noise = hash(uv + fract(cinema.time));
+    color += (noise - 0.5) * cinema.grain_strength;
+    
+    // 7. Dithering
+    float dither = hash(uv * 10.0) / 255.0;
+    color += dither;
+    
+    // 8. LUT Placeholder
+    /*
+    if (cinema.lut_intensity > 0.0) {
+        float3 lut_color = lut_tex.sample(s, color).rgb;
+        color = mix(color, lut_color, cinema.lut_intensity);
+    }
+    */
+    
+    return float4(pow(color, 1.0/2.2), 1.0);
 }

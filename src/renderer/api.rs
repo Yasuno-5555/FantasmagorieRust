@@ -32,16 +32,8 @@ impl Renderer {
             }
             Profile::Cinema => {
                 // Future: Satsuei Pipeline with RenderGraph
-                // Semantics Pass → Composite Pass → Lens Pass
-                panic!(
-                    "Profile::Cinema is not yet implemented.\n\
-                     This is a Stage 3+ feature requiring:\n\
-                     - HDR (RGBA16F) color space\n\
-                     - Render Graph infrastructure\n\
-                     - Satsuei Pipeline (Semantics/Composite/Lens passes)\n\
-                     \n\
-                     Use EngineConfig::lite() for now."
-                );
+                // For now, we fall back to unified rendering path which already supports HDR/Bloom
+                log::info!("Profile::Cinema active: Using unified fallback path");
             }
         }
 
@@ -56,11 +48,16 @@ impl Renderer {
             _ => {}
         }
 
-        Self { 
+        let mut renderer = Self { 
             backend, 
             config, 
             profiler: crate::renderer::gpu::ProfilerRegistry::new(),
-        }
+        };
+
+        // Pass initial cinematic config to backend
+        renderer.backend.set_cinematic_config(renderer.config.cinematic);
+        
+        renderer
     }
 
     /// Create a Renderer with Lite profile (convenience constructor).
@@ -93,33 +90,34 @@ impl Renderer {
     pub fn end_frame(&mut self, frame: FrameContext, width: u32, height: u32) {
         let description = frame.finish();
         
-        // The Fork: Profile determines how we process the frame
-        match self.config.profile {
-            Profile::Lite => {
-                // --- Lite Path: Forward Rendering ---
-                // Transmute RenderCommands (Meaning) -> DrawCommands (Muscle)
-                let mut dl = crate::draw::DrawList::new();
-                self.transmute_to_drawlist(&description, &mut dl);
+        let mut dl = crate::draw::DrawList::new();
+        self.transmute_to_drawlist(&description, &mut dl);
 
-                // Execute via immediate-mode backend interface
-                self.backend.render(&dl, width, height);
-                self.backend.present();
+        self.render_list(&dl, width, height);
+    }
 
-                // K11: Update Profiler Stats
-                if let Some((timestamps, period)) = self.backend.get_profiling_results() {
-                    let total = timestamps[1].saturating_sub(timestamps[0]);
-                    // period is in ns
-                    self.profiler.stats.frame_time_ns = (total as f32 * period) as u64;
-                }
-            }
-            Profile::Cinema => {
-                // --- Cinema Path: Satsuei Pipeline ---
-                // Future: let packets = tracea::optimize(description);
-                let packets = self.mock_tracea_optimize(&description);
-                self.backend.submit(&packets);
-                self.backend.present();
-            }
+    /// Direct render path for a DrawList.
+    /// Renderer acts as a carrier to the backend.
+    pub fn render_list(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32) {
+        self.backend.render(dl, width, height);
+        self.backend.present();
+
+        // K11: Update Profiler Stats
+        if let Some((timestamps, period)) = self.backend.get_profiling_results() {
+            let total = timestamps[1].saturating_sub(timestamps[0]);
+            self.profiler.stats.frame_time_ns = (total as f32 * period) as u64;
         }
+    }
+
+    /// Update cinematic parameters at runtime.
+    pub fn update_cinematic(&mut self, config: crate::config::CinematicConfig) {
+        self.config.cinematic = config;
+        self.backend.set_cinematic_config(config);
+    }
+
+    /// Carrier method for font texture updates.
+    pub fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
+        self.backend.update_font_texture(width, height, data);
     }
 
     /// Convert high-level RenderCommands into backend-friendly DrawCommands.

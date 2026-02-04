@@ -45,6 +45,61 @@ pub enum ColorSpace {
     AcesCg,
 }
 
+/// Bloom style configuration
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bloom {
+    /// No bloom applied
+    None,
+    /// Subtle, high-quality gaussian bloom
+    Soft,
+    /// High-intensity, wide-spread bloom
+    Cinematic,
+}
+
+/// Tone mapping algorithm
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tonemap {
+    /// No tone mapping (raw HDR output, likely clamped)
+    None,
+    /// ACES Filmic tone mapping
+    Aces,
+    /// Reinhard tone mapping
+    Reinhard,
+}
+
+/// Detailed configuration for Cinema profile effects
+#[derive(Debug, Clone, Copy)]
+pub struct CinematicConfig {
+    /// Bloom style
+    pub bloom: Bloom,
+    /// Tone mapping style
+    pub tonemap: Tonemap,
+    /// Overall exposure adjustment
+    pub exposure: f32,
+    /// Chromatic aberration strength
+    pub chromatic_aberration: f32,
+    /// Vignette intensity
+    pub vignette: f32,
+    /// Film grain strength
+    pub grain_strength: f32,
+    /// LUT intensity
+    pub lut_intensity: f32,
+}
+
+impl Default for CinematicConfig {
+    fn default() -> Self {
+        Self {
+            bloom: Bloom::Soft,
+            tonemap: Tonemap::Aces,
+            exposure: 1.0,
+            chromatic_aberration: 0.0015,
+            vignette: 0.7,
+            grain_strength: 0.05,
+            lut_intensity: 0.0,
+        }
+    }
+}
+
 /// Rendering pipeline type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pipeline {
@@ -101,6 +156,9 @@ pub struct EngineConfig {
 
     /// Enable debug overlays and performance counters.
     pub debug_mode: bool,
+
+    /// Cinematic parameters (active only in Cinema mode)
+    pub cinematic: CinematicConfig,
 }
 
 impl Default for EngineConfig {
@@ -123,6 +181,7 @@ impl EngineConfig {
             pipeline: Pipeline::Forward,
             max_batches: 256,
             debug_mode: false,
+            cinematic: CinematicConfig::default(),
         }
     }
 
@@ -139,6 +198,7 @@ impl EngineConfig {
             pipeline: Pipeline::Forward,
             max_batches: 64, // Conservative batching
             debug_mode: false,
+            cinematic: CinematicConfig::default(),
         }
     }
 
@@ -155,6 +215,7 @@ impl EngineConfig {
             pipeline: Pipeline::Satsuei,
             max_batches: 4096,
             debug_mode: false,
+            cinematic: CinematicConfig::default(),
         }
     }
 
@@ -255,6 +316,42 @@ impl EngineConfigBuilder {
     /// Enable debug mode.
     pub fn debug(mut self, enabled: bool) -> Self {
         self.config.debug_mode = enabled;
+        self
+    }
+
+    /// Set cinematic configuration.
+    pub fn cinematic(mut self, cinematic: CinematicConfig) -> Self {
+        self.config.cinematic = cinematic;
+        self
+    }
+
+    pub fn with_bloom(mut self, bloom: Bloom) -> Self {
+        self.config.cinematic.bloom = bloom;
+        self
+    }
+
+    pub fn with_tonemap(mut self, tonemap: Tonemap) -> Self {
+        self.config.cinematic.tonemap = tonemap;
+        self
+    }
+
+    pub fn with_exposure(mut self, exposure: f32) -> Self {
+        self.config.cinematic.exposure = exposure;
+        self
+    }
+
+    pub fn with_ca(mut self, ca: f32) -> Self {
+        self.config.cinematic.chromatic_aberration = ca;
+        self
+    }
+
+    pub fn with_vignette(mut self, vignette: f32) -> Self {
+        self.config.cinematic.vignette = vignette;
+        self
+    }
+
+    pub fn with_grain(mut self, grain: f32) -> Self {
+        self.config.cinematic.grain_strength = grain;
         self
     }
 

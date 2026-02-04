@@ -1,10 +1,10 @@
 ﻿use std::sync::{Arc, Mutex};
-use crate::core::{ColorF, Vec2};
-use crate::draw::{DrawCommand, DrawList};
+use crate::draw::DrawList;
 use crate::backend::GraphicsBackend;
 use crate::backend::hal::{GpuExecutor, BufferUsage, TextureDescriptor, TextureUsage, TextureFormat};
-use crate::backend::shaders::types::{GlobalUniforms, DrawUniforms, create_projection};
+use crate::backend::shaders::types::create_projection;
 use wgpu::util::DeviceExt;
+use crate::renderer::graph::TransientPool;
 
 /// Vertex format for WGPU
 #[repr(C)]
@@ -38,6 +38,7 @@ pub struct WgpuBackend {
     pub surface_config: wgpu::SurfaceConfiguration,
     
     pub main_pipeline: Arc<wgpu::RenderPipeline>,
+    pub instanced_pipeline: Arc<wgpu::RenderPipeline>,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub pipeline_layout: wgpu::PipelineLayout,
     
@@ -52,13 +53,32 @@ pub struct WgpuBackend {
     pub k4_pipeline: Arc<wgpu::RenderPipeline>, // Resolve/Post-process
     pub k4_bind_group_layout: wgpu::BindGroupLayout,
     
+    // Bloom
+    pub bright_pipeline: Arc<wgpu::RenderPipeline>,
+    pub blur_pipeline: Arc<wgpu::RenderPipeline>,
+    pub bloom_textures: Vec<wgpu::Texture>,
+    pub bloom_views: Vec<wgpu::TextureView>,
+    pub bloom_bind_group_layout: wgpu::BindGroupLayout,
+    pub blur_uniform_buffer: wgpu::Buffer,
+    pub cinematic_buffer: wgpu::Buffer,
+    pub dummy_storage_buffer: wgpu::Buffer, // Fallback for instanced bindings
+    pub current_cinematic: Mutex<crate::backend::shaders::types::CinematicParams>,
+
     pub current_encoder: Mutex<Option<wgpu::CommandEncoder>>,
     pub current_texture: Mutex<Option<wgpu::SurfaceTexture>>,
     pub current_view: Mutex<Option<wgpu::TextureView>>,
     
     pub start_time: std::time::Instant,
+    
+    // Resource Management
+    pub transient_pool: Mutex<TransientPool<WgpuBackend>>,
+    
+    // Screenshot
     pub screenshot_requested: Mutex<Option<String>>,
     pub pipeline_cache: Mutex<std::collections::HashMap<String, Arc<wgpu::RenderPipeline>>>,
+
+    pub shader_reload_rx: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    pub _shader_watcher: Option<Box<dyn std::any::Any + Send + Sync>>,
 }
 
 impl GpuExecutor for WgpuBackend {
@@ -239,6 +259,36 @@ impl GpuExecutor for WgpuBackend {
         Ok(())
     }
 
+    fn draw_instanced(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        _instance_buffer: &Self::Buffer,
+        vertex_count: u32,
+        instance_count: u32,
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Instanced Geometry Draw"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.hdr_view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        rpass.set_pipeline(pipeline);
+        if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
+        rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        // We use @builtin(instance_index) in shader, so we just say 0..instance_count
+        rpass.draw(0..vertex_count, 0..instance_count);
+        Ok(())
+    }
+
     fn dispatch(&self, pipeline: &Self::ComputePipeline, bind_group: Option<&Self::BindGroup>, groups: [u32; 3], _push_constants: &[u8]) -> Result<(), String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
@@ -260,24 +310,88 @@ impl GpuExecutor for WgpuBackend {
         Ok(())
     }
 
-    fn generate_mipmaps(&self, _texture: &Self::Texture) -> Result<(), String> { Ok(()) }
+    fn generate_mipmaps(&self, _texture: &Self::Texture) -> Result<(), String> {
+        // TODO: Implement mipmap generation
+        Ok(())
+    }
+
+    fn copy_framebuffer_to_texture(&self, dst: &Self::Texture) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        
+        // We need to access the current surface texture
+        // Note: This requires us to store the surface texture in a generic-accessible way
+        // For now, let's assume we can grab it if we stored it (which we do in Render)
+        
+        let texture_guard = self.current_texture.lock().unwrap();
+        let src_texture = texture_guard.as_ref().ok_or("No active surface texture")?;
+        
+        encoder.copy_texture_to_texture(
+            wgpu::ImageCopyTexture {
+                texture: &src_texture.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyTexture {
+                texture: dst,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: src_texture.texture.width(),
+                height: src_texture.texture.height(),
+                depth_or_array_layers: 1,
+            }
+        );
+        Ok(())
+    }
+
+    fn acquire_transient_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String> {
+        let mut pool = self.transient_pool.lock().unwrap();
+        pool.acquire_texture(self, desc)
+    }
+
+    fn release_transient_texture(&self, texture: Self::Texture, desc: &TextureDescriptor) {
+        let mut pool = self.transient_pool.lock().unwrap();
+        pool.release_texture(texture, desc);
+    }
 
     fn create_bind_group(&self, layout: &Self::BindGroupLayout, buffers: &[&Self::Buffer], textures: &[&Self::TextureView], samplers: &[&Self::Sampler]) -> Result<Self::BindGroup, String> {
         let mut entries = Vec::new();
-        if let Some(buf) = buffers.first() {
-            entries.push(wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() });
-        }
-        if let Some(tex) = textures.first() {
-            entries.push(wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(tex) });
-        }
-        if let Some(samp) = samplers.first() {
-            entries.push(wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(samp) });
-        }
+        
+        // Binding 0: Uniform (Main)
+        // If we have only 1 buffer, it's the main uniform buffer for Text/Primitives
+        let buf0 = if buffers.len() == 1 { buffers[0] } else { &self.cinematic_buffer }; // Fallback to something
+        entries.push(wgpu::BindGroupEntry { binding: 0, resource: buf0.as_entire_binding() });
+
+        // Binding 1: Texture
+        let tex1 = textures.first().map(|&t| t).unwrap_or(self.font_view.as_ref().unwrap());
+        entries.push(wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(tex1) });
+
+        // Binding 2: Sampler
+        let samp2 = samplers.first().map(|&s| s).unwrap_or(&self.sampler);
+        entries.push(wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(samp2) });
+
+        // Binding 3: Backdrop
         if let Some(tex) = textures.get(1) {
             entries.push(wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(tex) });
         } else {
             entries.push(wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.backdrop_view) });
         }
+
+        // Binding 4: Global Uniforms
+        // Binding 5: Instance Data
+        // If we have 2 buffers, they are Global and Instances
+        let (buf4, buf5) = if buffers.len() >= 2 {
+            (buffers[0], buffers[1])
+        } else {
+            (&self.cinematic_buffer, &self.dummy_storage_buffer)
+        };
+        entries.push(wgpu::BindGroupEntry { binding: 4, resource: buf4.as_entire_binding() });
+        entries.push(wgpu::BindGroupEntry { binding: 5, resource: buf5.as_entire_binding() });
+
         Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("Dynamic Bind Group"), layout, entries: &entries }))
     }
 
@@ -285,6 +399,7 @@ impl GpuExecutor for WgpuBackend {
     fn get_backdrop_view(&self) -> &Self::TextureView { &*self.backdrop_view }
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { &self.bind_group_layout }
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline { &self.main_pipeline }
+    fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline { &self.instanced_pipeline }
     fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
 
     fn get_custom_render_pipeline(
@@ -369,7 +484,91 @@ impl GpuExecutor for WgpuBackend {
             self.hdr_texture.size(),
         );
 
-        // 2. Fragment Resolve Pass (K4 replacement)
+        // 2. Bloom Passes
+        // Bright Pass
+        let bright_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bright Bind Group"),
+            layout: &self.bloom_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
+            ],
+        });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Bright Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.bloom_views[0],
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&*self.bright_pipeline);
+            rpass.set_bind_group(0, &bright_bg, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // Horizontal Blur
+        self.queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::cast_slice(&[1.0f32, 0.0f32, 0.0f32, 0.0f32]));
+        let blur_h_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blur H Bind Group"),
+            layout: &self.bloom_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.bloom_views[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
+            ],
+        });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Blur H Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.bloom_views[1],
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&*self.blur_pipeline);
+            rpass.set_bind_group(0, &blur_h_bg, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // Vertical Blur
+        self.queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::cast_slice(&[0.0f32, 1.0f32, 0.0f32, 0.0f32]));
+        let blur_v_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blur V Bind Group"),
+            layout: &self.bloom_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.bloom_views[1]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
+            ],
+        });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Blur V Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.bloom_views[2],
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&*self.blur_pipeline);
+            rpass.set_bind_group(0, &blur_v_bg, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // 3. Fragment Resolve Pass (K4 replacement)
         let view_guard = self.current_view.lock().unwrap();
         let view = view_guard.as_ref().ok_or("No active swapchain view")?;
 
@@ -379,6 +578,8 @@ impl GpuExecutor for WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.bloom_views[2]) },
+                wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
             ],
         });
 
@@ -418,7 +619,7 @@ impl WgpuBackend {
     pub fn new_async(window: Arc<impl winit::raw_window_handle::HasWindowHandle + winit::raw_window_handle::HasDisplayHandle + std::marker::Send + std::marker::Sync + 'static>, width: u32, height: u32) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
         
-        let surface = unsafe { instance.create_surface(window) }
+        let surface = instance.create_surface(window)
             .map_err(|e| format!("Failed to create surface: {}", e))?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -455,6 +656,25 @@ impl WgpuBackend {
         };
         surface.configure(&device, &surface_config);
 
+        // --- Font Placeholder ---
+        let font_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Font Placeholder"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::ImageCopyTexture { texture: &font_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &[255],
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let font_view = Some(font_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Default Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -475,6 +695,8 @@ impl WgpuBackend {
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         });
 
@@ -491,6 +713,25 @@ impl WgpuBackend {
             fragment: Some(wgpu::FragmentState {
                 module: &main_shader,
                 entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        let instanced_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Instanced Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &main_shader, entry_point: "vs_instanced", buffers: &[Vertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &main_shader,
+                entry_point: "fs_instanced",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -528,35 +769,104 @@ impl WgpuBackend {
         });
         let backdrop_view = Arc::new(backdrop_texture.create_view(&wgpu::TextureViewDescriptor::default()));
 
-        // --- K4 Resolve Pipeline ---
+        // --- Bloom Specifics ---
+        let bloom_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Bloom Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let bloom_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Bloom Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/wgpu_bloom.wgsl").into()),
+        });
+
+        let bright_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Bright Pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&bloom_bind_group_layout], push_constant_ranges: &[] })),
+            vertex: wgpu::VertexState { module: &bloom_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &bloom_shader,
+                entry_point: "fs_bright",
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        let blur_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Blur Pipeline"),
+            layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&bloom_bind_group_layout], push_constant_ranges: &[] })),
+            vertex: wgpu::VertexState { module: &bloom_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &bloom_shader,
+                entry_point: "fs_blur",
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        let mut bloom_textures = Vec::new();
+        let mut bloom_views = Vec::new();
+        for i in 0..3 {
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("Bloom Texture {}", i)),
+                size: wgpu::Extent3d { width: width / 2, height: height / 2, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            bloom_views.push(tex.create_view(&wgpu::TextureViewDescriptor::default()));
+            bloom_textures.push(tex);
+        }
+
+        let blur_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blur Uniform Buffer"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let cinematic_params = crate::backend::shaders::types::CinematicParams {
+            exposure: 1.0,
+            ca_strength: 0.0015,
+            vignette_intensity: 0.7,
+            bloom_intensity: 0.4,
+            tonemap_mode: 1, // Aces
+            bloom_mode: 1,   // Soft
+            grain_strength: 0.05,
+            time: 0.0,
+            lut_intensity: 0.0,
+            _pad: [0.0; 3],
+        };
+        let cinematic_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cinematic Params Buffer"),
+            contents: bytemuck::bytes_of(&cinematic_params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let dummy_storage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Dummy Storage Buffer"),
+            size: 64, // Minimal size
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // --- Post Process Shader (ACES + CA + Vignette) ---
         let k4_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Resolve Shader"),
-            source: wgpu::ShaderSource::Wgsl("
-                @group(0) @binding(0) var t_hdr: texture_2d<f32>;
-                @group(0) @binding(1) var s_hdr: sampler;
-
-                struct VertexOutput {
-                    @builtin(position) position: vec4<f32>,
-                    @location(0) uv: vec2<f32>,
-                };
-
-                @vertex
-                fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
-                    var out: VertexOutput;
-                    let x = f32(i32(in_vertex_index) / 2) * 4.0 - 1.0;
-                    let y = f32(i32(in_vertex_index) % 2) * 4.0 - 1.0;
-                    out.position = vec4<f32>(x, y, 0.0, 1.0);
-                    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-                    return out;
-                }
-
-                @fragment
-                fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                    let color = textureSample(t_hdr, s_hdr, in.uv);
-                    let tone_mapped = color.rgb / (color.rgb + vec3<f32>(1.0));
-                    return vec4<f32>(tone_mapped, 1.0);
-                }
-            ".into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/wgpu_resolve.wgsl").into()),
         });
 
         let k4_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -564,6 +874,8 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
             ],
         });
 
@@ -592,28 +904,68 @@ impl WgpuBackend {
             multiview: None,
         }));
 
+        // --- Hot Reloading Setup ---
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut shader_reload_rx = None;
+        let mut shader_watcher = None;
+
+        #[cfg(not(target_os = "android"))]
+        {
+            use notify::{Watcher, RecursiveMode};
+            let tx_clone = tx.clone();
+            let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    if event.kind.is_modify() {
+                        let _ = tx_clone.send(());
+                    }
+                }
+            }).ok();
+
+            if let Some(mut w) = watcher {
+                let base_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/backend");
+                if w.watch(&base_path, RecursiveMode::Recursive).is_ok() {
+                    println!("👀 Shader watcher active: {}", base_path.display());
+                    shader_reload_rx = Some(rx);
+                    shader_watcher = Some(Box::new(w) as Box<dyn std::any::Any + Send + Sync>);
+                }
+            }
+        }
+
         let backend = WgpuBackend {
             device,
             queue,
             surface,
             surface_config,
             main_pipeline,
+            instanced_pipeline,
             bind_group_layout,
             pipeline_layout,
             sampler,
-            font_view: None,
+            font_view,
             backdrop_view,
             hdr_texture,
             hdr_view,
             backdrop_texture,
             k4_pipeline,
             k4_bind_group_layout,
+            bright_pipeline,
+            blur_pipeline,
+            bloom_textures,
+            bloom_views,
+            bloom_bind_group_layout,
+            blur_uniform_buffer,
+            cinematic_buffer,
+            dummy_storage_buffer,
+            transient_pool: Mutex::new(TransientPool::new()),
+            current_cinematic: Mutex::new(cinematic_params),
             current_encoder: Mutex::new(None),
             current_texture: Mutex::new(None),
             current_view: Mutex::new(None),
             start_time: std::time::Instant::now(),
             screenshot_requested: Mutex::new(None),
             pipeline_cache: Mutex::new(std::collections::HashMap::new()),
+            shader_reload_rx: Mutex::new(shader_reload_rx),
+            _shader_watcher: shader_watcher,
         };
 
         // Populate GLOBAL_RESOURCES for Python bindings
@@ -671,6 +1023,8 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.bloom_views[2]) },
+                wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
             ],
         });
 
@@ -749,15 +1103,179 @@ impl WgpuBackend {
 
         Ok(())
     }
+
+    pub fn reload_shaders(&mut self) -> Result<(), String> {
+        println!("🔄 Reloading shaders...");
+        let base_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/backend");
+        
+        // 1. Load sources
+        let main_src = std::fs::read_to_string(base_path.join("wgpu_shader.wgsl"))
+            .unwrap_or_else(|_| include_str!("../wgpu_shader.wgsl").to_string());
+        
+        let bloom_src = std::fs::read_to_string(base_path.join("shaders/wgpu_bloom.wgsl"))
+            .unwrap_or_else(|_| include_str!("../shaders/wgpu_bloom.wgsl").to_string());
+
+        let resolve_src = std::fs::read_to_string(base_path.join("shaders/wgpu_resolve.wgsl"))
+            .unwrap_or_else(|_| include_str!("../shaders/wgpu_resolve.wgsl").to_string());
+
+        // 2. Recreate Shader Modules
+        let main_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Main Shader (Reloaded)"),
+            source: wgpu::ShaderSource::Wgsl(main_src.into()),
+        });
+
+        let bloom_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Bloom Shader (Reloaded)"),
+            source: wgpu::ShaderSource::Wgsl(bloom_src.into()),
+        });
+
+        let resolve_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Resolve Shader (Reloaded)"),
+            source: wgpu::ShaderSource::Wgsl(resolve_src.into()),
+        });
+
+        // 3. Rebuild Pipelines
+        // Main
+        self.main_pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Main Render Pipeline (Reloaded)"),
+            layout: Some(&self.pipeline_layout),
+            vertex: wgpu::VertexState { module: &main_shader, entry_point: "vs_main", buffers: &[Vertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &main_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        // Instanced
+        self.instanced_pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Instanced Render Pipeline (Reloaded)"),
+            layout: Some(&self.pipeline_layout),
+            vertex: wgpu::VertexState { module: &main_shader, entry_point: "vs_instanced", buffers: &[Vertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &main_shader,
+                entry_point: "fs_instanced",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None, // Added multiview here to match the previous pipeline
+        }));
+
+        // Bloom
+        let bloom_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { 
+            label: None, 
+            bind_group_layouts: &[&self.bloom_bind_group_layout], 
+            push_constant_ranges: &[] 
+        });
+
+        self.bright_pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Bright Pipeline (Reloaded)"),
+            layout: Some(&bloom_layout),
+            vertex: wgpu::VertexState { module: &bloom_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &bloom_shader,
+                entry_point: "fs_bright",
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        self.blur_pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Blur Pipeline (Reloaded)"),
+            layout: Some(&bloom_layout),
+            vertex: wgpu::VertexState { module: &bloom_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &bloom_shader,
+                entry_point: "fs_blur",
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        // Resolve
+        let k4_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Resolve Pipeline Layout (Reloaded)"),
+            bind_group_layouts: &[&self.k4_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        self.k4_pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Resolve Render Pipeline (Reloaded)"),
+            layout: Some(&k4_layout),
+            vertex: wgpu::VertexState { module: &resolve_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &resolve_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        println!("✅ Shaders reloaded successfully.");
+        Ok(())
+    }
 }
 
 impl GraphicsBackend for WgpuBackend {
     fn name(&self) -> &str { "WGPU" }
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
+        // Check for shader hot-reload
+        let mut reload = false;
+        if let Ok(rx_guard) = self.shader_reload_rx.lock() {
+            if let Some(rx) = rx_guard.as_ref() {
+                if rx.try_recv().is_ok() {
+                    reload = true;
+                }
+            }
+        }
+        
+        if reload {
+            let _ = self.reload_shaders();
+        }
+
         let orchestrator = crate::renderer::orchestrator::RenderOrchestrator::new();
-        let tasks = orchestrator.plan(dl);
+        // Plan and execute via RenderGraph
         let time = self.start_time.elapsed().as_secs_f32();
-        orchestrator.execute(self, &tasks, time, width, height).unwrap();
+
+        // Update cinematic time for dynamic effects (like grain)
+        {
+            let mut params = self.current_cinematic.lock().unwrap();
+            params.time = time;
+            self.queue.write_buffer(&self.cinematic_buffer, 0, bytemuck::bytes_of(&*params));
+        }
+        let mut graph = orchestrator.plan(dl);
+        if let Err(e) = orchestrator.execute(self, &mut graph, time, width, height) {
+            if !e.contains("Outdated") && !e.contains("Lost") {
+                eprintln!("Render execution failed: {}", e);
+            }
+        }
     }
     fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
         let tex = self.create_texture(&TextureDescriptor {
@@ -791,5 +1309,38 @@ impl GraphicsBackend for WgpuBackend {
     }
     fn capture_screenshot(&mut self, path: &str) {
         *self.screenshot_requested.lock().unwrap() = Some(path.to_string());
+    }
+
+    fn set_cinematic_config(&mut self, config: crate::config::CinematicConfig) {
+        use crate::backend::shaders::types::CinematicParams;
+        use crate::config::{Bloom, Tonemap};
+
+        let params = CinematicParams {
+            exposure: config.exposure,
+            ca_strength: config.chromatic_aberration,
+            vignette_intensity: config.vignette,
+            bloom_intensity: match config.bloom {
+                Bloom::None => 0.0,
+                Bloom::Soft => 0.4,
+                Bloom::Cinematic => 1.2,
+            },
+            tonemap_mode: match config.tonemap {
+                Tonemap::None => 0,
+                Tonemap::Aces => 1,
+                Tonemap::Reinhard => 2,
+            },
+            bloom_mode: match config.bloom {
+                Bloom::None => 0,
+                Bloom::Soft => 1,
+                Bloom::Cinematic => 2,
+            },
+            grain_strength: config.grain_strength,
+            time: self.start_time.elapsed().as_secs_f32(),
+            lut_intensity: config.lut_intensity,
+            _pad: [0.0; 3],
+        };
+
+        *self.current_cinematic.lock().unwrap() = params;
+        self.queue.write_buffer(&self.cinematic_buffer, 0, bytemuck::bytes_of(&params));
     }
 }

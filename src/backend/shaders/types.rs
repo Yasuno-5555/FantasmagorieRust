@@ -7,19 +7,13 @@
 
 use bytemuck::{Pod, Zeroable};
 
-/// Global uniforms - bound once per frame (Uniform Buffer)
-/// Contains stable per-frame data
+/// Global Uniforms - bound once per frame (Uniform Buffer)
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GlobalUniforms {
-    /// MVP projection matrix (64 bytes)
-    /// Y-flip and Z-range handled here per backend
     pub projection: [[f32; 4]; 4],
-    /// Viewport size (8 bytes)
     pub viewport_size: [f32; 2],
-    /// Frame time for animations (4 bytes)
     pub time: f32,
-    /// Padding (4 bytes)
     pub _pad: f32,
 }
 
@@ -28,9 +22,15 @@ pub struct GlobalUniforms {
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct CinematicParams {
     pub exposure: f32,
-    pub gamma: f32,
-    pub fog_density: f32,
-    pub _pad: f32,
+    pub ca_strength: f32,
+    pub vignette_intensity: f32,
+    pub bloom_intensity: f32,
+    pub tonemap_mode: u32,
+    pub bloom_mode: u32,
+    pub grain_strength: f32,
+    pub time: f32,
+    pub lut_intensity: f32,
+    pub _pad: [f32; 3],
 }
 
 /// Audio reactive parameters
@@ -43,40 +43,42 @@ pub struct AudioParams {
     pub _pad: f32,
 }
 
-/// Per-draw uniforms - updated per draw call (Push Constants or Dynamic UBO)
-/// Must be ≤ 128 bytes for Push Constants compatibility
+/// Shape Instance Data - for batching/instancing
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct ShapeInstance {
+    /// x, y, w, h
+    pub rect: [f32; 4],
+    /// tl, tr, br, bl
+    pub radii: [f32; 4],
+    /// rgba
+    pub border_color: [f32; 4],
+    /// rgba
+    pub glow_color: [f32; 4],
+    /// border_width, elevation, glow_strength, lut_intensity
+    pub params1: [f32; 4],
+    /// mode, is_squircle, _r1, _r2
+    pub params2: [i32; 4],
+}
+
+/// Per-draw uniforms - legacy/fallback path
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct DrawUniforms {
-    /// MVP projection matrix (64 bytes)
     pub projection: [f32; 16],
-    /// Rect bounds: x, y, w, h (16 bytes)
     pub rect: [f32; 4],
-    /// Corner radii: tl, tr, br, bl (16 bytes)  
     pub radii: [f32; 4],
-    /// Border RGBA (16 bytes)
     pub border_color: [f32; 4],
-    /// Glow RGBA (16 bytes)
     pub glow_color: [f32; 4],
-    /// Offset for transform (8 bytes)
     pub offset: [f32; 2],
-    /// Scale factor (4 bytes)
     pub scale: f32,
-    /// Border width (4 bytes)
     pub border_width: f32,
-    /// Elevation for shadow (4 bytes)
     pub elevation: f32,
-    /// Glow strength (4 bytes)
     pub glow_strength: f32,
-    /// LUT intensity (4 bytes)
     pub lut_intensity: f32,
-    /// Rendering mode 0-9 (4 bytes)
     pub mode: i32,
-    /// Is squircle flag (4 bytes)
     pub is_squircle: i32,
-    /// Time in seconds (4 bytes)
     pub time: f32,
-    /// Padding (8 bytes)
     pub viewport_size: [f32; 2],
 }
 // Total: 16*4 + 8 + 4*7 + 4 = 104 bytes ✅ Under 128B limit

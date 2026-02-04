@@ -6,35 +6,25 @@ use std::sync::Arc;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::WindowBuilder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Fantasmagorie Rust - WGPU Cinematic Rich Demo");
     println!("Showcasing: HDR, SDF Glow, JFA Blur, Aurora Mesh, and Audio Reactivity");
 
     let event_loop = EventLoop::new()?;
-    let window = WindowBuilder::new()
+    let window_attrs = winit::window::WindowAttributes::default()
         .with_title("Fantasmagorie: Unified WGPU Cinematic Demo")
-        .with_inner_size(LogicalSize::new(1280, 720))
-        .build(&event_loop)?;
-
+        .with_inner_size(LogicalSize::new(1280, 720));
+    
+    let window = event_loop.create_window(window_attrs)?;
     let window = Arc::new(window);
 
-    // WGPU Setup
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::PRIMARY,
-        ..Default::default()
-    });
-
-    let surface = unsafe { instance.create_surface(window.clone()) }?;
-
     let size = window.inner_size();
-    let mut backend = pollster::block_on(WgpuBackend::new_async(
-        &instance,
-        surface,
+    let mut backend = WgpuBackend::new_async(
+        window.clone(),
         size.width,
         size.height,
-    ))
+    )
     .map_err(|e| format!("WGPU creation failed: {}", e))?;
 
     let mut current_width = size.width;
@@ -159,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .fg(ColorF::new(0.0, 1.0, 0.8, 1.0))
                     .build();
                 
-                ui.text(&format!("TIME: {:.2}s", time))
+                ui.text(ui.arena.alloc_str(&format!("TIME: {:.2}s", time)))
                     .font_size(14.0)
                     .fg(ColorF::white())
                     .build();
@@ -221,7 +211,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for f in features {
                     let f_row = ui.row().size(260.0, 30.0).build();
                     ui.begin(f_row);
-                    ui.text(&format!("✔ {}", f))
+                    ui.text(ui.arena.alloc_str(&format!("✔ {}", f)))
                         .font_size(16.0)
                         .fg(ColorF::white())
                         .build();

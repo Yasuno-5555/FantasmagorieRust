@@ -58,6 +58,8 @@ bincode = "1.3"
 # Tracea Dependency
 tracea = { path = "./src/tracea", default-features = false }
 
+notify = "6.1.1"
+
 cpal = "0.15"
 realfft = "3.3"
 log = "0.4"

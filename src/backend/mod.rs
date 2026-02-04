@@ -5,6 +5,7 @@
 
 use crate::draw::DrawList;
 use crate::renderer::packet::DrawPacket;
+use crate::config::CinematicConfig;
 
 /// Shared shader definitions and uniform types
 pub mod shaders;
@@ -47,6 +48,11 @@ pub trait GraphicsBackend {
 
     /// Update audio spectrum data (Phase 5)
     fn update_audio_data(&mut self, _spectrum: &[f32]) {
+        // Default no-op
+    }
+
+    /// Set cinematic parameters
+    fn set_cinematic_config(&mut self, _config: CinematicConfig) {
         // Default no-op
     }
 }
