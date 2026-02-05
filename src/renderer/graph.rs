@@ -1,129 +1,98 @@
-use crate::backend::hal::{GpuExecutor, TextureDescriptor, BufferUsage, TextureUsage, TextureFormat};
-use std::collections::{HashMap, VecDeque};
-use std::any::Any;
+use std::collections::HashMap;
+use crate::backend::hal::{GpuExecutor, TextureDescriptor, BufferUsage};
 
-/// Handle to a resource within the graph
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ResourceHandle(pub u32);
-pub const HDR_HANDLE: ResourceHandle = ResourceHandle(1);
-pub const BACKDROP_HANDLE: ResourceHandle = ResourceHandle(10);
-pub const REFLECTION_HANDLE: ResourceHandle = ResourceHandle(20);
+pub type ResourceHandle = u32;
 
-/// Types of resources managed by the graph
-pub enum ResourceType {
-    Texture,
-    Buffer,
-}
+pub const HDR_HANDLE: ResourceHandle = 1;
+pub const BACKDROP_HANDLE: ResourceHandle = 2;
+pub const AUX_HANDLE: ResourceHandle = 3;
+pub const DEPTH_HANDLE: ResourceHandle = 4;
+pub const VELOCITY_HANDLE: ResourceHandle = 5;
+pub const REFLECTION_HANDLE: ResourceHandle = 6;
+pub const EXTRA_HANDLE: ResourceHandle = 8;
+pub const SDF_HANDLE: ResourceHandle = 7;
+pub const PARTICLE_HANDLE: ResourceHandle = 15;
+pub const SDF_TEMP_A_HANDLE: ResourceHandle = 100;
+pub const SDF_TEMP_B_HANDLE: ResourceHandle = 101;
+pub const LUT_HANDLE: ResourceHandle = 20;
 
-#[derive(Debug, Clone)]
+// Phase 6 Handles
+pub const HDR_LOW_RES_HANDLE: ResourceHandle = 30;
+pub const HDR_HIGH_RES_HANDLE: ResourceHandle = 31;
+pub const LDR_HANDLE: ResourceHandle = 32; // Input to FXAA
+
+#[derive(Clone, Debug)]
 pub enum GraphResourceDesc {
     Texture(TextureDescriptor),
-    Buffer { size: u64, usage: BufferUsage, label: String },
+    Buffer { size: u64, usage: BufferUsage, label: &'static str },
 }
 
-/// A pool for reusing GPU resources across frames
-pub struct TransientPool<E: GpuExecutor> {
-    textures: HashMap<(u32, u32, TextureFormat, TextureUsage), VecDeque<E::Texture>>,
-    // Buffers could be added here
-}
-
-impl<E: GpuExecutor> TransientPool<E> {
-    pub fn new() -> Self {
-        Self {
-            textures: HashMap::new(),
-        }
-    }
-
-    pub fn acquire_texture(&mut self, executor: &E, desc: &TextureDescriptor) -> Result<E::Texture, String> {
-        let key = (desc.width, desc.height, desc.format, desc.usage);
-        if let Some(queue) = self.textures.get_mut(&key) {
-            if let Some(tex) = queue.pop_front() {
-                return Ok(tex);
-            }
-        }
-        executor.create_texture(desc)
-    }
-
-    pub fn release_texture(&mut self, texture: E::Texture, desc: &TextureDescriptor) {
-        let key = (desc.width, desc.height, desc.format, desc.usage);
-        self.textures.entry(key).or_insert_with(VecDeque::new).push_back(texture);
-    }
-    
-    pub fn clear(&mut self, executor: &E) {
-        for (_, queue) in self.textures.iter_mut() {
-            for tex in queue.drain(..) {
-                executor.destroy_texture(tex);
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
 pub enum GraphResource<E: GpuExecutor> {
-    Texture(TextureDescriptor, E::Texture), // Store descriptor for release
+    Texture(TextureDescriptor, E::Texture),
     Buffer(u64, BufferUsage, E::Buffer),
 }
 
-/// Context passed to each node during execution
+impl<E: GpuExecutor> GraphResource<E> {
+    pub fn into_desc(&self) -> GraphResourceDesc {
+        match self {
+            GraphResource::Texture(desc, _) => GraphResourceDesc::Texture(desc.clone()),
+            GraphResource::Buffer(size, usage, label) => GraphResourceDesc::Buffer { size: *size, usage: *usage, label: "External" },
+        }
+    }
+}
+
 pub struct RenderContext<'a, E: GpuExecutor> {
     pub executor: &'a mut E,
     pub resources: HashMap<ResourceHandle, GraphResource<E>>,
     pub time: f32,
     pub width: u32,
     pub height: u32,
+    pub jitter: (f32, f32),
 }
 
-/// A single step in the render graph
-pub trait RenderNode<E: GpuExecutor>: Any + Send + Sync {
+pub trait RenderNode<E: GpuExecutor> {
     fn name(&self) -> &str;
-    fn execute(&mut self, ctx: &mut RenderContext<'_, E>) -> Result<(), String>;
+    fn execute(&mut self, ctx: &mut RenderContext<E>) -> Result<(), String>;
 }
 
-/// The RenderGraph manages a sequence of rendering passes and their resources
 pub struct RenderGraph<E: GpuExecutor> {
-    nodes: Vec<Box<dyn RenderNode<E>>>,
     pub resources: HashMap<ResourceHandle, GraphResourceDesc>,
-    next_handle: u32,
+    pub nodes: Vec<Box<dyn RenderNode<E>>>,
 }
 
-impl<E: GpuExecutor + 'static> RenderGraph<E> {
+impl<E: GpuExecutor> RenderGraph<E> {
     pub fn new() -> Self {
         Self {
-            nodes: Vec::new(),
             resources: HashMap::new(),
-            next_handle: 0,
+            nodes: Vec::new(),
         }
-    }
-
-    pub fn alloc_texture(&mut self, desc: TextureDescriptor) -> ResourceHandle {
-        self.next_handle += 1;
-        let h = ResourceHandle(self.next_handle);
-        self.resources.insert(h, GraphResourceDesc::Texture(desc));
-        h
     }
 
     pub fn add_node<N: RenderNode<E> + 'static>(&mut self, node: N) {
         self.nodes.push(Box::new(node));
     }
 
-    pub fn execute(&mut self, executor: &mut E, external_resources: HashMap<ResourceHandle, GraphResource<E>>, time: f32, width: u32, height: u32) -> Result<(), String> {
+    pub fn execute(&mut self, executor: &mut E, external_resources: HashMap<ResourceHandle, GraphResource<E>>, time: f32, width: u32, height: u32, jitter: (f32, f32)) -> Result<(), String> {
         let mut ctx = RenderContext {
             executor,
             resources: external_resources,
             time,
             width,
             height,
+            jitter,
         };
 
         // Allocate declared resources
         for (handle, desc) in &self.resources {
+            if ctx.resources.contains_key(handle) {
+                continue;
+            }
             match desc {
                 GraphResourceDesc::Texture(tex_desc) => {
                     let tex = ctx.executor.acquire_transient_texture(tex_desc)?;
                     ctx.resources.insert(*handle, GraphResource::Texture(tex_desc.clone(), tex));
                 }
                 GraphResourceDesc::Buffer { size, usage, label } => {
-                     // Buffer pool not implemented, direct creation
                      let buf = ctx.executor.create_buffer(*size, *usage, label)?;
                      ctx.resources.insert(*handle, GraphResource::Buffer(*size, *usage, buf));
                 }
@@ -134,19 +103,29 @@ impl<E: GpuExecutor + 'static> RenderGraph<E> {
             node.execute(&mut ctx)?;
         }
 
-        // Return resources to pool
-        for (_, res) in ctx.resources {
-            match res {
-                GraphResource::Texture(desc, tex) => {
-                    ctx.executor.release_transient_texture(tex, &desc);
-                }
-                GraphResource::Buffer(_, _, buf) => {
-                    // Pool support for buffers not yet implemented
-                    ctx.executor.destroy_buffer(buf);
-                }
+        Ok(())
+    }
+}
+
+pub struct TransientPool<E: GpuExecutor> {
+    textures: HashMap<TextureDescriptor, Vec<E::Texture>>,
+}
+
+impl<E: GpuExecutor> TransientPool<E> {
+    pub fn new() -> Self {
+        Self { textures: HashMap::new() }
+    }
+
+    pub fn acquire_texture(&mut self, executor: &E, desc: &TextureDescriptor) -> Result<E::Texture, String> {
+        if let Some(pool) = self.textures.get_mut(desc) {
+            if let Some(tex) = pool.pop() {
+                return Ok(tex);
             }
         }
+        executor.create_texture(desc)
+    }
 
-        Ok(())
+    pub fn release_texture(&mut self, texture: E::Texture, desc: &TextureDescriptor) {
+        self.textures.entry(desc.clone()).or_insert_with(Vec::new).push(texture);
     }
 }

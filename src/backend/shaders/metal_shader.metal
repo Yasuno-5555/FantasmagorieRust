@@ -13,6 +13,7 @@ struct VertexOut {
     float4 color;
     float2 world_pos;
     uint iid [[flat]];
+    float2 velocity;
 };
 
 struct GlobalUniforms {
@@ -25,10 +26,13 @@ struct GlobalUniforms {
 struct ShapeInstance {
     float4 rect;
     float4 radii;
+    float4 color;
     float4 border_color;
     float4 glow_color;
     float4 params1; // border_width, elevation, glow_strength, lut_intensity
-    int4 params2;   // mode, is_squircle, _r1, _r2
+    uint4 params2;   // mode, is_squircle, _r1, _r2
+    float4 material; // velocity_x, velocity_y, reflectivity, roughness
+    float4 pbr_params; // normal_map_id, distortion, emissive_intensity, parallax_factor
 };
 
 struct DrawUniforms {
@@ -58,6 +62,7 @@ vertex VertexOut vs_main(Vertex v [[stage_in]],
     out.color = float4(pow(v.color.rgb, 2.2), v.color.a);
     out.world_pos = pos;
     out.iid = 0xFFFFFFFF; // Legacy marker
+    out.velocity = float2(0.0);
     return out;
 }
 
@@ -75,6 +80,7 @@ vertex VertexOut vs_instanced(Vertex v [[stage_in]],
     out.color = float4(pow(v.color.rgb, 2.2), v.color.a);
     out.world_pos = pos;
     out.iid = instance_id;
+    out.velocity = inst.material.xy;
     return out;
 }
 
@@ -109,6 +115,7 @@ float3 hsv2rgb(float3 c) {
 struct ShapeData {
     float4 rect;
     float4 radii;
+    float4 color;
     float4 border_color;
     float4 glow_color;
     float border_width;
@@ -273,7 +280,8 @@ fragment float4 fs_main(VertexOut in [[stage_in]],
                          texture2d<float> tex2 [[texture(1)]],
                          sampler s [[sampler(0)]]) {
     ShapeData d;
-    d.rect = u.rect; d.radii = u.radii; d.border_color = u.border_color;
+    d.rect = u.rect; d.radii = u.radii; d.color = in.color; // Use vertex color as fill
+    d.border_color = u.border_color;
     d.glow_color = u.glow_color; d.border_width = u.border_width;
     d.elevation = u.elevation; d.glow_strength = u.glow_strength;
     d.lut_intensity = u.lut_intensity; d.mode = u.mode; d.is_squircle = u.is_squircle;
@@ -288,18 +296,27 @@ fragment float4 fs_instanced(VertexOut in [[stage_in]],
                             sampler s [[sampler(0)]]) {
     constant ShapeInstance &inst = instances[in.iid];
     ShapeData d;
-    d.rect = inst.rect; d.radii = inst.radii; d.border_color = inst.border_color;
+    d.rect = inst.rect; d.radii = inst.radii; d.color = inst.color;
+    d.border_color = inst.border_color;
     d.glow_color = inst.glow_color; 
     d.border_width = inst.params1.x; d.elevation = inst.params1.y;
     d.glow_strength = inst.params1.z; d.lut_intensity = inst.params1.w;
     d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
-    d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
-    return resolve_shape(in, d, tex, tex2, s, glob.time);
+    
+    float4 color = resolve_shape(in, d, tex, tex2, s, glob.time);
+    
+    // 2D Normal Mapping Support
+    float3 normal = float3(0.5, 0.5, 1.0); // Default up
+    // sampler s2 as slot 2... (placeholder for now)
+    
+    return color;
 }
 
 struct FragmentOutput {
     float4 color [[color(0)]];
     float4 aux [[color(1)]];
+    float2 velocity [[color(2)]];
+    float4 extra [[color(3)]];
 };
 
 fragment FragmentOutput fs_instanced_gbuffer(VertexOut in [[stage_in]],
@@ -310,7 +327,8 @@ fragment FragmentOutput fs_instanced_gbuffer(VertexOut in [[stage_in]],
                             sampler s [[sampler(0)]]) {
     constant ShapeInstance &inst = instances[in.iid];
     ShapeData d;
-    d.rect = inst.rect; d.radii = inst.radii; d.border_color = inst.border_color;
+    d.rect = inst.rect; d.radii = inst.radii; d.color = inst.color;
+    d.border_color = inst.border_color;
     d.glow_color = inst.glow_color; 
     d.border_width = inst.params1.x; d.elevation = inst.params1.y;
     d.glow_strength = inst.params1.z; d.lut_intensity = inst.params1.w;
@@ -318,14 +336,20 @@ fragment FragmentOutput fs_instanced_gbuffer(VertexOut in [[stage_in]],
     
     float4 color = resolve_shape(in, d, tex, tex2, s, glob.time);
     
-    // Aux: Normal(0,0,1) -> (0.5,0.5), Roughness(params2.z), Elevation
-    float nx = 0.5;
-    float ny = 0.5;
-    float roughness = float(inst.params2.z) / 100.0;
+    // Aux: Normal(xy), Roughness, Reflectivity
+    float3 normal = float3(0.5, 0.5, 1.0);
+    // If we had a normal map in slot 2...
+    // normal = tex3.sample(s, in.uv).rgb;
+    
+    float4 aux = float4(normal.xy, inst.material.w, inst.material.z);
     
     FragmentOutput out;
     out.color = color;
-    out.aux = float4(nx, ny, roughness, d.elevation);
+    // Add emissive boost to aux.w or similar? 
+    // Let's use glow_layer logic...
+    out.aux = aux;
+    out.velocity = inst.material.xy;
+    out.extra = inst.pbr_params;
     return out;
 }
 
@@ -339,11 +363,113 @@ struct CinematicParams {
     float grain_strength;
     float time;
     float lut_intensity;
-    float3 _pad;
+    float blur_radius;
+    float motion_blur_strength;
+    uint debug_mode;
+    float2 light_pos;
+    float gi_intensity;
+    float volumetric_intensity;
+    float4 light_color;
 };
 
 float3 reinhard(float3 v) {
     return v / (1.0 + v);
+}
+
+// Phase 2: Raymarching
+float raymarch_shadow(float2 pixel_pos, float2 light_pos, texture2d<float> sdf, sampler s) {
+    float2 dir = normalize(light_pos - pixel_pos);
+    float max_dist = distance(pixel_pos, light_pos);
+    float t = 2.0; 
+    float res = 1.0;
+    
+    float2 size = float2(sdf.get_width(), sdf.get_height());
+    
+    for (int i = 0; i < 32; i++) {
+        float2 p = pixel_pos + dir * t;
+        float2 uv = p / size;
+        
+        float d = sdf.sample(s, uv).r;
+        
+        if (d < 0.1) {
+            return 0.0;
+        }
+        
+        res = min(res, 8.0 * d / t);
+        
+        t += max(d, 1.0);
+        if (t >= max_dist) { break; }
+    }
+    return clamp(res, 0.0, 1.0);
+}
+
+// Phase 3: Volumetric Lighting
+float3 volumetric_lighting(float2 pixel_pos, float2 light_posd, texture2d<float> sdf, sampler s, constant CinematicParams &cinema) {
+    float2 dir = normalize(light_posd - pixel_pos);
+    float max_dist = distance(pixel_pos, light_posd);
+    float t = 0.0;
+    float accumulation = 0.0;
+    float step_size = 20.0;
+    float density = 0.002;
+    
+    float dither = hash(pixel_pos * 0.01); // Simple hash
+    t += dither * step_size;
+
+    float2 size = float2(sdf.get_width(), sdf.get_height());
+
+    for (int i = 0; i < 16; i++) {
+        if (t >= max_dist) { break; }
+        
+        float2 p = pixel_pos + dir * t;
+        float2 uv = p / size;
+        
+        float d = sdf.sample(s, uv).r;
+        
+        if (d > 0.1) {
+            float dist_to_light = max_dist - t;
+            float falloff = 1.0 / (1.0 + 0.00005 * dist_to_light * dist_to_light);
+            accumulation += density * falloff;
+        }
+        
+        t += step_size;
+    }
+    
+    return cinema.light_color.rgb * accumulation * cinema.volumetric_intensity;
+}
+
+// Phase 3: Cone Tracing GI
+float3 cone_trace_gi(float2 pixel_pos, float2 normal, texture2d<float> sdf, texture2d<float> hdr, sampler s, constant CinematicParams &cinema) {
+    if (cinema.gi_intensity <= 0.0) { return float3(0.0); }
+    
+    float2 size = float2(sdf.get_width(), sdf.get_height());
+    float3 indirect = float3(0.0);
+    
+    int step_count = 8;
+    float max_dist = 400.0;
+    
+    float t = 10.0;
+    
+    for (int i = 0; i < step_count; i++) {
+        float2 p = pixel_pos + normal * t;
+        float2 uv = p / size;
+        
+        float d = sdf.sample(s, uv).r;
+        
+        if (d < 2.0) {
+            float3 radiance = hdr.sample(s, uv, level(2.0)).rgb;
+            
+            float weight = (1.0 - t / max_dist);
+            if (weight > 0.0) {
+                indirect += radiance * weight;
+            }
+            break; 
+        }
+        
+        t += max(d, 5.0);
+        if (t >= max_dist) { break; }
+    }
+    
+    return indirect * cinema.gi_intensity * 0.5;
 }
 
 // --- Resolve Pass (HDR to LDR + Tone Mapping + Post-effects) ---
@@ -456,25 +582,52 @@ fragment float4 fs_resolve_bloom(ResolveVertexOut in [[stage_in]],
                                  texture2d<float> hdr_tex [[texture(0)]],
                                  texture2d<float> bloom_tex [[texture(1)]],
                                  texture3d<float> lut_tex [[texture(2)]],
+                                 texture2d<float> vel_tex [[texture(3)]],
+                                 texture2d<float> refl_tex [[texture(4)]],
+                                 texture2d<float> aux_tex [[texture(5)]],
+                                 texture2d<float> extra_tex [[texture(6)]],
                                  sampler s [[sampler(0)]]) {
     float2 uv = in.uv;
-    float2 dist_from_center = uv - 0.5;
+    
+    float2 dist_from_center_raw = uv - 0.5;
+    float r2 = dot(dist_from_center_raw, dist_from_center_raw);
+    float k = -0.1 * cinema.vignette_intensity;
+    float2 lens_dist_uv = uv + dist_from_center_raw * (k * r2 + k * r2 * r2);
+
+    // Refraction (from aux/extra) adds on top of lens distortion? 
+    // Or refraction is strictly local. Let's apply refraction to lens_dist_uv?
+    // Start with lens_dist_uv as base.
+    
+    float4 aux = aux_tex.sample(s, lens_dist_uv);
+    float4 extra = extra_tex.sample(s, lens_dist_uv);
+    
+    float2 normal_xy = aux.xy - 0.5;
+    float dist_strength = extra.y;
+    float2 refraction_offset = normal_xy * dist_strength * 0.1;
+    
+    float2 refracted_uv = lens_dist_uv + refraction_offset;
+    
+    float2 dist_from_center = refracted_uv - 0.5;
     
     // 1. Chromatic Aberration
     float3 color;
     float ca = cinema.ca_strength;
-    color.r = hdr_tex.sample(s, uv + dist_from_center * ca).r;
-    color.g = hdr_tex.sample(s, uv).g;
-    color.b = hdr_tex.sample(s, uv - dist_from_center * ca).b;
+    color.r = hdr_tex.sample(s, refracted_uv + dist_from_center * ca).r;
+    color.g = hdr_tex.sample(s, refracted_uv).g;
+    color.b = hdr_tex.sample(s, refracted_uv - dist_from_center * ca).b;
     
     // 2. Exposure
     color *= cinema.exposure;
 
-    // 3. Add Bloom
-    if (cinema.bloom_mode > 0) {
-        float3 bloom = bloom_tex.sample(s, uv).rgb;
-        color += bloom * cinema.bloom_intensity;
-    }
+    // 2.5 Add Reflection
+    float3 reflection = refl_tex.sample(s, refracted_uv).rgb;
+    
+    // 3. Bloom
+    float3 bloom = bloom_tex.sample(s, refracted_uv).rgb;
+    
+    float emissive_boost = extra.z;
+    
+    color = color + reflection + bloom * cinema.bloom_intensity + emissive_boost;
     
     // 4. Tone Mapping
     if (cinema.tonemap_mode == 1) {
@@ -495,13 +648,17 @@ fragment float4 fs_resolve_bloom(ResolveVertexOut in [[stage_in]],
     float dither = hash(uv * 10.0) / 255.0;
     color += dither;
     
-    // 8. LUT Placeholder
-    /*
+    // 8. LUT
     if (cinema.lut_intensity > 0.0) {
         float3 lut_color = lut_tex.sample(s, color).rgb;
         color = mix(color, lut_color, cinema.lut_intensity);
     }
-    */
+    
+    // 9. Debug Modes
+    if (cinema.debug_mode == 1) {
+        float2 vel = vel_tex.sample(s, uv).xy;
+        return float4(vel * 0.1 + 0.5, 0.0, 1.0);
+    }
     
     return float4(pow(color, 1.0/2.2), 1.0);
 }

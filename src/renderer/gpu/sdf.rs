@@ -2,7 +2,7 @@
 //!
 //! Rapid 2D distance field generation for dynamic lighting and reflections.
 
-use tracea::runtime::manager::KernelArg; use tracea::doctor::BackendKind as DeviceBackend;
+use tracea::doctor::BackendKind as DeviceBackend;
 
 pub struct SDFKernel {
     pub backend: DeviceBackend,

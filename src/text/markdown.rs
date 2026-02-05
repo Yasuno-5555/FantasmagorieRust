@@ -37,7 +37,7 @@ pub fn parse_markdown(input: &str) -> Vec<TextSpan> {
     let mut buffer = String::new();
 
     // Helper to flush buffer
-    let mut flush =
+    let flush =
         |spans: &mut Vec<TextSpan>, in_bold: bool, in_italic: bool, buffer: &mut String| {
             if !buffer.is_empty() {
                 spans.push(TextSpan {
@@ -87,7 +87,7 @@ pub fn parse_markdown(input: &str) -> Vec<TextSpan> {
         // Link [text](url)
         if chars[i] == '[' {
             // Find closing ']' starting from i
-            let remainder = &input[i..]; // Note: byte indexing vs char indexing mismatch risk here.
+            let _remainder = &input[i..]; // Note: byte indexing vs char indexing mismatch risk here.
                                          // In C++, input.find("](", i) works on bytes.
                                          // In Rust, we need to be careful. constructing a string from chars[i..] is expensive.
                                          // Let's stick to simple char scan.

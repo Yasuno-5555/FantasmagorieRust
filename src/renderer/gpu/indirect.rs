@@ -2,8 +2,7 @@
 //!
 //! Generates Indirect Dispatch and Draw commands on the GPU.
 
-use tracea::core::config::PipelineConfig;
-use tracea::runtime::manager::KernelArg; use tracea::doctor::BackendKind as DeviceBackend;
+use tracea::doctor::BackendKind as DeviceBackend;
 
 pub struct IndirectDispatchKernel {
     pub backend: DeviceBackend,

@@ -6,6 +6,7 @@ pub mod packet;
 pub mod types;
 pub mod graph;
 pub mod nodes;
+pub mod lut;
 
 pub use api::{Renderer, FrameContext};
 pub use types::*;

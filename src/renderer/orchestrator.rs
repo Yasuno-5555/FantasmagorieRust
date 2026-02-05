@@ -1,107 +1,211 @@
-use crate::renderer::graph::{RenderGraph, RenderContext, ResourceHandle};
-use crate::renderer::nodes::geometry::GeometryNode;
-use crate::renderer::nodes::postprocess::{ResolveNode, CaptureNode};
-use crate::renderer::nodes::blur::BlurNode;
-use crate::backend::hal::{GpuExecutor, BufferUsage, TextureDescriptor, TextureUsage, TextureFormat};
-use crate::draw::{DrawCommand, DrawList};
-use crate::backend::shaders::types::{DrawUniforms, GlobalUniforms, ShapeInstance, create_projection, CinematicParams};
-use crate::core::{ColorF, Vec2};
-use bytemuck::{self, Pod, Zeroable};
+use crate::backend::hal::GpuExecutor;
+use crate::backend::GraphicsBackend;
+use crate::renderer::graph::{
+    RenderGraph, 
+    HDR_HANDLE, BACKDROP_HANDLE, VELOCITY_HANDLE, AUX_HANDLE, 
+    DEPTH_HANDLE, REFLECTION_HANDLE, EXTRA_HANDLE, SDF_HANDLE,
+    SDF_TEMP_A_HANDLE, SDF_TEMP_B_HANDLE, 
+};
+use crate::renderer::nodes::geometry::{GeometryNode};
+use crate::renderer::nodes::postprocess::{ResolveNode};
+use crate::renderer::nodes::ssr::SSRNode;
+use crate::renderer::nodes::particles::{ParticleNode, ParticleSystem};
+use std::sync::{Arc, Mutex};
 
-/// Coordinates the execution of RenderTasks across a GpuExecutor
-pub struct RenderOrchestrator {
-    pub batching_enabled: bool,
+pub struct Orchestrator<E: GpuExecutor> {
+    pub graph: RenderGraph<E>,
+    particle_system: Arc<Mutex<ParticleSystem>>,
+    pub frame_count: u64,
 }
 
-impl RenderOrchestrator {
+impl<E: GpuExecutor + 'static> Orchestrator<E> {
     pub fn new() -> Self {
-        Self { batching_enabled: true }
+        Self {
+            graph: RenderGraph::new(),
+            particle_system: Arc::new(Mutex::new(ParticleSystem::new())),
+            frame_count: 0,
+        }
     }
 
-    pub fn with_batching(mut self, enabled: bool) -> Self {
-        self.batching_enabled = enabled;
-        self
-    }
+    pub fn plan(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32) {
+        self.graph = RenderGraph::new();
 
-    /// Convert a high-level DrawList into an optimized RenderGraph
-    pub fn plan<E: GpuExecutor + 'static>(&self, dl: &DrawList, config: &CinematicParams, width: u32, height: u32) -> RenderGraph<E> {
-        let mut graph = RenderGraph::new();
-        let commands = dl.commands();
-        
+        // 1. Process Draw List into Geometry Nodes
         let mut current_batch = Vec::new();
-        let mut backdrop_captured = false;
-
-        for cmd in commands {
-            match cmd {
-                DrawCommand::BackdropBlur { .. } | DrawCommand::BlurRect { .. } => {
-                    if !backdrop_captured {
-                        if !current_batch.is_empty() {
-                            graph.add_node(GeometryNode::new(current_batch.drain(..).collect()).with_batching(self.batching_enabled));
-                        }
-                        graph.add_node(CaptureNode);
-                        graph.add_node(BlurNode { sigma: config.blur_radius });
-                        backdrop_captured = true;
-                    }
-                    current_batch.push(cmd.clone());
-                }
-                _ => {
-                    current_batch.push(cmd.clone());
-                }
-            }
+        for command in dl.commands() {
+            current_batch.push(command.clone());
         }
-
+        
         if !current_batch.is_empty() {
-            let mut geo_node = GeometryNode::new(current_batch).with_batching(self.batching_enabled);
-            
-            // SSR Setup
-            if config.bloom_mode >= 2 {
-                 // Allocate Aux Buffer (G-Buffer)
-                 let aux_desc = TextureDescriptor {
-                     width, height,
-                     format: TextureFormat::Rgba16Float,
-                     usage: TextureUsage::RENDER_ATTACHMENT | TextureUsage::TEXTURE_BINDING,
-                     label: Some("GBuffer Aux"),
-                 };
-                 // Use constant handle defined in graph.rs
-                 let aux_h = crate::renderer::graph::REFLECTION_HANDLE; // Reusing constant or defining new?
-                 // Wait, REFLECTION_HANDLE is for output. I need AUX_HANDLE.
-                 // I will use raw handle for now or add AUX_HANDLE to graph.rs
-                 let aux_h = ResourceHandle(12345); // Temporary
-                 graph.resources.insert(aux_h, crate::renderer::graph::GraphResourceDesc::Texture(aux_desc.clone()));
-                 
-                 geo_node.aux_handle = Some(aux_h);
-                 
-                 // Add SSR Node
-                 use crate::renderer::nodes::ssr::SSRNode;
-                 use crate::renderer::graph::{HDR_HANDLE, REFLECTION_HANDLE};
-                 
-                 // Allocate Reflection Output
-                 let refl_desc = TextureDescriptor { label: Some("SSR Reflection"), ..aux_desc }; // Same size/format
-                 graph.resources.insert(REFLECTION_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(refl_desc));
-                 
-                 // I need Depth Handle. Backend should provide it via External Resources if possible.
-                 // For now, assume simple case (no depth check or depth is AUX.w).
-                 graph.add_node(geo_node);
-                 graph.add_node(SSRNode::new(aux_h, ResourceHandle(0), HDR_HANDLE));
-                 
-                 // Resolve Node needs to know about Reflection Handle.
-                 // But ResolveNode doesn't have fields yet?
-                 // I'll update ResolveNode later.
-            } else {
-                 graph.add_node(geo_node);
-            }
+            self.graph.add_node(GeometryNode::new(current_batch));
         }
 
-        graph.add_node(ResolveNode);
-        graph
+        // 2. Add SSR Node (Aux, Depth, HDR)
+        self.graph.add_node(SSRNode::new(
+            AUX_HANDLE,
+            DEPTH_HANDLE,
+            HDR_HANDLE,
+        ));
+
+        // 3. JFA SDF Generation
+        // Declare transient resources for JFA
+        self.graph.resources.insert(SDF_TEMP_A_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("SDF Temp A"), width, height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float, // Rgba16Float is usually enough for packed coords
+            usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
+        }));
+        self.graph.resources.insert(SDF_TEMP_B_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("SDF Temp B"), width, height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
+        }));
+        self.graph.resources.insert(SDF_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("SDF Output"), width, height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
+        }));
+        
+        self.graph.resources.insert(REFLECTION_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("Reflection Buffer"), width, height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_SRC,
+        }));
+
+        self.graph.add_node(crate::renderer::nodes::jfa::JfaSdfNode::new(EXTRA_HANDLE));
+
+        // 4. Particle System
+        self.graph.add_node(ParticleNode::new(self.particle_system.clone()));
+
+        // Phase 5/6: Pipeline
+        let scale = config.internal_resolution_scale;
+        let internal_width = (width as f32 * scale) as u32;
+        let internal_height = (height as f32 * scale) as u32;
+
+        // 5. Lighting Pass
+        self.graph.resources.insert(crate::renderer::graph::HDR_LOW_RES_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("HDR Low Res"), width: internal_width, height: internal_height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+        }));
+        
+        self.graph.resources.insert(crate::renderer::graph::HDR_HIGH_RES_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("HDR High Res"), width: width, height: height, depth: 1, // Output of upscale is native
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+        }));
+
+        self.graph.add_node(crate::renderer::nodes::lighting::LightingNode);
+        
+        // Bloom Node reused (usually takes input? Needs generic handle support or hardcoded to HDR_LOW_RES?)
+        // Currently BlurNode/Bloom logic might need updating if it expects specific handles.
+        // Assuming Bloom can read from HDR_LOW_RES if we configure it?
+        // Or we assume Bloom reads from "SceneColor" which was HDR_HANDLE.
+        // But HDR_HANDLE is now G-Buffer. Lighting Result is HDR_LOW_RES.
+        // We probably need to update Bloom to read from HDR_LOW_RES.
+        
+        self.graph.add_node(crate::renderer::nodes::upscale::UpscaleNode);
+        self.graph.add_node(crate::renderer::nodes::post::PostProcessNode);
     }
 
-    /// Execute a planned RenderGraph
-    pub fn execute<E: GpuExecutor + 'static>(&self, executor: &mut E, graph: &mut RenderGraph<E>, external_resources: std::collections::HashMap<ResourceHandle, crate::renderer::graph::GraphResource<E>>, time: f32, width: u32, height: u32) -> Result<(), String> {
-        executor.begin_execute()?;
-        graph.execute(executor, external_resources, time, width, height)?;
-        executor.end_execute()?;
-        executor.present()?;
-        Ok(())
+    pub fn execute(&mut self, backend: &mut E, time: f32, width: u32, height: u32) -> Result<(), String> {
+        let mut external = std::collections::HashMap::new();
+        
+        // Pass backend-owned textures as external resources to the graph if they exist
+        if let Some(hdr_tex) = backend.get_hdr_texture() {
+            let hdr_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("HDR Buffer"), width, height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_SRC,
+            };
+            external.insert(HDR_HANDLE, crate::renderer::graph::GraphResource::Texture(hdr_desc, hdr_tex));
+        }
+
+        if let Some(backdrop_tex) = backend.get_backdrop_texture() {
+            let backdrop_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("Backdrop Buffer"), width, height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_DST,
+            };
+            external.insert(BACKDROP_HANDLE, crate::renderer::graph::GraphResource::Texture(backdrop_desc, backdrop_tex));
+        }
+
+        if let Some(extra_tex) = backend.get_extra_texture() {
+            let extra_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("Extra Buffer"), width, height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            };
+            external.insert(EXTRA_HANDLE, crate::renderer::graph::GraphResource::Texture(extra_desc, extra_tex));
+        }
+
+        if let Some(aux_tex) = backend.get_aux_texture() {
+            let aux_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("Aux Buffer"), width, height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            };
+            external.insert(AUX_HANDLE, crate::renderer::graph::GraphResource::Texture(aux_desc, aux_tex));
+        }
+
+        if let Some(vel_tex) = backend.get_velocity_texture() {
+            let vel_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("Velocity Buffer"), width, height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            };
+            external.insert(VELOCITY_HANDLE, crate::renderer::graph::GraphResource::Texture(vel_desc, vel_tex));
+        }
+
+        if let Some(depth_tex) = backend.get_depth_texture() {
+            let depth_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("Depth Buffer"), width, height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Depth32Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            };
+            external.insert(DEPTH_HANDLE, crate::renderer::graph::GraphResource::Texture(depth_desc, depth_tex));
+        }
+
+        if let Some(lut_tex) = backend.get_lut_texture() {
+            // Assume 32x32x32 for now, or infer? HAL Texture doesn't have getters, so we trust backend or use fixed size
+            let lut_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("LUT"), width: 32, height: 32, depth: 32,
+                 format: crate::backend::hal::TextureFormat::Rgba8Unorm, // Or Rgba16Float
+                 usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            };
+            external.insert(crate::renderer::graph::LUT_HANDLE, crate::renderer::graph::GraphResource::Texture(lut_desc, lut_tex));
+        }
+
+        // FXAA / LDR Intermediate
+        // We always allocate it if using RenderGraph, or check config?
+        // Allocating it every frame as "External" via backend.get_... is not right if it's transient.
+        // It should be internal "Transient".
+        // BUT Orchestrator logic here populates "external" resource map from backend resources.
+        // Internal transient resources are allocated by RenderGraph execution based on node requirements.
+        // Wait, does RenderGraph allocate transient handles?
+        // Standard RenderGraph: Nodes declare outputs, Graph allocates them.
+        // `PostProcessNode` outputs to `LDR_HANDLE`.
+        // So I don't need to manually insert it here IF RenderGraph handles internal resources.
+        // Let's check RenderGraph implementation.
+
+        self.frame_count += 1;
+        let index = self.frame_count % 8; // 8-phase cycle
+        
+        fn halton(index: u64, base: u32) -> f32 {
+            let mut f = 1.0;
+            let mut r = 0.0;
+            let mut i = index;
+            while i > 0 {
+                f = f / (base as f32);
+                r = r + f * ((i % (base as u64)) as f32);
+                i = i / (base as u64);
+            }
+            r
+        }
+        
+        let jx = halton(index + 1, 2) - 0.5;
+        let jy = halton(index + 1, 3) - 0.5;
+        let jitter = (jx, jy);
+
+        self.graph.execute(backend, external, time, width, height, jitter)
     }
 }

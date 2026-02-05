@@ -819,7 +819,7 @@ pub fn handle_text_input(id: ID, buffer: &mut String) -> bool {
                      // remove() panics if not char boundary.
                      // buffer.remove(ctx.cursor_idx) is risky if next isn't clear.
                      // Better find char at cursor.
-                     if let Some((_, c)) = buffer.char_indices().find(|(i, _)| *i == ctx.cursor_idx) {
+                     if let Some((_, _c)) = buffer.char_indices().find(|(i, _)| *i == ctx.cursor_idx) {
                           buffer.remove(ctx.cursor_idx);
                           changed = true;
                      }

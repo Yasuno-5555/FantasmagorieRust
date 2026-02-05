@@ -2,14 +2,27 @@ use metal::*;
 use std::sync::Arc;
 
 
+#[derive(Debug, Clone)]
 pub struct MetalBindGroupLayout {
     pub entries: Vec<u32>, // Binding indices
 }
 
+#[derive(Debug, Clone)]
+pub enum MetalResource {
+    Buffer(Buffer),
+    Texture(Texture),
+    Sampler(SamplerState),
+}
+
+#[derive(Debug, Clone)]
+pub struct MetalBindGroupEntry {
+    pub binding: u32,
+    pub resource: MetalResource,
+}
+
+#[derive(Debug, Clone)]
 pub struct MetalBindGroup {
-    pub buffers: Vec<Buffer>,
-    pub textures: Vec<Texture>,
-    pub samplers: Vec<SamplerState>,
+    pub entries: Vec<MetalBindGroupEntry>,
 }
 
 pub struct MetalPipelineProvider {
@@ -127,6 +140,11 @@ impl MetalPipelineProvider {
         color1.set_pixel_format(MTLPixelFormat::RGBA16Float);
         color1.set_blending_enabled(false); 
 
+        // Attachment 2: Velocity (Replace)
+        let color2 = desc.color_attachments().object_at(2).unwrap();
+        color2.set_pixel_format(MTLPixelFormat::RG16Float);
+        color2.set_blending_enabled(false);
+
         let vertex_desc = VertexDescriptor::new();
         
         // Attribute 0: pos (float2)
@@ -146,6 +164,39 @@ impl MetalPipelineProvider {
         
         desc.set_vertex_descriptor(Some(&vertex_desc));
         
+        // Depth Stencil
+        desc.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+        
+        self.device.new_render_pipeline_state(&desc).map_err(|e| e.to_string())
+    }
+
+    pub fn create_ssr_pipeline(
+    &self,
+        label: &str,
+        wgsl_source: &str,
+    ) -> Result<RenderPipelineState, String> {
+        let parts: Vec<&str> = wgsl_source.split_whitespace().collect();
+        if parts.len() < 2 {
+            return Err(format!("Expected 'vs_func fs_func', got '{}'", wgsl_source));
+        }
+        
+        let vs_name = parts[0];
+        let fs_name = parts[1];
+
+        let vs = self.library.get_function(vs_name, None).map_err(|e| format!("VS '{}' not found: {}", vs_name, e))?;
+        let fs = self.library.get_function(fs_name, None).map_err(|e| format!("FS '{}' not found: {}", fs_name, e))?;
+        
+        let desc = RenderPipelineDescriptor::new();
+        desc.set_label(label);
+        desc.set_vertex_function(Some(&vs));
+        desc.set_fragment_function(Some(&fs));
+        
+        let color0 = desc.color_attachments().object_at(0).unwrap();
+        color0.set_pixel_format(MTLPixelFormat::RGBA16Float);
+        color0.set_blending_enabled(true);
+        color0.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+        color0.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+
         self.device.new_render_pipeline_state(&desc).map_err(|e| e.to_string())
     }
 

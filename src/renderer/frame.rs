@@ -42,5 +42,12 @@ pub enum RenderCommand {
         is_squircle: bool,
         /// Motion Morphing weight (0.0 to 1.0)
         morph: f32,
+        id: Option<crate::core::ID>,
+        reflectivity: f32,
+        roughness: f32,
+        normal_map: Option<u64>,
+        distortion_strength: f32,
+        emissive_intensity: f32,
+        parallax_factor: f32,
     },
 }

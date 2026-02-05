@@ -16,6 +16,7 @@ pub struct Renderer {
     backend: Box<dyn GraphicsBackend>,
     config: EngineConfig,
     profiler: crate::renderer::gpu::ProfilerRegistry,
+    velocity_cache: std::collections::HashMap<crate::core::ID, crate::core::Vec2>,
 }
 
 impl Renderer {
@@ -52,6 +53,7 @@ impl Renderer {
             backend, 
             config, 
             profiler: crate::renderer::gpu::ProfilerRegistry::new(),
+            velocity_cache: std::collections::HashMap::new(),
         };
 
         // Pass initial cinematic config to backend
@@ -120,8 +122,15 @@ impl Renderer {
         self.backend.update_font_texture(width, height, data);
     }
 
+    /// Load and update the LUT from a .cube file
+    pub fn load_lut(&mut self, path: &str) -> Result<(), String> {
+        let lut_data = crate::renderer::lut::LutData::load_from_cube(path)?;
+        self.backend.update_lut_texture(&lut_data.data, lut_data.size);
+        Ok(())
+    }
+
     /// Convert high-level RenderCommands into backend-friendly DrawCommands.
-    fn transmute_to_drawlist(&self, frame: &FrameDescription, dl: &mut crate::draw::DrawList) {
+    fn transmute_to_drawlist(&mut self, frame: &FrameDescription, dl: &mut crate::draw::DrawList) {
         use crate::draw::DrawCommand;
         let mut active_camera: Option<&super::camera::Camera> = None;
 
@@ -133,7 +142,7 @@ impl Renderer {
                 RenderCommand::EndWorld => {
                     active_camera = None;
                 }
-                RenderCommand::DrawQuad { rect, color } => {
+                RenderCommand::DrawQuad { rect, color: c } => {
                     let (pos, size) = if let Some(cam) = active_camera {
                         let p = cam.world_to_screen(rect.pos());
                         let s = rect.size() * cam.zoom;
@@ -141,7 +150,7 @@ impl Renderer {
                     } else {
                         (rect.pos(), rect.size())
                     };
-                    dl.add_rect(pos, size, *color);
+                    dl.add_rect(pos, size, *c);
                 }
                 RenderCommand::DrawTexturedQuad { rect, uv, texture: t } => {
                     let (pos, size) = if let Some(cam) = active_camera {
@@ -156,14 +165,29 @@ impl Renderer {
                 }
                 RenderCommand::DrawShape {
                     rect,
-                    color,
+                    color: c,
                     radii,
                     border,
                     glow,
                     elevation,
                     is_squircle,
-                    morph,
+                    morph: _,
+                    reflectivity,
+                    roughness,
+                    normal_map,
+                    distortion_strength,
+                    emissive_intensity,
+                    parallax_factor,
+                    id,
                 } => {
+                    let mut velocity = crate::core::Vec2::ZERO;
+                    if let Some(id_val) = id {
+                        if let Some(prev_pos) = self.velocity_cache.get(id_val) {
+                            velocity = rect.pos() - *prev_pos;
+                        }
+                        self.velocity_cache.insert(*id_val, rect.pos());
+                    }
+
                     let (bw, bc) = border.map(|b| (b.width, b.color)).unwrap_or((0.0, crate::core::ColorF::transparent()));
                     let (gs, gc) = glow.map(|g| (g.strength, g.color)).unwrap_or((0.0, crate::core::ColorF::transparent()));
 
@@ -171,7 +195,7 @@ impl Renderer {
                         rect.pos(),
                         rect.size(),
                         radii.as_array(),
-                        *color,
+                        *c,
                         *elevation,
                         *is_squircle,
                         bw,
@@ -180,7 +204,22 @@ impl Renderer {
                         gs,
                         gc,
                         None,
+                        *id,
+                        velocity,
+                        *reflectivity,
+                        *roughness,
+                        *normal_map,
+                        *distortion_strength,
+                        *emissive_intensity,
+                        *parallax_factor,
                     );
+                    
+                    // Update the last added command with velocity if we have an ID
+                    if id.is_some() {
+                        if let Some(crate::draw::DrawCommand::RoundedRect { velocity: v, .. }) = dl.commands_mut().last_mut() {
+                            *v = velocity;
+                        }
+                    }
                 }
                 RenderCommand::SetScissor(rect) => {
                     dl.push_clip(rect.pos(), rect.size());
@@ -192,6 +231,7 @@ impl Renderer {
     }
 
     // Temporary mock for Tracea optimization logic
+    #[allow(dead_code)]
     fn mock_tracea_optimize(&self, frame: &FrameDescription) -> Vec<DrawPacket> {
         // Simple 1-to-1 mapping for testing (very inefficient, but valid flow)
         let mut packets = Vec::new();

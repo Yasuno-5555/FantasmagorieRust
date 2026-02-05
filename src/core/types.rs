@@ -123,6 +123,7 @@ impl ColorF {
 
 /// HSV color (for ColorPicker)
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(dead_code)]
 pub struct HSV {
     pub h: f32, // 0-360
     pub s: f32, // 0-1

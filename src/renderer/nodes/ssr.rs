@@ -1,43 +1,50 @@
 use crate::renderer::graph::{RenderNode, RenderContext, ResourceHandle};
-use crate::backend::hal::{GpuExecutor, TextureDescriptor, TextureFormat, TextureUsage};
-use std::sync::Arc;
+use crate::backend::hal::GpuExecutor;
 
 pub struct SSRNode {
-    pub gbuffer_handle: ResourceHandle,
+    pub aux_handle: ResourceHandle,
     pub depth_handle: ResourceHandle,
-    pub hdr_handle: ResourceHandle, // Previous frame or current HDR
-    pub output_handle: Option<ResourceHandle>,
+    pub hdr_handle: ResourceHandle,
 }
 
 impl SSRNode {
-    pub fn new(gbuffer: ResourceHandle, depth: ResourceHandle, hdr: ResourceHandle) -> Self {
-        Self {
-            gbuffer_handle: gbuffer,
-            depth_handle: depth,
-            hdr_handle: hdr,
-            output_handle: None,
-        }
+    pub fn new(aux_handle: ResourceHandle, depth_handle: ResourceHandle, hdr_handle: ResourceHandle) -> Self {
+        Self { aux_handle, depth_handle, hdr_handle }
     }
 }
 
 impl<E: GpuExecutor> RenderNode<E> for SSRNode {
-    fn name(&self) -> &str { "SSR Pass" }
+    fn name(&self) -> &str {
+        "SSR"
+    }
 
-
-    fn execute(&mut self, ctx: &mut RenderContext<'_, E>) -> Result<(), String> {
-        // 1. Get Resources
-        let gbuffer = ctx.resources.get(&self.gbuffer_handle).ok_or("Missing GBuffer")?;
+    fn execute(
+        &mut self,
+        context: &mut RenderContext<'_, E>
+    ) -> Result<(), String> {
+        let executor = &mut *context.executor;
+        // Extract textures safely
+        // Extract textures safely - using explicit Clone::clone to avoid ambiguity if E::Texture is Arc
+        // Actually, if E::Texture implements Clone, t.clone() should works.
+        // But maybe compiler doesn't know t's type well?
+        // Let's rely on pattern matching to bind t.
+        // It seems the issue is type inference.
+        // Let's specify type on t.
         
-        // 2. Extract TextureView
-        let reflection_view = match gbuffer {
-            crate::renderer::graph::GraphResource::Texture(_, tex) => {
-                ctx.executor.create_texture_view(tex)?
-            },
-            _ => return Err("GBuffer must be a texture".to_string()),
-        };
+        let hdr_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&self.hdr_handle) { <E::Texture as Clone>::clone(t) } else { return Err("HDR not found".into()); };
+        let depth_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&self.depth_handle) { <E::Texture as Clone>::clone(t) } else { return Err("Depth not found".into()); };
+        let aux_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&self.aux_handle) { <E::Texture as Clone>::clone(t) } else { return Err("Aux not found".into()); };
+        let vel_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&crate::renderer::graph::VELOCITY_HANDLE) { <E::Texture as Clone>::clone(t) } else { return Err("Velocity not found".into()); };
+        let ref_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&crate::renderer::graph::REFLECTION_HANDLE) { <E::Texture as Clone>::clone(t) } else { return Err("Reflection output not found".into()); };
 
-        // 3. Pass to executor for global access
-        ctx.executor.set_reflection_texture(&reflection_view)?;
+        // Create Views
+        let hdr_view = executor.create_texture_view(&hdr_tex)?;
+        let depth_view = executor.create_texture_view(&depth_tex)?;
+        let aux_view = executor.create_texture_view(&aux_tex)?;
+        let vel_view = executor.create_texture_view(&vel_tex)?;
+        
+        // Draw SSR (Pass output texture directly)
+        executor.draw_ssr(&hdr_view, &depth_view, &aux_view, &vel_view, &ref_tex)?;
         
         Ok(())
     }

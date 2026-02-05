@@ -46,6 +46,11 @@ pub trait GraphicsBackend {
         None
     }
 
+    /// Get the LUT 3D texture
+    fn get_lut_texture(&self) -> Option<Self::Texture> { None }
+    /// Get the LDR texture
+    fn get_ldr_texture(&self) -> Option<Self::Texture> { None }
+
     /// Update audio spectrum data (Phase 5)
     fn update_audio_data(&mut self, _spectrum: &[f32]) {
         // Default no-op
@@ -53,6 +58,11 @@ pub trait GraphicsBackend {
 
     /// Set cinematic parameters
     fn set_cinematic_config(&mut self, _config: CinematicConfig) {
+        // Default no-op
+    }
+
+    /// Update the LUT 3D texture
+    fn update_lut_texture(&mut self, _data: &[f32], _size: u32) {
         // Default no-op
     }
 }

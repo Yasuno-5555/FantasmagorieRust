@@ -2,7 +2,7 @@
 //!
 //! Real-time audio spectrum analysis on the GPU.
 
-use tracea::runtime::manager::KernelArg; use tracea::doctor::BackendKind as DeviceBackend;
+use tracea::doctor::BackendKind as DeviceBackend;
 
 pub struct AudioKernel {
     pub backend: DeviceBackend,

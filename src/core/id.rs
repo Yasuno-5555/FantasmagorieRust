@@ -73,6 +73,7 @@ impl From<u64> for ID {
 
 /// ID stack for hierarchical widget identification
 #[derive(Default)]
+#[allow(dead_code)]
 pub struct IDStack {
     stack: Vec<ID>,
     current: ID,

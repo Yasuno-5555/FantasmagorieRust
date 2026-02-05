@@ -2,7 +2,7 @@
 //!
 //! Ultimate composition kernel using Wave Intrinsics for L1-only data sharing.
 
-use tracea::runtime::manager::KernelArg; use tracea::doctor::BackendKind as DeviceBackend;
+use tracea::doctor::BackendKind as DeviceBackend;
 
 pub struct ResolverKernel {
     pub backend: DeviceBackend,

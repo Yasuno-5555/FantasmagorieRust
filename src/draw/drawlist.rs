@@ -24,6 +24,15 @@ pub enum DrawCommand {
         glow_strength: f32,
         glow_color: ColorF,
         shader_inject: Option<String>,
+        id: Option<crate::core::ID>,
+        velocity: Vec2,
+        reflectivity: f32,
+        roughness: f32,
+        // 2D PBR & Distortion
+        normal_map: Option<u64>,
+        distortion_strength: f32,
+        emissive_intensity: f32,
+        parallax_factor: f32,
     },
 
     /// Text glyph (SDF)
@@ -98,6 +107,8 @@ pub enum DrawCommand {
         uv: [f32; 4],
         color: ColorF,
         radii: [f32; 4],
+        normal_map: Option<u64>,
+        distortion_strength: f32,
     },
 
     /// Gradient Rectangle
@@ -199,6 +210,11 @@ impl DrawList {
         &self.commands
     }
 
+    /// Get mutable commands slice
+    pub fn commands_mut(&mut self) -> &mut [DrawCommand] {
+        &mut self.commands
+    }
+
     /// Add rectangle (no rounding)
     pub fn add_rect(&mut self, pos: Vec2, size: Vec2, color: ColorF) {
         self.add_rounded_rect(pos, size, 0.0, color);
@@ -219,6 +235,14 @@ impl DrawList {
             glow_strength: 0.0,
             glow_color: ColorF::transparent(),
             shader_inject: None,
+            id: None,
+            velocity: Vec2::ZERO,
+            reflectivity: 0.0,
+            roughness: 0.5,
+            normal_map: None,
+            distortion_strength: 0.0,
+            emissive_intensity: 0.0,
+            parallax_factor: 0.0,
         });
     }
 
@@ -236,6 +260,14 @@ impl DrawList {
         glow_strength: f32,
         glow_color: ColorF,
         shader_inject: Option<String>,
+        id: Option<crate::core::ID>,
+        velocity: Vec2,
+        reflectivity: f32,
+        roughness: f32,
+        normal_map: Option<u64>,
+        distortion_strength: f32,
+        emissive_intensity: f32,
+        parallax_factor: f32,
     ) {
         self.commands.push(DrawCommand::RoundedRect {
             pos,
@@ -250,6 +282,14 @@ impl DrawList {
             glow_strength,
             glow_color,
             shader_inject,
+            id,
+            velocity,
+            reflectivity,
+            roughness,
+            normal_map,
+            distortion_strength,
+            emissive_intensity,
+            parallax_factor,
         });
     }
 
@@ -268,6 +308,14 @@ impl DrawList {
         glow_strength: f32,
         glow_color: ColorF,
         shader_inject: Option<String>,
+        id: Option<crate::core::ID>,
+        velocity: Vec2,
+        reflectivity: f32,
+        roughness: f32,
+        normal_map: Option<u64>,
+        distortion_strength: f32,
+        emissive_intensity: f32,
+        parallax_factor: f32,
     ) {
         self.commands.push(DrawCommand::RoundedRect {
             pos,
@@ -282,6 +330,14 @@ impl DrawList {
             glow_strength,
             glow_color,
             shader_inject,
+            id,
+            velocity,
+            reflectivity,
+            roughness,
+            normal_map,
+            distortion_strength,
+            emissive_intensity,
+            parallax_factor,
         });
     }
 
@@ -307,6 +363,14 @@ impl DrawList {
             0.0,
             ColorF::transparent(),
             None,
+            None,
+            Vec2::ZERO,
+            0.0,
+            0.5,
+            None,
+            0.0,
+            0.0,
+            0.0,
         );
     }
 
@@ -404,6 +468,8 @@ impl DrawList {
             uv,
             color,
             radii: [0.0, 0.0, 0.0, 0.0],
+            normal_map: None,
+            distortion_strength: 0.0,
         });
     }
 
@@ -415,6 +481,8 @@ impl DrawList {
         uv: [f32; 4],
         color: ColorF,
         radii: [f32; 4],
+        normal_map: Option<u64>,
+        distortion_strength: f32,
     ) {
         self.commands.push(DrawCommand::Image {
             pos,
@@ -423,6 +491,8 @@ impl DrawList {
             uv,
             color,
             radii,
+            normal_map,
+            distortion_strength,
         });
     }
 

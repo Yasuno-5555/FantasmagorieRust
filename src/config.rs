@@ -84,6 +84,16 @@ pub struct CinematicConfig {
     pub grain_strength: f32,
     /// LUT intensity
     pub lut_intensity: f32,
+    /// Depth-based blur radius
+    pub blur_radius: f32,
+    /// Motion blur strength
+    pub motion_blur_strength: f32,
+    /// Debug mode (0: None, 1: Velocity, 2: Normals, etc.)
+    pub debug_mode: u32,
+    /// Global Illumination intensity (Cone Tracing)
+    pub gi_intensity: f32,
+    /// Volumetric lighting intensity (God Rays)
+    pub volumetric_intensity: f32,
 }
 
 impl Default for CinematicConfig {
@@ -96,6 +106,11 @@ impl Default for CinematicConfig {
             vignette: 0.7,
             grain_strength: 0.05,
             lut_intensity: 0.0,
+            blur_radius: 0.0,
+            motion_blur_strength: 0.0,
+            debug_mode: 0,
+            gi_intensity: 0.5,
+            volumetric_intensity: 0.0,
         }
     }
 }
@@ -159,6 +174,9 @@ pub struct EngineConfig {
 
     /// Cinematic parameters (active only in Cinema mode)
     pub cinematic: CinematicConfig,
+
+    /// Internal resolution scale (e.g. 0.5 for 50% scale upsizing)
+    pub internal_resolution_scale: f32,
 }
 
 impl Default for EngineConfig {
@@ -182,6 +200,7 @@ impl EngineConfig {
             max_batches: 256,
             debug_mode: false,
             cinematic: CinematicConfig::default(),
+            internal_resolution_scale: 1.0,
         }
     }
 
@@ -199,6 +218,7 @@ impl EngineConfig {
             max_batches: 64, // Conservative batching
             debug_mode: false,
             cinematic: CinematicConfig::default(),
+            internal_resolution_scale: 1.0,
         }
     }
 
@@ -216,6 +236,7 @@ impl EngineConfig {
             max_batches: 4096,
             debug_mode: false,
             cinematic: CinematicConfig::default(),
+            internal_resolution_scale: 1.0,
         }
     }
 
@@ -352,6 +373,21 @@ impl EngineConfigBuilder {
 
     pub fn with_grain(mut self, grain: f32) -> Self {
         self.config.cinematic.grain_strength = grain;
+        self
+    }
+
+    pub fn with_gi(mut self, intensity: f32) -> Self {
+        self.config.cinematic.gi_intensity = intensity;
+        self
+    }
+
+    pub fn with_volumetrics(mut self, intensity: f32) -> Self {
+        self.config.cinematic.volumetric_intensity = intensity;
+        self
+    }
+
+    pub fn resolution_scale(mut self, scale: f32) -> Self {
+        self.config.internal_resolution_scale = scale;
         self
     }
 

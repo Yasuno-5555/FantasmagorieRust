@@ -2,7 +2,7 @@
 //! 
 //! Handles GPU high-resolution timestamps and per-kernel execution metrics.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+
 
 /// Kernel execution metrics shared between GPU and CPU
 /// Synchronized via buffer mapping or atomics

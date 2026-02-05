@@ -8,13 +8,14 @@
 use bytemuck::{Pod, Zeroable};
 
 /// Global Uniforms - bound once per frame (Uniform Buffer)
+/// Must match WGSL struct layout (80 bytes)
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GlobalUniforms {
-    pub projection: [[f32; 4]; 4],
-    pub viewport_size: [f32; 2],
-    pub time: f32,
-    pub _pad: f32,
+    pub projection: [[f32; 4]; 4], // 64 bytes at offset 0
+    pub time: f32,                  // 4 bytes at offset 64
+    pub _pad0: f32,                 // 4 bytes at offset 68 (padding for vec2 alignment to 8 bytes)
+    pub viewport_size: [f32; 2],    // 8 bytes at offset 72 -> total 80 bytes
 }
 
 /// Cinematic post-processing parameters
@@ -31,7 +32,12 @@ pub struct CinematicParams {
     pub time: f32,
     pub lut_intensity: f32,
     pub blur_radius: f32,
-    pub _pad: [f32; 2],
+    pub motion_blur_strength: f32,
+    pub debug_mode: u32,
+    pub light_pos: [f32; 2],
+    pub gi_intensity: f32,
+    pub volumetric_intensity: f32,
+    pub light_color: [f32; 4],
 }
 
 impl Default for CinematicParams {
@@ -47,7 +53,12 @@ impl Default for CinematicParams {
             time: 0.0,
             lut_intensity: 1.0,
             blur_radius: 0.0,
-            _pad: [0.0; 2],
+            motion_blur_strength: 0.0,
+            debug_mode: 0,
+            light_pos: [500.0, 300.0],
+            gi_intensity: 0.5,       // Default GI strength
+            volumetric_intensity: 0.0, // Default off for now
+            light_color: [1.0, 0.9, 0.7, 1.0],
         }
     }
 }
@@ -81,6 +92,8 @@ pub struct ShapeInstance {
     pub rect: [f32; 4],
     /// tl, tr, br, bl
     pub radii: [f32; 4],
+    /// rgba fill color
+    pub color: [f32; 4],
     /// rgba
     pub border_color: [f32; 4],
     /// rgba
@@ -89,6 +102,10 @@ pub struct ShapeInstance {
     pub params1: [f32; 4],
     /// mode, is_squircle, _r1, _r2
     pub params2: [i32; 4],
+    /// velocity_x, velocity_y, reflectivity, roughness
+    pub material: [f32; 4],
+    /// normal_map_id (i32), distortion, emissive_intensity, parallax_factor
+    pub pbr_params: [f32; 4],
 }
 
 /// Per-draw uniforms - legacy/fallback path

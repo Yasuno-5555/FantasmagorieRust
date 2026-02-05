@@ -25,7 +25,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window = Arc::new(window);
     
     // Metal Backend Setup
-    let mut backend = MetalBackend::new().unwrap();
+    let config = fanta_rust::config::EngineConfig::builder()
+        .cinematic(fanta_rust::config::CinematicConfig::default())
+        .resolution_scale(0.5)
+        .build();
+    let mut backend = MetalBackend::new_with_config(config).unwrap();
     
     // CAMetalLayer setup
     unsafe {

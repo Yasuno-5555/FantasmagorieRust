@@ -179,48 +179,30 @@ fn cone_trace_gi(pixel_pos: vec2<f32>, normal: vec2<f32>, rng_seed: vec2<f32>) -
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // 1. Lens Distortion & Chromatic Aberration using Texture Coordinates
-    let uv_centered = in.uv - 0.5;
-    let r2 = dot(uv_centered, uv_centered);
+fn fs_lighting(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Standard UV
+    let uv = in.uv;
     
-    // Distortion (Barrel/Pincushion)
-    // We rely on t_extra or just parameters. extra.y is currently dist_strength.
-    // Let's use auxiliary or uniform if needed, or stick to simple param.
-    // Using simple cubic distortion for cinematic feel.
-    let k = -0.1 * cinema.vignette_intensity; // Subtle barrel
-    let dist_uv = in.uv + uv_centered * (k * r2 + k * r2 * r2);
+    // Sample G-Buffers (Clean UVs)
+    let hdr_color = textureSample(t_hdr, s_hdr, uv).rgb;
+    let bloom_color = textureSample(t_bloom, s_hdr, uv).rgb; // Apply bloom here or later? If later, we need to pass it. 
+    // Usually Bloom is applied to the final image. But if we upscale, we might want bloom after upscale?
+    // Creating bloom from Low Res is faster. Let's assume Bloom is applied during Post for high quality?
+    // But we are generating bloom from lighting result... 
+    // Wait, the current architecture has "Bloom" as an input to Resolve.
+    // If we split, LightingPass generates the content that Bloom is based on.
+    // So LightingPass -> "SceneColor". Then BloomPass reads "SceneColor".
+    // Then PostPass reads "SceneColor" and "Bloom".
+    // So LightingPass should NOT apply bloom.
     
-    // Chromatic Aberration (Spectral separation)
-    let ca_amount = cinema.ca_strength * r2 * 2.0;
-    
-    // Check bounds to avoid streaking edges
-    if (dist_uv.x < 0.0 || dist_uv.x > 1.0 || dist_uv.y < 0.0 || dist_uv.y > 1.0) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-
-    let r_uv = dist_uv - vec2<f32>(ca_amount, 0.0);
-    let g_uv = dist_uv;
-    let b_uv = dist_uv + vec2<f32>(ca_amount, 0.0);
-
-    let r_col = textureSample(t_hdr, s_hdr, r_uv).r;
-    let g_col = textureSample(t_hdr, s_hdr, g_uv).g;
-    let b_col = textureSample(t_hdr, s_hdr, b_uv).b;
-    let hdr_color = vec3<f32>(r_col, g_col, b_col);
-    
-    let bloom_color = textureSample(t_bloom, s_hdr, dist_uv).rgb;
-    let reflection = textureSample(t_reflection, s_hdr, dist_uv).rgb;
-    
-    // Auxiliary Sampling (No distortion on G-buffer usually, but for consistency maybe? Usually post-proc is on final image, so aux aligned with screen)
-    // Actually, lighting should happen in world space/screen space BEFORE distortion technically, but for single pass resolve, we accept the artifact or distort everything.
-    // Let's sample AUX with distortion to match heavy lens effects.
-    let aux = textureSample(t_aux, s_hdr, g_uv); 
-    let extra = textureSample(t_extra, s_hdr, g_uv);
+    let reflection = textureSample(t_reflection, s_hdr, uv).rgb;
+    let aux = textureSample(t_aux, s_hdr, uv); 
+    let extra = textureSample(t_extra, s_hdr, uv);
     
     let normal_xy = aux.xy - 0.5;
     let emissive_boost = extra.z;
     
-    // --- Phase 2 & 3: Lighting ---
+    // --- Lighting Calculations ---
     let pixel_pos = in.uv * vec2<f32>(textureDimensions(t_hdr));
     let shadow = raymarch_shadow(pixel_pos, cinema.light_pos);
     
@@ -234,39 +216,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (length(trace_dir) < 0.1) { trace_dir = vec2<f32>(0.0, -1.0); }
     trace_dir = normalize(trace_dir);
     
-    let gi = cone_trace_gi(pixel_pos, trace_dir, in.uv); // Utilize Undistorted UV for GI trace consistency? Or distorted?
-    // Using distorted UV for screen sampling is correct if we want lens effect to apply to everything.
+    let gi = cone_trace_gi(pixel_pos, trace_dir, uv);
     
     // Combine
     let diffuse = hdr_color * (0.2 + 0.8 * direct_light + gi); 
-    let combined = diffuse + reflection + bloom_color * cinema.bloom_intensity + emissive_boost + volumetrics;
+    let combined = diffuse + reflection + emissive_boost + volumetrics;
     
-    // Exposure
-    let exposed = combined * cinema.exposure;
-    
-    // Tone Mapping
-    var tonemapped = exposed;
-    if (cinema.tonemap_mode == 1u) {
-        tonemapped = aces_approx(exposed);
-    }
-    
-    // LUT Grading
-    // Apply LUT to the tonemapped result
-    // Assuming LUT is standard sRGB/Rec709 domain
-    let lut_color = sample_lut(tonemapped);
-    let graded = mix(tonemapped, lut_color, cinema.lut_intensity);
-    
-    // Film Grain & Vignette
-    // Grain
-    let noise = fract(sin(dot(in.uv * (cinema.time + 1.0), vec2<f32>(12.9898, 78.233))) * 43758.5453);
-    let grainy = graded + (noise - 0.5) * cinema.grain_strength;
-    
-    // Vignette (Falloff)
-    let vign = 1.0 - smoothstep(0.4, 1.4, length(uv_centered) * (1.0 + cinema.vignette_intensity));
-    let final_color = grainy * vign;
-
-    // Gamma Correction
-    let out_color = pow(final_color, vec3<f32>(1.0 / 2.2));
-    
-    return vec4<f32>(out_color, 1.0);
+    // Output Linear HDR
+    return vec4<f32>(combined, 1.0);
 }

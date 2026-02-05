@@ -1,4 +1,4 @@
-use crate::backend::hal::{GpuExecutor, TextureDescriptor, TextureFormat, TextureUsage, BufferUsage};
+use crate::backend::hal::{GpuExecutor, TextureDescriptor, TextureUsage, BufferUsage};
 use crate::backend::shaders::types::BlurParams;
 use crate::renderer::graph::{RenderNode, RenderContext, GraphResource, BACKDROP_HANDLE};
 use bytemuck::bytes_of;
@@ -26,6 +26,7 @@ impl<E: GpuExecutor> RenderNode<E> for BlurNode {
             label: Some("Blur Intermediate"),
             width: ctx.width,
             height: ctx.height,
+            depth: 1,
             format: backdrop_desc.format,
             usage: TextureUsage::TEXTURE_BINDING | TextureUsage::STORAGE_BINDING | TextureUsage::COPY_DST,
         };
@@ -66,16 +67,14 @@ impl<E: GpuExecutor> RenderNode<E> for BlurNode {
             let output_view = ctx.executor.create_texture_view(&intermediate_tex)?;
 
             // Bind Group
+            use crate::backend::hal::{BindGroupEntry, BindingResource};
             let bind_group = ctx.executor.create_bind_group(
                 &layout,
-                &[&buf_h], // Buffer 0 (Param)
-                &[&input_view, &output_view], // Tex 1 (Input), Tex 2 (Output) (Assuming Bindings 0,1,2 map to Buffer0, Tex0, Tex1 by HAL? 
-                // Wait, WGPU create_bind_group iterates buffers then textures.
-                // So Buffer -> Binding 0 (matches shader @binding(0))
-                // Texture1 -> Binding 1 (matches shader @binding(1))
-                // Texture2 -> Binding 2 (matches shader @binding(2))
-                // Correct.
-                &[]
+                &[
+                    BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&buf_h) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::Texture(&input_view) },
+                    BindGroupEntry { binding: 2, resource: BindingResource::Texture(&output_view) },
+                ]
             )?;
 
             ctx.executor.dispatch(&pipeline, Some(&bind_group), groups, &[])?;
@@ -100,11 +99,14 @@ impl<E: GpuExecutor> RenderNode<E> for BlurNode {
             let output_view = ctx.executor.create_texture_view(backdrop_tex)?; // Output is original backdrop
 
             // Bind Group
+            use crate::backend::hal::{BindGroupEntry, BindingResource};
             let bind_group = ctx.executor.create_bind_group(
                 &layout,
-                &[&buf_v],
-                &[&input_view, &output_view],
-                &[]
+                &[
+                    BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&buf_v) },
+                    BindGroupEntry { binding: 1, resource: BindingResource::Texture(&input_view) },
+                    BindGroupEntry { binding: 2, resource: BindingResource::Texture(&output_view) },
+                ]
             )?;
 
             ctx.executor.dispatch(&pipeline, Some(&bind_group), groups, &[])?;

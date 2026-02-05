@@ -12,19 +12,26 @@ impl MetalResourceProvider {
     }
 
     pub fn create_buffer(&self, size: u64, usage: BufferUsage, _label: &str) -> Result<Buffer, String> {
-        let options = match usage {
-            BufferUsage::Vertex | BufferUsage::Uniform | BufferUsage::Index => MTLResourceOptions::StorageModeShared,
-            BufferUsage::Storage => MTLResourceOptions::StorageModePrivate,
-            BufferUsage::CopySrc | BufferUsage::CopyDst => MTLResourceOptions::StorageModeShared,
-        };
+        let mut options = MTLResourceOptions::StorageModeShared;
+        // Optimization: Use Private storage for GPU-only data (Storage/Vertex) if no CPU access (CopyDst/Uniform) is needed.
+        if usage.contains(BufferUsage::Storage) && !usage.contains(BufferUsage::CopyDst) && !usage.contains(BufferUsage::Uniform) {
+            options = MTLResourceOptions::StorageModePrivate;
+        }
         
         Ok(self.device.new_buffer(size, options))
     }
 
-    pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<Texture, String> {
         let mtl_desc = metal::TextureDescriptor::new();
         mtl_desc.set_width(desc.width as u64);
         mtl_desc.set_height(desc.height as u64);
+        mtl_desc.set_depth(desc.depth as u64);
+        
+        if desc.depth > 1 {
+            mtl_desc.set_texture_type(MTLTextureType::D3);
+        } else {
+            mtl_desc.set_texture_type(MTLTextureType::D2);
+        }
+
         mtl_desc.set_pixel_format(match desc.format {
             crate::backend::hal::TextureFormat::R8Unorm => MTLPixelFormat::R8Unorm,
             crate::backend::hal::TextureFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,

@@ -7,7 +7,7 @@
 
 pub mod types;
 
-use types::*;
+
 
 /// Embedded shader sources (GLSL)
 pub mod sources {

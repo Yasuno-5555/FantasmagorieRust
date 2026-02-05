@@ -14,6 +14,23 @@ impl<E: GpuExecutor> RenderNode<E> for ResolveNode {
             ctx.executor.set_reflection_texture(&view)?;
         }
         
+        use crate::renderer::graph::{VELOCITY_HANDLE, SDF_HANDLE};
+        if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&VELOCITY_HANDLE) {
+            let view = ctx.executor.create_texture_view(tex)?;
+            ctx.executor.set_velocity_view(&view)?;
+        }
+        
+        if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&SDF_HANDLE) {
+            let view = ctx.executor.create_texture_view(tex)?;
+            ctx.executor.set_sdf_view(&view)?;
+        }
+
+        use crate::renderer::graph::{LUT_HANDLE};
+        if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&LUT_HANDLE) {
+            let view = ctx.executor.create_texture_view(tex)?;
+            ctx.executor.set_lut_view(&view)?;
+        }
+        
         ctx.executor.resolve()
     }
 }
@@ -28,6 +45,7 @@ impl<E: GpuExecutor> RenderNode<E> for CaptureNode {
             label: Some("Backdrop"),
             width: ctx.width,
             height: ctx.height,
+            depth: 1,
             format: TextureFormat::Rgba8Unorm, // Assuming standard format
             usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING | TextureUsage::STORAGE_BINDING,
         };

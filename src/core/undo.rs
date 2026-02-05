@@ -240,7 +240,7 @@ impl CommandStack {
     pub fn undo(&mut self) -> Option<&str> {
         if let Some(mut cmd) = self.undo_stack.pop_back() {
             cmd.undo();
-            let desc = cmd.description().to_string();
+            let _desc = cmd.description().to_string();
             self.redo_stack.push(cmd);
             Some(
                 self.redo_stack
@@ -257,7 +257,7 @@ impl CommandStack {
     pub fn redo(&mut self) -> Option<&str> {
         if let Some(mut cmd) = self.redo_stack.pop() {
             cmd.execute();
-            let desc = cmd.description().to_string();
+            let _desc = cmd.description().to_string();
             self.undo_stack.push_back(cmd);
             Some(
                 self.undo_stack

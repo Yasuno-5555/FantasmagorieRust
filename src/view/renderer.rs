@@ -75,6 +75,11 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             view.glow_strength.get(),
             view.glow_color.get(),
             view.custom_shader.get().map(|s| s.to_string()),
+            None,
+            Vec2::ZERO,
+            0.0,
+            0.5,
+            None, 0.0, 0.0, 0.0,
         );
     }
 
@@ -131,6 +136,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
                     [0.0, 0.0, 1.0, 1.0], // Full UV
                     view.fg_color.get(),  // Use fg_color for tint
                     radii,
+                    None, 0.0,
                 );
             }
         }
@@ -260,6 +266,11 @@ fn render_button(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         view.glow_strength.get(),
         view.glow_color.get(),
         None,
+        None,
+        Vec2::ZERO,
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // Render Label and Icon (Centered)
@@ -783,6 +794,11 @@ fn render_slider(view: &ViewHeader, dl: &mut DrawList) {
         0.0,
         ColorF::transparent(),
         None,
+        None,
+        Vec2::ZERO,
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 }
 
@@ -806,12 +822,17 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager)
             0.0,
             ColorF::transparent(),
             None,
+            None,
+            Vec2::ZERO,
+            0.0,
+            0.5,
+            None, 0.0, 0.0, 0.0,
         );
     }
 
     // Render text with padding
     let padding = 8.0;
-    let mut text_pos = Vec2::new(
+    let text_pos = Vec2::new(
         rect.x + padding,
         rect.y + (rect.h - view.font_size.get()) * 0.5,
     );
@@ -1140,7 +1161,7 @@ fn render_curve_editor(view: &ViewHeader, dl: &mut DrawList) {
         let (mx, my) = interaction::mouse_pos();
 
         let curve_idx = data.active_curve_idx;
-        let mut curve = &mut data.curves[curve_idx];
+        let curve = &mut data.curves[curve_idx];
 
         // Interaction
         thread_local! {
@@ -1440,8 +1461,13 @@ fn render_fader(view: &ViewHeader, dl: &mut DrawList) {
         } else {
             0.0
         }, // Glow when dragging
-        view.fg_color.get(),
-        None,
+        view.fg_color.get().with_alpha(0.5),
+        None, // custom_shader
+        None, // id
+        Vec2::ZERO, // velocity
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // Handle Center Line (White)
@@ -1624,6 +1650,11 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, fm: &mut FontM
         },
         view.fg_color.get().with_alpha(0.5),
         None,
+        None,
+        Vec2::ZERO,
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // 2. Header
@@ -1641,6 +1672,11 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, fm: &mut FontM
         0.0,
         ColorF::transparent(),
         None,
+        None,
+        Vec2::ZERO,
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // 3. Title
@@ -1746,6 +1782,11 @@ fn render_context_menu(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mu
         view.glow_strength.get(),
         view.glow_color.get(),
         None,
+        None,
+        Vec2::ZERO,
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // 4. Render children (menu items)
@@ -1853,6 +1894,11 @@ fn render_collapsible(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut
         0.0,
         ColorF::transparent(),
         None,
+        None,
+        Vec2::ZERO,
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // 2. Header bar - use simple rounded rect
@@ -1960,7 +2006,12 @@ fn render_toast(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         Vec2::ZERO,
         2.0, // Subtle glow
         view.glow_color.get().with_alpha(0.3 * alpha),
-        None,
+        None, // custom_shader
+        Some(view.id.get()), // id
+        Vec2::ZERO, // velocity
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // Color indicator bar on left
@@ -2016,6 +2067,11 @@ fn render_tooltip(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
             glow_strength,
             view.glow_color.get().with_alpha(0.5 * alpha),
             None,
+            None,
+            Vec2::ZERO,
+            0.0,
+            0.5,
+            None, 0.0, 0.0, 0.0,
         );
     }
 
@@ -2035,6 +2091,11 @@ fn render_tooltip(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         0.0,
         ColorF::transparent(),
         None,
+        None,
+        Vec2::ZERO,
+        0.0,
+        0.5,
+        None, 0.0, 0.0, 0.0,
     );
 
     // Text
@@ -2490,8 +2551,8 @@ fn render_math_node(
         }
         MathNode::Sqrt(inner) => {
             let is = measure(inner, fm, size);
-            let bar_h = 1.0;
-            let roof_y = pos.y; // Top
+            let _bar_h = 1.0;
+            let _roof_y = pos.y; // Top
                                 // Draw root symbol (simplified as lines)
                                 //  \/
                                 //  /

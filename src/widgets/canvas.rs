@@ -51,7 +51,7 @@ impl<'a> CanvasBuilder<'a> {
             }
 
             // Zooming: Mouse wheel
-            let (scroll_x, scroll_y) = crate::view::interaction::get_scroll_delta();
+            let (_scroll_x, scroll_y) = crate::view::interaction::get_scroll_delta();
             if scroll_y != 0.0 {
                 let old_zoom = zoom;
                 zoom *= 1.1f32.powf(scroll_y / 30.0);
@@ -74,7 +74,7 @@ impl<'a> CanvasBuilder<'a> {
     }
 
     /// Convenience for immediate mode closure
-    pub fn build_with<F>(self, f: F) -> &'a ViewHeader<'a>
+    pub fn build_with<F>(self, _f: F) -> &'a ViewHeader<'a>
     where
         F: FnOnce(),
     {

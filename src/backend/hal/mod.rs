@@ -3,17 +3,30 @@
 //! This module defines the common traits and types that all Fantasmagorie backends
 //! must implement to ensure structural parity and modularity.
 
-use std::sync::Arc;
 
 /// Common GPU Resource types (Backend-agnostic descriptors)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BufferUsage {
-    Vertex,
-    Index,
-    Uniform,
-    Storage,
-    CopySrc,
-    CopyDst,
+pub struct BufferUsage(pub u32);
+
+#[allow(non_upper_case_globals)]
+impl BufferUsage {
+    pub const Vertex: Self = Self(1 << 0);
+    pub const Index: Self = Self(1 << 1);
+    pub const Uniform: Self = Self(1 << 2);
+    pub const Storage: Self = Self(1 << 3);
+    pub const CopySrc: Self = Self(1 << 4);
+    pub const CopyDst: Self = Self(1 << 5);
+    
+    pub fn contains(&self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
+
+impl std::ops::BitOr for BufferUsage {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,11 +38,12 @@ pub enum TextureFormat {
     Rgba16Float,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct TextureDescriptor {
     pub label: Option<&'static str>,
     pub width: u32,
     pub height: u32,
+    pub depth: u32, // Default 1 for 2D
     pub format: TextureFormat,
     pub usage: TextureUsage,
 }
@@ -45,17 +59,35 @@ bitflags::bitflags! {
     }
 }
 
+pub enum BindingResource<'a, E: GpuExecutor + ?Sized> {
+    Buffer(&'a E::Buffer),
+    Texture(&'a E::TextureView),
+    Sampler(&'a E::Sampler),
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UpscaleParams {
+    pub jitter_x: f32,
+    pub jitter_y: f32,
+    pub reset_history: bool,
+}
+
+pub struct BindGroupEntry<'a, E: GpuExecutor + ?Sized> {
+    pub binding: u32,
+    pub resource: BindingResource<'a, E>,
+}
+
 /// GpuExecutor - The unified "Muscle" that provides resources, pipelines, and executes primitive GPU operations.
 /// All logic for "how to render a frame" is moved to the Orchestrator.
 pub trait GpuExecutor: Send + Sync {
     type Buffer: Send + Sync;
-    type Texture: Send + Sync;
-    type TextureView: Send + Sync;
-    type Sampler: Send + Sync;
-    type RenderPipeline: Send + Sync;
-    type ComputePipeline: Send + Sync;
-    type BindGroupLayout: Send + Sync;
-    type BindGroup: Send + Sync;
+    type Texture: Send + Sync + Clone + std::fmt::Debug;
+    type TextureView: Send + Sync + Clone + std::fmt::Debug;
+    type Sampler: Send + Sync + Clone + std::fmt::Debug;
+    type RenderPipeline: Send + Sync + Clone + std::fmt::Debug;
+    type ComputePipeline: Send + Sync + Clone + std::fmt::Debug;
+    type BindGroupLayout: Send + Sync + Clone + std::fmt::Debug;
+    type BindGroup: Send + Sync + Clone + std::fmt::Debug;
 
     // --- Resource Management ---
     fn create_buffer(&self, size: u64, usage: BufferUsage, label: &str) -> Result<Self::Buffer, String>;
@@ -110,7 +142,7 @@ pub trait GpuExecutor: Send + Sync {
 
     /// Perform an instanced draw call with MRT (Main + Aux/Normal)
     fn draw_instanced_gbuffer(
-        &self,
+        &mut self,
         pipeline: &Self::RenderPipeline,
         bind_group: Option<&Self::BindGroup>,
         vertex_buffer: &Self::Buffer,
@@ -118,6 +150,25 @@ pub trait GpuExecutor: Send + Sync {
         vertex_count: u32,
         instance_count: u32,
         aux_view: &Self::TextureView,
+        velocity_view: &Self::TextureView,
+        depth_view: &Self::TextureView,
+    ) -> Result<(), String>;
+
+    /// Draw particles (Additive/Alpha, LoadOp::Load)
+    fn draw_particles(
+        &mut self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: &Self::BindGroup,
+        particle_count: u32,
+    ) -> Result<(), String>;
+
+    fn draw_ssr(
+        &mut self,
+        hdr_view: &Self::TextureView,
+        depth_view: &Self::TextureView,
+        aux_view: &Self::TextureView,
+        velocity_view: &Self::TextureView,
+        output_texture: &Self::Texture,
     ) -> Result<(), String>;
 
     /// Dispatch a compute kernel
@@ -142,30 +193,50 @@ pub trait GpuExecutor: Send + Sync {
     /// Copy current framebuffer content to a texture
     fn copy_framebuffer_to_texture(&self, dst: &Self::Texture) -> Result<(), String>;
 
+    /// Apply motion blur effect
+    fn draw_motion_blur(
+        &self,
+        dst_view: &Self::TextureView,
+        src_view: &Self::TextureView,
+        vel_view: &Self::TextureView,
+        strength: f32,
+    ) -> Result<(), String>;
+
     /// Acquire a transient texture from the backend's pool
     fn acquire_transient_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String>;
     
 
     /// Release a transient texture back to the backend's pool
-    fn release_transient_texture(&self, texture: Self::Texture, desc: &TextureDescriptor);
+    fn release_transient_texture(&self, _texture: Self::Texture, desc: &TextureDescriptor);
 
     fn create_bind_group(
         &self,
         layout: &Self::BindGroupLayout,
-        buffers: &[&Self::Buffer],
-        textures: &[&Self::TextureView],
-        samplers: &[&Self::Sampler],
+        entries: &[BindGroupEntry<Self>],
     ) -> Result<Self::BindGroup, String>;
 
-    // --- Standard Resource Access ---
     /// Get the standard font atlas texture view
     fn get_font_view(&self) -> &Self::TextureView;
 
     /// Get the current backdrop texture view
     fn get_backdrop_view(&self) -> &Self::TextureView;
 
+    /// Get the primary HDR texture (if managed by backend)
+    fn get_hdr_texture(&self) -> Option<Self::Texture>;
+
+    /// Get the backdrop texture (if managed by backend)
+    fn get_backdrop_texture(&self) -> Option<Self::Texture>;
+
+    fn get_extra_texture(&self) -> Option<Self::Texture>;
+    fn get_aux_texture(&self) -> Option<Self::Texture>;
+    fn get_velocity_texture(&self) -> Option<Self::Texture>;
+    fn get_depth_texture(&self) -> Option<Self::Texture>;
+
     /// Get the default bind group layout (for standard draw commands)
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout;
+    
+    /// Get the instanced bind group layout.
+    fn get_instanced_bind_group_layout(&self) -> &Self::BindGroupLayout;
 
     /// Get the default render pipeline
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline;
@@ -173,10 +244,29 @@ pub trait GpuExecutor: Send + Sync {
     /// Get the instanced render pipeline (for batched shapes)
     fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline;
     fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline;
+    /// Get a dummy storage buffer (e.g. for empty instance lists)
+    fn get_dummy_storage_buffer(&self) -> &Self::Buffer;
 
-    fn set_reflection_texture(&mut self, texture: &Self::TextureView) -> Result<(), String> {
+    fn set_reflection_texture(&mut self, _texture: &Self::TextureView) -> Result<(), String> {
         Ok(())
     }
+    fn set_velocity_view(&mut self, _view: &Self::TextureView) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_sdf_view(&mut self, _view: &Self::TextureView) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_lut_view(&mut self, _view: &Self::TextureView) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn get_lut_texture(&self) -> Option<Self::Texture>;
+
+
+    fn draw_lighting_pass(&mut self, output_view: &Self::TextureView) -> Result<(), String>;
+    fn draw_post_process_pass(&mut self, input_view: &Self::TextureView, output_view: Option<&Self::TextureView>) -> Result<(), String>;
+    fn draw_fxaa_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String>;
+    fn upscale(&mut self, input: &Self::TextureView, output: &Self::TextureView, params: UpscaleParams) -> Result<(), String>;
 
     /// Get the default sampler
     fn get_default_sampler(&self) -> &Self::Sampler;
@@ -191,6 +281,7 @@ pub trait GpuExecutor: Send + Sync {
     fn create_compute_pipeline(&self, shader_name: &str, shader_source: &str, entry_point: Option<&str>) -> Result<Self::ComputePipeline, String>;
     
     fn get_compute_pipeline_layout(&self, pipeline: &Self::ComputePipeline, index: u32) -> Result<Self::BindGroupLayout, String>;
+    fn get_render_pipeline_layout(&self, pipeline: &Self::RenderPipeline, index: u32) -> Result<Self::BindGroupLayout, String>;
 
     // --- Global Operations ---
     /// Perform final resolve/composition pass
@@ -201,6 +292,8 @@ pub trait GpuExecutor: Send + Sync {
 
     /// Check if the backend requires a Y-flip in projection (UI space to NDC)
     fn y_flip(&self) -> bool;
+
+    fn get_cinematic_buffer(&self) -> &Self::Buffer;
 }
 
 /// A single step in the rendering process

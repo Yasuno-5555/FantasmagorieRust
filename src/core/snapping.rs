@@ -28,12 +28,12 @@ impl Default for SnapContext {
     }
 }
 
-pub fn snap_value(val: f32, step: f32, threshold: f32) -> (f32, bool) {
+pub fn snap_value(val: f32, step: f32, _threshold: f32) -> (f32, bool) {
     if step <= 0.0001 {
         return (val, false);
     }
     let rounded = (val / step).round() * step;
-    let dist = (val - rounded).abs();
+    let _dist = (val - rounded).abs();
     // For grid snapping, we usually ALWAYS snap if enabled, ignoring threshold?
     // Or we only snap if close?
     // Usually Grid Snap is continuous discrete steps.

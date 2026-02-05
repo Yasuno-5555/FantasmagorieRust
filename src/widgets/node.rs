@@ -48,7 +48,7 @@ impl<'a> NodeBuilder<'a> {
         self
     }
 
-    pub fn build(mut self) -> &'a ViewHeader<'a> {
+    pub fn build(self) -> &'a ViewHeader<'a> {
         self.view.text.set(self.title);
 
         // Node dragging logic
