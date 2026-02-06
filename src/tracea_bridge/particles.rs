@@ -37,8 +37,10 @@ pub struct SimParams {
     pub count: u32,
     pub width: u32,
     pub height: u32,
+    pub _pad0: u32, // Pad to 32-byte alignment for attractor_pos
     pub attractor_pos: [f32; 2],
     pub attractor_strength: f32,
+    pub _pad1: u32, // Rounding to 48 bytes
 }
 
 pub struct TraceaParticleKernel {
@@ -123,6 +125,8 @@ impl TraceaParticleKernel {
             height: 1080,
             attractor_pos: [0.0, 0.0],
             attractor_strength: 0.0,
+            _pad0: 0,
+            _pad1: 0,
         };
         let device = self.device.as_ref().unwrap();
         let params_buffer = device.new_buffer_with_data(
@@ -168,6 +172,8 @@ impl TraceaParticleKernel {
             height: 1080,
             attractor_pos: attractor,
             attractor_strength: 1000.0,
+            _pad0: 0,
+            _pad1: 0,
         };
         let device = self.device.as_ref().unwrap();
         let params_buffer = device.new_buffer_with_data(
@@ -316,8 +322,10 @@ impl TraceaParticleKernel {
                 count: self.count as u32,
                 width: 1920,
                 height: 1080,
+                _pad0: 0,
                 attractor_pos: attractor,
                 attractor_strength: 1000.0,
+                _pad1: 0,
             };
             queue.write_buffer(&state.params_buffer, 0, bytemuck::bytes_of(&params));
             
@@ -371,12 +379,16 @@ impl TraceaParticleKernel {
     pub fn new(context: &TraceaContext, count: usize) -> Result<Self, String> {
         #[cfg(feature = "metal")]
         {
-             return Self::new_metal(context, count);
+            if context.is_ready() {
+                return Self::new_metal(context, count);
+            }
         }
         
-        #[cfg(all(feature = "wgpu", not(feature = "metal")))]
-        if context.is_ready() {
-             return Self::new_wgpu(context, count);
+        #[cfg(feature = "wgpu")]
+        {
+            if context.is_ready() {
+                return Self::new_wgpu(context, count);
+            }
         }
         
         Err("No active backend context for Tracea particles".into())

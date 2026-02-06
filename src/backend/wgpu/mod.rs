@@ -113,7 +113,7 @@ pub struct WgpuBackend {
 
     pub current_encoder: Mutex<Option<wgpu::CommandEncoder>>,
     pub current_texture: Mutex<Option<wgpu::SurfaceTexture>>,
-    pub current_view: Mutex<Option<wgpu::TextureView>>,
+    pub current_view: Mutex<Option<Arc<wgpu::TextureView>>>,
     
     pub start_time: std::time::Instant,
     
@@ -327,10 +327,15 @@ impl GpuExecutor for WgpuBackend {
             None
         };
 
+        let mut vertex_buffers = Vec::new();
+        if !(label.contains("Particle") || label.contains("Resolve") || label.contains("Blur") || label.contains("Bright") || label.contains("SSR")) {
+            vertex_buffers.push(Vertex::desc());
+        }
+
         Ok(Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: layout_ref,
-            vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[Vertex::desc()] },
+            vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &vertex_buffers },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
@@ -374,7 +379,7 @@ impl GpuExecutor for WgpuBackend {
 
     fn begin_execute(&self) -> Result<(), String> {
         let output = self.surface.get_current_texture().map_err(|e| e.to_string())?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = Arc::new(output.texture.create_view(&wgpu::TextureViewDescriptor::default()));
         *self.current_texture.lock().unwrap() = Some(output);
         *self.current_view.lock().unwrap() = Some(view);
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Frame Encoder") });
@@ -931,12 +936,14 @@ impl GpuExecutor for WgpuBackend {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(hdr) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.bloom_views[2]) }, // Bloom
                 wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(velocity) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(reflection) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(aux) },
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(extra) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(sdf) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().unwrap()) }, // LUT
             ],
             label: Some("Lighting Bind Group"),
         });
@@ -972,87 +979,43 @@ impl GpuExecutor for WgpuBackend {
              encoder.write_timestamp(qs, 4);
         }
         
-        // Use provided output view or fallback to swapchain
-        // Note: Can't keep lock on current_view across render pass?
-        // We clone the Arc<TextureView> if possible or hold ref?
-        // SurfaceView is not Arc usually? Ah, Self::TextureView is Arc<TextureView>.
-        // But wgpu::SurfaceTexture is not clonable easily (it owns the texture).
-        // self.current_view stores Option<Arc<TextureView>> in WgpuBackend (based on struct def).
-        // Let's check struct.
-        // Line 105: pub current_view: Mutex<Option<wgpu::TextureView>>, (Not Arc?)
-        // Wait, line 123: type TextureView = Arc<wgpu::TextureView>;
-        // But the field definition in struct at 105 might be different.
-        // Let's assume we can get a reference.
-        
-        let target_view = if let Some(view) = output_view {
-            view
-        } else {
-             // Fallback to swapchain
-             // We need to access self.current_view. It's a Mutex.
-             // We can't return reference from local lock.
-             // We must lock here.
-             // But we can't assign to `target_view` generic reference easily if lifetimes differ.
-             // Hack: We need a scope where lock is valid.
-             // Or we clone the Arc (if it is Arc).
-             // If self.current_view holds wgpu::TextureView (not Arc), we have a problem if TextureView is Arc-only in trait.
-             // WgpuBackend struct usually wraps it.
-             return Err("Swapchain fallback logic complexity: output_view required for now or fix lock".to_string());
-             // Actually, verify struct:
-             // pub current_view: Mutex<Option<wgpu::TextureView>> (Line 105)
-             // But trait TextureView is Arc<wgpu::TextureView>.
-             // So &TextureView in trait means &Arc<...>.
-             // But current_view is Option<wgpu::TextureView>.
-             // Using current_view as trait::TextureView needs wrapping in Arc? 
-             // Or maybe I misread line 105.
-             // Let's look at 105 again.
-             // "pub current_view: Mutex<Option<wgpu::TextureView>>" -> Yes, raw View.
-        };
-        
-        // RE-READING logic:
-        // If I can't easily unify types, I'll duplicate the pass logic or use a helper.
-        // Or better: Update WgpuBackend to store Arc<TextureView> in current_view?
-        // surface.get_current_texture() returns SurfaceTexture. .texture.create_view() returns TextureView.
-        // If I wrap it in Arc, fine.
-        
-        // Alternative: Use `output_view` only. If None, error?
-        // But PostProcessNode pass None for swapchain.
-        
-        // Let's implement robustly.
-        
-        let swapchain_guard = self.current_view.lock().unwrap();
-        let swapchain_view = swapchain_guard.as_ref();
-        
-        let final_view = match output_view {
-            Some(v) => v,
-            None => {
-                 // We need to treat swapchain_view as &Self::TextureView (Arc)
-                 // But it's &wgpu::TextureView.
-                 // Arc<T> derefs to T.
-                 // So &Arc<TextureView> is &&TextureView?
-                 // &Self::TextureView is &Arc<wgpu::TextureView>.
-                 // We cannot convert &wgpu::TextureView to &Arc<wgpu::TextureView>.
-                 // We can only convert Arc to Ref.
-                 
-                 // So we cannot easily chain this unless `current_view` is also Arc.
-                 // I will assume for now I can't easily fix the struct.
-                 // I will write the pass to accept &wgpu::TextureView directly for target.
-                 // But trait expects &Self::TextureView.
-                 
-                 // SOLUTION: Split logic.
-                 // If output is provided, use it.
-                 // If not, use swapchain logic.
-               
-                 // OR: Creating a temporary Arc is useless if we need reference.
-                  
-                 // Simplified: just return Ok for now (post-process already done above)
-                 return Ok(()); 
-            }
-        };
-        
-        // This is getting complicated due to types.
-        // Let's just fix the function to handle both cases explicitly matching line 758 logic.
-        
-        Ok(()) 
+        // Final blit to swapchain if output_view is None
+        if output_view.is_none() {
+             drop(encoder_guard); // Release for draw_fxaa_pass
+             return self.draw_fxaa_pass(input_view);
+        }
+
+        // Otherwise blit to provided view
+        let target_view = output_view.unwrap();
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.fxaa_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+            label: Some("FXAA Bind Group"),
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Post Process Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.fxaa_pipeline);
+            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+        Ok(())
     }
     
     fn draw_fxaa_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String> {
@@ -1400,7 +1363,7 @@ impl WgpuBackend {
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Fantasmagorie Device"),
-            required_features: wgpu::Features::empty(),
+            required_features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
             required_limits: wgpu::Limits::default(),
         }, None)).map_err(|e: wgpu::RequestDeviceError| e.to_string())?;
 
@@ -1875,7 +1838,7 @@ impl WgpuBackend {
         let dummy_storage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dummy Storage Buffer"),
             size: 16384,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -1970,14 +1933,14 @@ impl WgpuBackend {
             entries: &[
                 wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
-                // Binding 2 (Bloom) Skipped
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Bloom
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
                 wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Velocity
                 wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Reflection
                 wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Aux
                 wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Extra
                 wgpu::BindGroupLayoutEntry { binding: 8, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // SDF
-                // Binding 9 (LUT) Skipped
+                wgpu::BindGroupLayoutEntry { binding: 9, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D3, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // LUT
             ],
         });
 

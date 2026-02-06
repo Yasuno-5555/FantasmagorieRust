@@ -23,8 +23,8 @@ impl<E: GpuExecutor> RenderNode<E> for JfaSdfNode {
         let height = ctx.height;
 
         // 1. Get G-buffer resources
-        let aux_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = ctx.resources.get(&AUX_HANDLE) { t.clone() } else { return Err("AUX not found".into()); };
-        let extra_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = ctx.resources.get(&self.extra_handle) { t.clone() } else { return Err("EXTRA not found".into()); };
+        let aux_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = ctx.resources.get(&AUX_HANDLE) { t.clone() } else { return Ok(()); };
+        let extra_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = ctx.resources.get(&self.extra_handle) { t.clone() } else { return Ok(()); };
         
         let aux_view = executor.create_texture_view(&aux_tex)?;
         let extra_view = executor.create_texture_view(&extra_tex)?;

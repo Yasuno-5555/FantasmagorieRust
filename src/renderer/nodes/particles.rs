@@ -104,20 +104,36 @@ impl<E: GpuExecutor + 'static> RenderNode<E> for ParticleNode {
             if ctx.executor.supports_tracea_particles() {
                 sys.compute_pipeline = None; 
             } else {
-                let compute = ctx.executor.create_compute_pipeline("ParticleUpdate", shader_source, Some("update"))?;
-                sys.compute_pipeline = Some(Arc::new(compute));
+                match ctx.executor.create_compute_pipeline("ParticleUpdate", shader_source, Some("update")) {
+                    Ok(compute) => sys.compute_pipeline = Some(Arc::new(compute)),
+                    Err(e) => {
+                        eprintln!("[ParticlesNode] Failed to create compute pipeline: {}", e);
+                        sys.compute_pipeline = None;
+                    }
+                }
             }
             
             // Auto-layout render pipeline (Always needed)
-            let render = ctx.executor.create_render_pipeline("ParticleRender", shader_source, None)?;
-            sys.render_pipeline = Some(Arc::new(render));
+            match ctx.executor.create_render_pipeline("ParticleRender", shader_source, None) {
+                Ok(render) => sys.render_pipeline = Some(Arc::new(render)),
+                Err(e) => {
+                    eprintln!("[ParticlesNode] Failed to create render pipeline: {}", e);
+                    sys.render_pipeline = None;
+                }
+            }
 
             sys.initialized = true;
         }
 
-        let p_buffer = sys.particle_buffer.as_ref().unwrap().downcast_ref::<E::Buffer>().ok_or("buf cast")?;
-        let c_buffer = sys.control_buffer.as_ref().unwrap().downcast_ref::<E::Buffer>().ok_or("buf cast")?;
-        let r_pipeline = sys.render_pipeline.as_ref().unwrap().downcast_ref::<E::RenderPipeline>().ok_or("pipe cast")?;
+        let p_buffer = sys.particle_buffer.as_ref().ok_or("no p_buf")?.downcast_ref::<E::Buffer>().ok_or("buf cast")?;
+        let c_buffer = sys.control_buffer.as_ref().ok_or("no c_buf")?.downcast_ref::<E::Buffer>().ok_or("buf cast")?;
+        
+        // If render pipeline is missing, we can't do anything useful
+        let r_pipeline = if let Some(p) = sys.render_pipeline.as_ref() {
+            p.downcast_ref::<E::RenderPipeline>().ok_or("pipe cast")?
+        } else {
+            return Ok(());
+        };
 
         // 2. Update Control
         let dt = 0.016; 
@@ -189,7 +205,6 @@ impl<E: GpuExecutor + 'static> RenderNode<E> for ParticleNode {
                 let r_layout = ctx.executor.get_render_pipeline_layout(r_pipeline, 0)?;
                 let r_entries = [
                     BindGroupEntry { binding: 0, resource: BindingResource::Buffer(p_buffer) },
-                    BindGroupEntry { binding: 1, resource: BindingResource::Buffer(cinematic_buffer) },
                     BindGroupEntry { binding: 2, resource: BindingResource::Texture(sdf) },
                     BindGroupEntry { binding: 3, resource: BindingResource::Sampler(sampler) },
                     BindGroupEntry { binding: 4, resource: BindingResource::Buffer(c_buffer) }, 

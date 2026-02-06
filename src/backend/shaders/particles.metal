@@ -1,3 +1,4 @@
+// ENTRY: vs_particles fs_particles
 #include <metal_stdlib>
 using namespace metal;
 

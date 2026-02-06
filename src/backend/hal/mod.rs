@@ -277,6 +277,9 @@ pub trait GpuExecutor: Send + Sync {
     fn set_lut_view(&mut self, _view: &Self::TextureView) -> Result<(), String> {
         Ok(())
     }
+    fn set_hdr_view(&mut self, _view: &Self::TextureView) -> Result<(), String> {
+        Ok(())
+    }
 
     fn get_lut_texture(&self) -> Option<Self::Texture>;
 

@@ -28,36 +28,27 @@ struct CinematicParams {
 @group(0) @binding(8) var t_sdf: texture_2d<f32>;   // Signed Distance Field
 @group(0) @binding(9) var t_lut: texture_3d<f32>;   // 3D Color LUT
 
-@vertex
-fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
-// ... existing vs_main ...
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
 
 // Helper for LUT sampling
 fn sample_lut(color: vec3<f32>) -> vec3<f32> {
     let lut_size = vec3<f32>(textureDimensions(t_lut));
-    // ACES/Log to LUT space (0-1)
-    // Assuming Standard 0-1 range for now.
-    // 3D Texture sampling needs careful UV mapping (0.5/size offset usually handled by sampler/normalized coords)
-    // wgpu texture_3d sample takes vec3 normalized coords.
-    
     let uvw = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
     return textureSample(t_lut, s_hdr, uvw).rgb;
 }
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
     var out: VertexOutput;
-    // Full screen triangle: (0, -1, 1), (0, 1, 1), (0, 0, -3)? No, standard is:
-    // x: -1, 3, -1
-    // y: -1, -1, 3
     let x = f32(i32(vid) / 2) * 4.0 - 1.0;
     let y = f32(i32(vid) % 2) * 4.0 - 1.0;
     out.position = vec4<f32>(x, y, 0.0, 1.0);
     out.uv = vec2<f32>(x * 0.5 + 0.5, 0.5 - y * 0.5);
     return out;
 }
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-};
 
 fn aces_approx(v: vec3<f32>) -> vec3<f32> {
     let a = 2.51;

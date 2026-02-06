@@ -11,9 +11,9 @@ impl<E: GpuExecutor> RenderNode<E> for PostProcessNode {
         use crate::renderer::graph::{GraphResource};
         if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&HDR_HIGH_RES_HANDLE) {
             let view = ctx.executor.create_texture_view(tex)?;
-            // Set this as the "HDR" texture for the post shader
-            // Re-using set_hdr_view if it exists? Or pass explicitly.
-            // For now, let's assume `draw_post_process` takes input view.
+            // Set this as the "HDR" texture for the backend resolve
+            ctx.executor.set_hdr_view(&view)?;
+            
             use crate::renderer::graph::LDR_HANDLE;
             if let Some(GraphResource::Texture(_, ldr_tex)) = ctx.resources.get(&LDR_HANDLE) {
                 let output_view = ctx.executor.create_texture_view(ldr_tex)?;

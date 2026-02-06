@@ -33,9 +33,12 @@ impl<E: GpuExecutor> RenderNode<E> for SSRNode {
         
         let hdr_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&self.hdr_handle) { <E::Texture as Clone>::clone(t) } else { return Err("HDR not found".into()); };
         let depth_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&self.depth_handle) { <E::Texture as Clone>::clone(t) } else { return Err("Depth not found".into()); };
-        let aux_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&self.aux_handle) { <E::Texture as Clone>::clone(t) } else { return Err("Aux not found".into()); };
-        let vel_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&crate::renderer::graph::VELOCITY_HANDLE) { <E::Texture as Clone>::clone(t) } else { return Err("Velocity not found".into()); };
-        let ref_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&crate::renderer::graph::REFLECTION_HANDLE) { <E::Texture as Clone>::clone(t) } else { return Err("Reflection output not found".into()); };
+        let aux_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&self.aux_handle) { <E::Texture as Clone>::clone(t) } else { 
+            // Metal demo doesn't have Aux yet, so skip SSR but don't fail the graph
+            return Ok(()); 
+        };
+        let vel_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&crate::renderer::graph::VELOCITY_HANDLE) { <E::Texture as Clone>::clone(t) } else { return Ok(()); };
+        let ref_tex = if let Some(crate::renderer::graph::GraphResource::Texture(_, t)) = context.resources.get(&crate::renderer::graph::REFLECTION_HANDLE) { <E::Texture as Clone>::clone(t) } else { return Ok(()); };
 
         // Create Views
         let hdr_view = executor.create_texture_view(&hdr_tex)?;

@@ -44,7 +44,7 @@ struct ParticleControl {
 @group(0) @binding(3) var s_sdf: sampler;
 @group(0) @binding(4) var<uniform> control: ParticleControl;
 @group(0) @binding(5) var t_velocity: texture_2d<f32>;
-@group(0) @binding(6) var t_depth: texture_2d<f32>; // Depth for Soft Particles
+@group(0) @binding(6) var t_depth: texture_depth_2d; // Depth for Soft Particles
 
 // ... Hash functions (unchanged) ...
 fn hash(p: f32) -> f32 {
@@ -218,7 +218,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // NOTE: WGPU Depth is usually 0.0 (near) to 1.0 (far), or reverse depending on projection.
     // Fantasmagorie uses default Perspective/Ortho.
     // Does 2D renderer write depth? Yes, Geometry pass writes depth.
-    let scene_depth = textureSample(t_depth, s_sdf, in.screen_uv).r;
+    let scene_depth = textureSample(t_depth, s_sdf, in.screen_uv);
     
     // Calculate particle linear depth? 
     // In 2D, everything is z=0 or sorted by layer (stored in Z?).

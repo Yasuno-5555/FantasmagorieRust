@@ -3,6 +3,7 @@ use cocoa::base::id;
 use objc::{msg_send, sel, sel_impl, rc::autoreleasepool};
 use block::ConcreteBlock;
 use metal::*;
+use metal::foreign_types::ForeignType;
 use std::sync::{Arc, Mutex};
 use crate::backend::hal::{GpuExecutor, BufferUsage, TextureDescriptor};
 use crate::renderer::graph::TransientPool;
@@ -98,6 +99,13 @@ pub struct MetalBackend {
     pub current_encoder: Mutex<Option<MetalIdWrapper<RenderCommandEncoder>>>,
     pub dummy_storage_buffer: Buffer,
     pub is_first_draw: Mutex<bool>,
+    pub frame_resources: Arc<Mutex<Vec<MetalResource>>>,
+}
+
+#[derive(Clone, Debug)]
+pub enum MetalResource {
+    Buffer(metal::Buffer),
+    Texture(metal::Texture),
 }
 
 impl MetalBackend {
@@ -290,6 +298,7 @@ impl MetalBackend {
             temporal_scaler: None,
             depth_texture: None,
             frame_count: 0,
+            frame_resources: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -434,8 +443,24 @@ impl GraphicsBackend for MetalBackend {
 
         orchestrator.plan(dl, width, height);
         
+        // 1. Begin Frame (acquire drawable, create command buffer)
+        if let Err(e) = self.begin_execute() {
+             eprintln!("Failed to begin Metal frame: {}", e);
+             return;
+        }
+
         if let Err(e) = orchestrator.execute(self, time, width, height) {
             eprintln!("Metal render error: {}", e);
+        }
+
+        // 2. Resolve (Final compositing to backbuffer)
+        if let Err(e) = self.resolve() {
+            eprintln!("Failed to resolve Metal frame: {}", e);
+        }
+
+        // 3. End Frame (commit command buffer, handle screenshots)
+        if let Err(e) = self.end_execute() {
+             eprintln!("Failed to end Metal frame: {}", e);
         }
         
         self.end_current_encoder();
@@ -559,6 +584,19 @@ impl MetalBackend {
              }
         } else {
             self.temporal_scaler = None;
+        }
+
+        // Recreate Bloom Textures (1/2 or 1/4 size?)
+        // Let's use 1/2 size for bloom in Metal
+        let bloom_w = (width / 2).max(1) as u64;
+        let bloom_h = (height / 2).max(1) as u64;
+        for i in 0..3 {
+            let desc = metal::TextureDescriptor::new();
+            desc.set_width(bloom_w);
+            desc.set_height(bloom_h);
+            desc.set_pixel_format(MTLPixelFormat::RGBA16Float);
+            desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+            self.bloom_textures[i] = Some(self.device.new_texture(&desc));
         }
     }
     
@@ -710,21 +748,35 @@ impl GpuExecutor for MetalBackend {
         Ok(())
     }
 
-    fn draw(&self, pipeline: &Self::RenderPipeline, bind_group: Option<&Self::BindGroup>, vertex_buffer: &Self::Buffer, vertex_count: u32, _uniform_data: &[u8]) -> Result<(), String> {
+    fn draw(&self, pipeline: &Self::RenderPipeline, bind_group: Option<&Self::BindGroup>, vertex_buffer: &Self::Buffer, vertex_count: u32, uniform_data: &[u8]) -> Result<(), String> {
         let wrapper = self.ensure_encoder()?;
         let encoder = &wrapper.0;
         encoder.set_render_pipeline_state(pipeline);
-        encoder.set_vertex_buffer(0, Some(vertex_buffer), 0);
-        encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+        encoder.set_vertex_buffer(1, Some(vertex_buffer), 0); // Slot 1 for vertices
+        
+        // Use set_vertex_bytes for small uniform data - zero overhead, no buffer management needed
+        if !uniform_data.is_empty() {
+            encoder.set_vertex_bytes(0, uniform_data.len() as u64, uniform_data.as_ptr() as *const _);
+            encoder.set_fragment_bytes(0, uniform_data.len() as u64, uniform_data.as_ptr() as *const _);
+        }
+
         if let Some(bg) = bind_group {
+            let mut resources = self.frame_resources.lock().unwrap();
             for entry in &bg.entries {
                 match &entry.resource {
                     pipeline_provider::MetalResource::Buffer(buf) => {
-                        encoder.set_vertex_buffer(1 + entry.binding as u64, Some(buf), 0);
-                        encoder.set_fragment_buffer(1 + entry.binding as u64, Some(buf), 0);
+                        encoder.set_vertex_buffer(entry.binding as u64, Some(buf), 0);
+                        encoder.set_fragment_buffer(entry.binding as u64, Some(buf), 0);
+                        // Keep alive
+                        resources.push(MetalResource::Buffer(buf.clone()));
                     },
-                    pipeline_provider::MetalResource::Texture(tex) => encoder.set_fragment_texture(entry.binding as u64, Some(tex)),
-                    pipeline_provider::MetalResource::Sampler(samp) => encoder.set_fragment_sampler_state(entry.binding as u64, Some(samp)),
+                    pipeline_provider::MetalResource::Texture(tex) => {
+                        encoder.set_fragment_texture(entry.binding as u64, Some(tex));
+                        resources.push(MetalResource::Texture(tex.clone()));
+                    },
+                    pipeline_provider::MetalResource::Sampler(samp) => {
+                        encoder.set_fragment_sampler_state(entry.binding as u64, Some(samp));
+                    },
                 }
             }
         }
@@ -761,17 +813,28 @@ impl GpuExecutor for MetalBackend {
         let wrapper = self.ensure_encoder()?;
         let encoder = &wrapper.0;
         encoder.set_render_pipeline_state(pipeline);
-        encoder.set_vertex_buffer(0, Some(vertex_buffer), 0);
-        encoder.set_vertex_buffer(2, Some(instance_buffer), 0);
+        encoder.set_vertex_buffer(1, Some(vertex_buffer), 0); // Slot 1 for vertices
+        encoder.set_vertex_buffer(2, Some(instance_buffer), 0); // Slot 2 for instances
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+        
+        // Keep buffers alive
+        let mut resources = self.frame_resources.lock().unwrap();
+        resources.push(MetalResource::Buffer(vertex_buffer.clone()));
+        resources.push(MetalResource::Buffer(instance_buffer.clone()));
+
         if let Some(bg) = bind_group {
             for entry in &bg.entries {
                 match &entry.resource {
                     pipeline_provider::MetalResource::Buffer(buf) => {
-                        encoder.set_vertex_buffer(1 + entry.binding as u64, Some(buf), 0);
-                        encoder.set_fragment_buffer(1 + entry.binding as u64, Some(buf), 0);
+                        // Bind group buffers go to their requested binding (e.g. 0 for uniforms)
+                        encoder.set_vertex_buffer(entry.binding as u64, Some(buf), 0);
+                        encoder.set_fragment_buffer(entry.binding as u64, Some(buf), 0);
+                        resources.push(MetalResource::Buffer(buf.clone()));
                     },
-                    pipeline_provider::MetalResource::Texture(tex) => encoder.set_fragment_texture(entry.binding as u64, Some(tex)),
+                    pipeline_provider::MetalResource::Texture(tex) => {
+                        encoder.set_fragment_texture(entry.binding as u64, Some(tex));
+                        resources.push(MetalResource::Texture(tex.clone()));
+                    },
                     pipeline_provider::MetalResource::Sampler(samp) => encoder.set_fragment_sampler_state(entry.binding as u64, Some(samp)),
                 }
             }
@@ -804,17 +867,26 @@ impl GpuExecutor for MetalBackend {
         ds_desc.set_depth_compare_function(MTLCompareFunction::LessEqual);
         ds_desc.set_depth_write_enabled(true);
         encoder.set_depth_stencil_state(&self.device.new_depth_stencil_state(&ds_desc));
-        encoder.set_vertex_buffer(0, Some(vertex_buffer), 0);
-        encoder.set_vertex_buffer(2, Some(instance_buffer), 0);
+        encoder.set_vertex_buffer(1, Some(vertex_buffer), 0); // Slot 1 for vertices
+        encoder.set_vertex_buffer(2, Some(instance_buffer), 0); // Slot 2 for instances
+        
+        // Keep buffers alive
+        let mut resources = self.frame_resources.lock().unwrap();
+        resources.push(MetalResource::Buffer(vertex_buffer.clone()));
+        resources.push(MetalResource::Buffer(instance_buffer.clone()));
+
         if let Some(bg) = bind_group {
             for entry in &bg.entries {
                 match &entry.resource {
                     pipeline_provider::MetalResource::Buffer(buf) => {
+                        // Standard Slot 0 or entry.binding for bind group buffers
                         encoder.set_vertex_buffer(entry.binding as u64, Some(buf), 0);
                         encoder.set_fragment_buffer(entry.binding as u64, Some(buf), 0);
+                        resources.push(MetalResource::Buffer(buf.clone()));
                     }
                     pipeline_provider::MetalResource::Texture(tex) => {
                         encoder.set_fragment_texture(entry.binding as u64, Some(tex));
+                        resources.push(MetalResource::Texture(tex.clone()));
                     }
                     pipeline_provider::MetalResource::Sampler(sampler) => {
                         encoder.set_fragment_sampler_state(entry.binding as u64, Some(sampler));
@@ -857,19 +929,18 @@ impl GpuExecutor for MetalBackend {
         encoder.set_render_pipeline_state(pipeline);
         
         // Bind Group
+        let mut resources = self.frame_resources.lock().unwrap();
         for entry in &bind_group.entries {
             match &entry.resource {
                 pipeline_provider::MetalResource::Buffer(buf) => {
                     encoder.set_vertex_buffer(entry.binding as u64, Some(buf), 0);
-                    // Also bind to fragment? shader used vertex_id/instance_id purely?
-                    // Particle shader uses buffer(0) in vertex function.
-                    // Compute used buffer(0).
-                    // Bind to vertex stage at index 0 (as per shader: [[buffer(0)]]).
-                    // But check binding indices.
+                    encoder.set_fragment_buffer(entry.binding as u64, Some(buf), 0);
+                    resources.push(MetalResource::Buffer(buf.clone()));
                 }
                 pipeline_provider::MetalResource::Texture(tex) => {
                     encoder.set_vertex_texture(entry.binding as u64, Some(tex)); // For dim check in VS
                     encoder.set_fragment_texture(entry.binding as u64, Some(tex));
+                    resources.push(MetalResource::Texture(tex.clone()));
                 }
                 pipeline_provider::MetalResource::Sampler(samp) => {
                      encoder.set_vertex_sampler_state(entry.binding as u64, Some(samp));
@@ -885,16 +956,46 @@ impl GpuExecutor for MetalBackend {
     fn copy_texture(&self, src: &Self::Texture, dst: &Self::Texture) -> Result<(), String> {
         let cb_guard = self.current_command_buffer.lock().unwrap();
         let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
-        let enc = cb.new_blit_command_encoder();
-        enc.copy_from_texture(src, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, MTLSize { width: src.width(), height: src.height(), depth: 1 }, dst, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 });
-        enc.end_encoding();
+        let encoder = cb.new_blit_command_encoder();
+        
+        // Keep alive
+        let mut resources = self.frame_resources.lock().unwrap();
+        resources.push(MetalResource::Texture(src.clone()));
+        resources.push(MetalResource::Texture(dst.clone()));
+
+        encoder.copy_from_texture(src, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, MTLSize { width: src.width(), height: src.height(), depth: 1 }, dst, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 });
+        encoder.end_encoding();
         Ok(())
     }
-    fn generate_mipmaps(&self, _t: &Self::Texture) -> Result<(), String> { Ok(()) }
+    fn generate_mipmaps(&self, texture: &Self::Texture) -> Result<(), String> {
+        let cb_guard = self.current_command_buffer.lock().unwrap();
+        let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
+        let encoder = cb.new_blit_command_encoder();
+        
+        self.frame_resources.lock().unwrap().push(MetalResource::Texture(texture.clone()));
+        
+        encoder.generate_mipmaps(texture);
+        encoder.end_encoding();
+        Ok(())
+    }
+
     fn copy_framebuffer_to_texture(&self, dst: &Self::Texture) -> Result<(), String> {
-        let d_wrapper = self.current_drawable.lock().unwrap();
-        let drawable = d_wrapper.as_ref().ok_or("No drawable")?.0;
-        self.copy_texture(&unsafe { let tex_ptr: id = msg_send![drawable, texture]; (&*(tex_ptr as *mut TextureRef)).to_owned() }, dst)
+        let cb_guard = self.current_command_buffer.lock().unwrap();
+        let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
+        let encoder = cb.new_blit_command_encoder();
+        
+        self.frame_resources.lock().unwrap().push(MetalResource::Texture(dst.clone()));
+        
+        if let Some(d_wrapper) = *self.current_drawable.lock().unwrap() {
+            let drawable = d_wrapper.0;
+            unsafe {
+                let tex_ptr: id = msg_send![drawable, texture];
+                let src_tex: &TextureRef = &*(tex_ptr as *mut TextureRef);
+                encoder.copy_from_texture(src_tex, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, MTLSize { width: src_tex.width(), height: src_tex.height(), depth: 1 }, dst, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 });
+            }
+        }
+        encoder.end_encoding();
+        Ok(())
     }
     fn draw_motion_blur(&self, dst: &Self::TextureView, src: &Self::TextureView, vel: &Self::TextureView, strength: f32) -> Result<(), String> {
         let cb_guard = self.current_command_buffer.lock().unwrap();
@@ -1042,111 +1143,226 @@ impl GpuExecutor for MetalBackend {
     fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
     fn get_dummy_storage_buffer(&self) -> &Self::Buffer { &self.dummy_storage_buffer }
     fn resolve(&mut self) -> Result<(), String> {
+        // Now delegating to draw_post_process_pass if called via old HAL flow
+        let hdr = self.hdr_texture.clone();
+        if let Some(tex) = hdr {
+             self.draw_post_process_pass(&tex, None)
+        } else {
+             Ok(())
+        }
+    }
+
+    fn draw_post_process_pass(&mut self, input_view: &Self::TextureView, output_view: Option<&Self::TextureView>) -> Result<(), String> {
         self.end_current_encoder();
-        let d_wrapper = self.current_drawable.lock().unwrap();
-        let drawable = d_wrapper.as_ref().ok_or("No drawable")?.0;
         
-        // Render Pass Descriptor
+        let cb_guard = self.current_command_buffer.lock().unwrap();
+        let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
+
+        // 1. Bloom Bright Pass
+        if let Some(bright_tex) = &self.bloom_textures[0] {
+            let desc = RenderPassDescriptor::new();
+            let ca = desc.color_attachments().object_at(0).unwrap();
+            ca.set_texture(Some(bright_tex));
+            ca.set_load_action(MTLLoadAction::Clear);
+            ca.set_store_action(MTLStoreAction::Store);
+            
+            let encoder = cb.new_render_command_encoder(desc);
+            encoder.set_render_pipeline_state(&self.bright_pipeline);
+            encoder.set_fragment_texture(0, Some(input_view));
+            encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+            encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+            encoder.end_encoding();
+        }
+
+        // 2. Bloom Blur Pass (Horizontal)
+        if let Some(bright_tex) = &self.bloom_textures[0] {
+            if let Some(blur_h_tex) = &self.bloom_textures[1] {
+                let desc = RenderPassDescriptor::new();
+                let ca = desc.color_attachments().object_at(0).unwrap();
+                ca.set_texture(Some(blur_h_tex));
+                ca.set_load_action(MTLLoadAction::Clear);
+                ca.set_store_action(MTLStoreAction::Store);
+                
+                let encoder = cb.new_render_command_encoder(desc);
+                encoder.set_render_pipeline_state(&self.blur_pipeline);
+                encoder.set_fragment_texture(0, Some(bright_tex));
+                encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+                
+                let horizontal: i32 = 1;
+                unsafe {
+                    let ptr = self.blur_uniform_buffer.contents() as *mut i32;
+                    *ptr = horizontal;
+                }
+                encoder.set_fragment_buffer(0, Some(&self.blur_uniform_buffer), 0);
+                encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                encoder.end_encoding();
+            }
+        }
+
+        // 3. Bloom Blur Pass (Vertical)
+        if let Some(blur_h_tex) = &self.bloom_textures[1] {
+            if let Some(blur_v_tex) = &self.bloom_textures[2] {
+                let desc = RenderPassDescriptor::new();
+                let ca = desc.color_attachments().object_at(0).unwrap();
+                ca.set_texture(Some(blur_v_tex));
+                ca.set_load_action(MTLLoadAction::Clear);
+                ca.set_store_action(MTLStoreAction::Store);
+                
+                let encoder = cb.new_render_command_encoder(desc);
+                encoder.set_render_pipeline_state(&self.blur_pipeline);
+                encoder.set_fragment_texture(0, Some(blur_h_tex));
+                encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+                
+                let horizontal: i32 = 0;
+                unsafe {
+                    let ptr = self.blur_uniform_buffer.contents() as *mut i32;
+                    *ptr = horizontal;
+                }
+                encoder.set_fragment_buffer(0, Some(&self.blur_uniform_buffer), 0);
+                encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+                encoder.end_encoding();
+            }
+        }
+
+        // 4. Final Resolve / Compositing
         let descriptor = RenderPassDescriptor::new();
         let color = descriptor.color_attachments().object_at(0).unwrap();
-        unsafe {
-            let tex_ptr: id = msg_send![drawable, texture];
-            color.set_texture(Some(&*(tex_ptr as *mut TextureRef)));
+        
+        if let Some(out) = output_view {
+            color.set_texture(Some(out));
+        } else {
+            let d_wrapper = self.current_drawable.lock().unwrap();
+            let drawable = d_wrapper.as_ref().ok_or("No drawable")?.0;
+            unsafe {
+                let tex_ptr: id = msg_send![drawable, texture];
+                color.set_texture(Some(&*(tex_ptr as *mut TextureRef)));
+            }
         }
+        
         color.set_load_action(MTLLoadAction::Clear);
         color.set_clear_color(MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
         color.set_store_action(MTLStoreAction::Store);
 
-        let cb_guard = self.current_command_buffer.lock().unwrap();
-        let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
         let encoder = cb.new_render_command_encoder(descriptor);
-        
         encoder.set_render_pipeline_state(&self.resolve_bloom_pipeline);
         
-        // Bind Textures
-        // 0: HDR, 1: Bloom, 2: LUT, 3: Vel, 4: Refl, 5: Aux, 6: Extra, 7: SDF
-        if let Some(tex) = &self.hdr_texture { encoder.set_fragment_texture(0, Some(tex)); }
-        // Bloom textures logic (composite bloom) - simplifying, using one bloom texture for now
-        // WGPU binds: 2 -> bloom_views[2] (Upsampled?)
-        // Metal should bind combined bloom or similar. 
-        if let Some(tex) = &self.bloom_textures[2] { encoder.set_fragment_texture(1, Some(tex)); } 
-        else { encoder.set_fragment_texture(1, None); }
+        encoder.set_fragment_texture(0, Some(input_view));
+        if let Some(bloom) = &self.bloom_textures[2] {
+            encoder.set_fragment_texture(1, Some(bloom));
+        }
+        if let Some(lut) = &self.lut_texture {
+             // In MSL, slot 2 is for LUT (texture3d)
+             encoder.set_fragment_texture(2, Some(lut));
+        }
         
-        if let Some(tex) = &self.lut_texture { encoder.set_fragment_texture(2, Some(tex)); }
-        
+        // Pass extra textures (velocity, reflection, aux, extra, sdf)
         if let Some(tex) = &self.velocity_texture { encoder.set_fragment_texture(3, Some(tex)); }
         else { encoder.set_fragment_texture(3, Some(&self.dummy_velocity_texture)); }
-
-        if let Some(tex) = &self.reflection_texture { encoder.set_fragment_texture(4, Some(tex)); }
-        else { encoder.set_fragment_texture(4, Some(&self.dummy_velocity_texture)); } // Fallback
-
-        // Getting Aux and Extra from resources? MetalBackend struct doesn't have them explicitly stored as persistent?
-        // Wait, MetalBackend struct has velocity_texture.
-        // It does NOT have aux_texture or extra_texture in struct view 9516. It has ssr_history...
-        // Assuming they are passed via set_aux_view? 
-        // WGPU has them. Metal needs them for complete parity.
-        // For now, binding defaults or current if available.
-        // I will skipping Aux/Extra for now or using dummy if not available, but Volumetrics needs SDF (binding 7).
         
-        // Binding 7: SDF
+        if let Some(tex) = &self.reflection_texture { encoder.set_fragment_texture(4, Some(tex)); }
+        else { encoder.set_fragment_texture(4, Some(&self.dummy_velocity_texture)); }
+        
+        encoder.set_fragment_texture(5, Some(&self.dummy_velocity_texture)); // Aux dummy
+        encoder.set_fragment_texture(6, Some(&self.dummy_velocity_texture)); // Extra dummy
+        
         if let Some(tex) = &self.sdf_texture { encoder.set_fragment_texture(7, Some(tex)); }
-        else { encoder.set_fragment_texture(7, None); }
+        else { encoder.set_fragment_texture(7, Some(&self.dummy_velocity_texture)); }
 
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
-        
-        // Bind Cinematic Buffer
         encoder.set_fragment_buffer(2, Some(&self.cinematic_buffer), 0);
         
-        // Draw Fullscreen Quad
         encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
-        
         encoder.end_encoding();
+        
         Ok(())
     }
     fn present(&self) -> Result<(), String> { Ok(()) }
-    fn y_flip(&self) -> bool { true }
+    fn y_flip(&self) -> bool { false }
     fn get_cinematic_buffer(&self) -> &Self::Buffer { &self.cinematic_buffer }
     fn get_lut_texture(&self) -> Option<Self::Texture> { None } // TODO: Fix TextureRef -> Texture conversion
     fn set_lut_view(&mut self, _view: &Self::TextureView) -> Result<(), String> { Ok(()) }
-    fn draw_lighting_pass(&mut self, _output_view: &Self::TextureView) -> Result<(), String> { Ok(()) }
-    fn draw_post_process_pass(&mut self, _input_view: &Self::TextureView, _output_view: Option<&Self::TextureView>) -> Result<(), String> { Ok(()) }
-    fn draw_fxaa_pass(&mut self, _input_view: &Self::TextureView) -> Result<(), String> { Ok(()) }
+    fn set_hdr_view(&mut self, view: &Self::TextureView) -> Result<(), String> { self.hdr_texture = Some(view.clone()); Ok(()) }
+    fn draw_lighting_pass(&mut self, output_view: &Self::TextureView) -> Result<(), String> {
+        // Fallback: Copy current HDR buffer to output
+        if let Some(src_tex) = &self.hdr_texture {
+             self.end_current_encoder();
+             unsafe {
+                let cb_guard = self.current_command_buffer.lock().unwrap();
+                let cb_wrapper = cb_guard.as_ref().ok_or("No active command buffer")?;
+                let cb: id = cb_wrapper.0.as_ptr() as id;
+                
+                let blit: id = msg_send![cb, blitCommandEncoder];
+                
+                let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                let size = MTLSize { width: src_tex.width(), height: src_tex.height(), depth: 1 };
+                
+                let _: () = msg_send![blit, copyFromTexture: src_tex.as_ptr() as id
+                                          sourceSlice: 0
+                                          sourceLevel: 0
+                                          sourceOrigin: origin
+                                          sourceSize: size
+                                          toTexture: output_view.as_ptr() as id
+                                          destinationSlice: 0
+                                          destinationLevel: 0
+                                          destinationOrigin: origin];
+                
+                let _: () = msg_send![blit, endEncoding];
+             }
+        }
+        Ok(())
+    }
+    
+    fn draw_fxaa_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String> {
+        // In Metal, resolve_bloom_pipeline handles resolve + some filtering. 
+        // For actual FXAA, we'd need a separate shader. 
+        // For now, draw_post_process_pass(input, None) handles the final blit to swapchain.
+        self.draw_post_process_pass(input_view, None)
+    }
     fn upscale(&mut self, input: &Self::TextureView, output: &Self::TextureView, params: crate::backend::hal::UpscaleParams) -> Result<(), String> {
+        self.end_current_encoder();
         if let Some(scaler) = &self.temporal_scaler {
             let cb_guard = self.current_command_buffer.lock().unwrap();
             let cb_wrapper = cb_guard.as_ref().ok_or("No active command buffer")?;
-            let command_buffer: &CommandBufferRef = unsafe { std::mem::transmute(&cb_wrapper.0) }; // Wrapper holds id, we trust it's CommandBuffer protocol
+            let command_buffer: &CommandBufferRef = unsafe { std::mem::transmute(&cb_wrapper.0) }; 
 
-            // Resources
-            // MetalBackend::Texture is Texture (Arc<Texture>? No, Texture is RefCounted in metal crate).
-            // TextureView is TextureRef (arc).
-            // We need references to the underlying Metal textures.
-            
-            // Input/Output are passed as TextureView (which are &TextureRef).
-            // Depth
             let depth_tex = self.depth_texture.as_ref().ok_or("Missing depth texture")?;
-            // Velocity
             let velocity_tex = self.velocity_texture.as_ref().ok_or("Missing velocity texture")?;
 
             scaler.encode(
                 command_buffer,
-                input, // Color
-                depth_tex, // Depth
-                velocity_tex, // Motion
-                output, // Output
+                input, 
+                depth_tex, 
+                velocity_tex, 
+                output, 
                 params.jitter_x,
                 params.jitter_y,
                 params.reset_history
             );
             Ok(())
         } else {
-             // Fallback: Blit or Error?
-             // If scaler is missing but upscale requested, maybe do simple blit or just return Ok (passthrough logic handled by graph?)
-             // Graph should handle fallback if upscale node is present.
-             // Here we should probably error or blit.
-             // Let's safe fallback to blit if possible, or just OK (no-op might be black screen if output not written).
-             // Let's try basic blit if possible, otherwise OK.
-             println!("Warning: Upscaled called but no scaler initialized");
+             // Fallback: Copy input to output using direct msg_send
+             unsafe {
+                let cb_guard = self.current_command_buffer.lock().unwrap();
+                let cb_wrapper = cb_guard.as_ref().ok_or("No active command buffer")?;
+                let cb: id = cb_wrapper.0.as_ptr() as id;
+                
+                let blit: id = msg_send![cb, blitCommandEncoder];
+                
+                let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                let size = MTLSize { width: input.width(), height: input.height(), depth: 1 };
+                
+                let _: () = msg_send![blit, copyFromTexture: input.as_ptr() as id
+                                          sourceSlice: 0
+                                          sourceLevel: 0
+                                          sourceOrigin: origin
+                                          sourceSize: size
+                                          toTexture: output.as_ptr() as id
+                                          destinationSlice: 0
+                                          destinationLevel: 0
+                                          destinationOrigin: origin];
+                
+                let _: () = msg_send![blit, endEncoding];
+             }
              Ok(())
         }
     }
@@ -1160,6 +1376,7 @@ impl MetalBackend {
         let bytes_per_row = width * bytes_per_pixel;
         let data_size = bytes_per_row * height;
 
+        println!("DEBUG: perform_screenshot called for {} ({}x{})", path, width, height);
         let cpu_buffer = self.device.new_buffer(data_size, MTLResourceOptions::StorageModeShared);
         let blit_encoder = command_buffer.new_blit_command_encoder();
         blit_encoder.copy_from_texture_to_buffer(
@@ -1172,13 +1389,19 @@ impl MetalBackend {
 
         let path = path.to_string();
         let block = ConcreteBlock::new(move |cb: &CommandBufferRef| {
+            println!("DEBUG: Screenshot CommandBuffer completed for {} with status {:?}", path, cb.status());
             if cb.status() == MTLCommandBufferStatus::Completed {
                 let ptr = cpu_buffer.contents() as *const u8;
                 let mut data = vec![0u8; data_size as usize];
                 unsafe { std::ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), data_size as usize); }
                 let mut img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width as u32, height as u32, data).unwrap();
                 for pixel in img.pixels_mut() { pixel.0.swap(0, 2); } // BGRA to RGBA
-                img.save(&path).expect("Failed to save screenshot");
+                match img.save(&path) {
+                    Ok(_) => println!("DEBUG: Screenshot saved successfully to {}", path),
+                    Err(e) => println!("DEBUG: Failed to save screenshot: {}", e),
+                }
+            } else {
+                println!("DEBUG: Screenshot CommandBuffer failed or cancelled.");
             }
         });
         command_buffer.add_completed_handler(&block.copy());

@@ -37,6 +37,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let device_ptr = backend.device.as_ptr();
                 let _: () = msg_send![layer, setDevice: device_ptr];
                 let _: () = msg_send![layer, setPixelFormat: 80]; // MTLPixelFormatBGRA8Unorm
+                let _: () = msg_send![layer, setFramebufferOnly: cocoa::base::NO];
+                let _: () = msg_send![layer, setFramebufferOnly: cocoa::base::NO]; // Added line
                 let _: () = msg_send![view, setLayer: layer];
                 let _: () = msg_send![view, setWantsLayer: cocoa::base::YES];
                 
@@ -85,77 +87,100 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
+                // Screenshot verification logic
+                static mut FRAME_COUNT: u32 = 0;
+                unsafe {
+                    FRAME_COUNT += 1;
+                    if FRAME_COUNT % 10 == 0 {
+                         println!("DEBUG: Frame {}", FRAME_COUNT);
+                    }
+                    let path = "/Users/yasuno/.gemini/antigravity/brain/ec06709f-9a1b-4607-9380-6abfa5bd5090/metal_final.png";
+                    if FRAME_COUNT == 5 {
+                        println!("Requesting screenshot to {}...", path);
+                        backend.capture_screenshot(path);
+                    }
+                    if FRAME_COUNT == 15 {
+                        println!("Exiting after frame 15.");
+                        elwt.exit();
+                    }
+                }
+
                 let arena = FrameArena::new();
                 let mut ui = UIContext::new(&arena);
 
+                // --- UI DEFINITION ---
                 let root = ui.column()
                     .size(current_width as f32, current_height as f32)
-                    .bg(ColorF::new(0.01, 0.01, 0.02, 1.0))
+                    .aurora() // Premium Aurora background
+                    .align(Align::Center)
                     .build();
 
                 ui.begin(root);
                 
-                // Mode 12 is handled by setting elevation to a magic value or just using a specific bg
-                // For now, let's just use a normal background and I'll fix the shader mode 12 trigger
-                // if I can find a way to pass it. Actually mode 12 is Cyberpunk Grid.
-                // In this framework, mode is usually derived from the widget type.
+                let elapsed = start_time.elapsed().as_secs_f32();
                 
+                // Centered Cinematic Panel with Glassmorphism
                 let panel = ui.column()
-                    .size(600.0, 450.0)
+                    .size(800.0, 500.0)
                     .align(Align::Center)
-                    .bg(ColorF::new(0.05, 0.05, 0.1, 0.8))
+                    .bg(ColorF::new(1.0, 1.0, 1.0, 0.05)) // White with low alpha
+                    .backdrop_blur(40.0)                 // Strong glass effect
                     .radius(32.0)
+                    .border(1.0, ColorF::new(1.0, 1.0, 1.0, 0.2)) // Subtle border
                     .elevation(40.0)
                     .padding(40.0)
+                    .spacing(20.0)
                     .build();
                 
                 ui.begin(panel);
-                ui.text("Visual Revolution").font_size(48.0).fg(ColorF::new(0.0, 0.9, 1.0, 1.0)).build();
-                ui.text("Advanced Cinematic Post-Processing").font_size(18.0).fg(ColorF::new(0.7, 0.7, 0.8, 1.0)).build();
                 
+                ui.text("Metal Cinematic Revolution")
+                    .font_size(48.0)
+                    .fg(ColorF::new(0.0, 0.9, 1.0, 1.0))
+                    .build();
+                
+                ui.text("Full HDR Pipeline & Hybrid SSR")
+                    .font_size(18.0)
+                    .fg(ColorF::new(0.7, 0.7, 0.8, 1.0))
+                    .build();
+
                 ui.text("").build(); // Spacer
 
-                let elapsed = start_time.elapsed().as_secs_f32();
+                let content_row = ui.row().spacing(40.0).build();
+                ui.begin(content_row);
                 
-                // Single row
-                let row = ui.row().spacing(40.0).build();
-                ui.begin(row);
-                
-                // High intensity blocks to trigger Bloom
+                // HDR Emissive Blocks to trigger Bloom
                 ui.r#box()
-                    .size(120.0, 120.0)
-                    .bg(ColorF::new(2.0, 0.2, 0.5, 1.0)) // HDR color (R > 1.0)
+                    .size(150.0, 150.0)
+                    .bg(ColorF::new(4.0, 0.4, 0.8, 1.0)) // HDR Pink
                     .radius(24.0 + (elapsed.sin() * 8.0))
-                    .glow(10.0, ColorF::new(2.0, 0.2, 0.5, 0.8))
+                    .glow(15.0, ColorF::new(4.0, 0.4, 0.8, 0.8))
                     .build();
 
                 ui.r#box()
-                    .size(120.0, 120.0)
-                    .bg(ColorF::new(0.0, 3.0, 1.5, 1.0)) // HDR color (G > 1.0)
+                    .size(150.0, 150.0)
+                    .bg(ColorF::new(0.0, 5.0, 2.5, 1.0)) // HDR Cyan
                     .radius(24.0 + (elapsed.cos() * 8.0))
-                    .glow(10.0, ColorF::new(0.0, 3.0, 1.5, 0.8))
+                    .glow(15.0, ColorF::new(0.0, 5.0, 2.5, 0.8))
                     .build();
                     
                 ui.r#box()
-                    .size(120.0, 120.0)
-                    .bg(ColorF::new(1.0, 1.0, 5.0, 1.0)) // HDR color (B > 1.0)
+                    .size(150.0, 150.0)
+                    .bg(ColorF::new(1.5, 1.5, 8.0, 1.0)) // HDR Electric Blue
                     .radius(24.0 + ((elapsed * 1.5).sin() * 8.0))
-                    .glow(10.0, ColorF::new(1.0, 1.0, 5.0, 0.8))
+                    .glow(15.0, ColorF::new(1.5, 1.5, 8.0, 0.8))
                     .build();
                 
-                ui.end();
+                ui.end(); // content_row
 
                 ui.text("").build(); // Spacer
-                ui.text("• ACES Filmic Tone Mapping").font_size(14.0).fg(ColorF::new(0.6, 0.6, 0.7, 1.0)).build();
-                ui.text("• Multi-pass Gaussian Bloom").font_size(14.0).fg(ColorF::new(0.6, 0.6, 0.7, 1.0)).build();
-                ui.text("• Chromatic Aberration & Vignette").font_size(14.0).fg(ColorF::new(0.6, 0.6, 0.7, 1.0)).build();
-                
-                ui.end();
-                ui.end();
-                
-                ui.end();
-                ui.end();
+                ui.text("• Native Metal 3.0 Performance").font_size(14.0).fg(ColorF::new(0.6, 0.6, 0.7, 1.0)).build();
+                ui.text("• Multi-pass HDR Bloom").font_size(14.0).fg(ColorF::new(0.6, 0.6, 0.7, 1.0)).build();
+                ui.text("• Interactive Glassmorphism").font_size(14.0).fg(ColorF::new(0.6, 0.6, 0.7, 1.0)).build();
 
+                ui.end(); // panel
+                ui.end(); // root
+                
                 if let Some(root) = ui.root() {
                     let mut dl = fanta_rust::DrawList::new();
                     fanta_rust::text::FONT_MANAGER.with(|fm| {

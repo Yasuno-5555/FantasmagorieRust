@@ -23,18 +23,6 @@ struct GlobalUniforms {
     float _padding;
 };
 
-struct ShapeInstance {
-    float4 rect;
-    float4 radii;
-    float4 color;
-    float4 border_color;
-    float4 glow_color;
-    float4 params1; // border_width, elevation, glow_strength, lut_intensity
-    uint4 params2;   // mode, is_squircle, _r1, _r2
-    float4 material; // velocity_x, velocity_y, reflectivity, roughness
-    float4 pbr_params; // normal_map_id, distortion, emissive_intensity, parallax_factor
-};
-
 struct DrawUniforms {
     float4x4 projection;
     float4 rect;       // x, y, w, h
@@ -53,22 +41,30 @@ struct DrawUniforms {
     float2 viewport_size;
 };
 
+struct ShapeInstance {
+    float4 rect;
+    float4 radii;
+    float4 color;
+    float4 border_color;
+    float4 glow_color;
+    float4 params1; // border_width, elevation, glow_strength, lut_intensity
+    uint4 params2;   // mode, is_squircle, _r1, _r2
+    float4 material; // velocity_x, velocity_y, reflectivity, roughness
+    float4 pbr_params; // normal_map_id, distortion, emissive_intensity, parallax_factor
+};
+
 vertex VertexOut vs_main(Vertex v [[stage_in]],
-                         constant DrawUniforms &u [[buffer(1)]]) {
+                       constant GlobalUniforms &glob [[buffer(0)]]) {
     VertexOut out;
-    float2 pos = (v.pos * u.scale) + u.offset;
-    out.position = u.projection * float4(pos, 0.0, 1.0);
+    out.position = glob.projection * float4(v.pos, 0.0, 1.0);
     out.uv = v.uv;
-    out.color = float4(pow(v.color.rgb, 2.2), v.color.a);
-    out.world_pos = pos;
-    out.iid = 0xFFFFFFFF; // Legacy marker
-    out.velocity = float2(0.0);
+    out.color = v.color;
     return out;
 }
 
 // Instanced vertex shader
 vertex VertexOut vs_instanced(Vertex v [[stage_in]],
-                             constant GlobalUniforms &glob [[buffer(1)]],
+                             constant GlobalUniforms &glob [[buffer(0)]],
                              constant ShapeInstance *instances [[buffer(2)]],
                              uint instance_id [[instance_id]]) {
     constant ShapeInstance &inst = instances[instance_id];
@@ -277,7 +273,7 @@ float4 resolve_shape(VertexOut in, ShapeData u, texture2d<float> tex, texture2d<
 }
 
 fragment float4 fs_main(VertexOut in [[stage_in]],
-                         constant DrawUniforms &u [[buffer(1)]],
+                         constant DrawUniforms &u [[buffer(0)]],
                          texture2d<float> tex [[texture(0)]],
                          texture2d<float> tex2 [[texture(1)]],
                          sampler s [[sampler(0)]]) {
@@ -292,7 +288,7 @@ fragment float4 fs_main(VertexOut in [[stage_in]],
 }
 
 fragment float4 fs_instanced(VertexOut in [[stage_in]],
-                            constant GlobalUniforms &glob [[buffer(1)]],
+                            constant GlobalUniforms &glob [[buffer(0)]],
                             constant ShapeInstance *instances [[buffer(2)]],
                             texture2d<float> tex [[texture(0)]],
                             texture2d<float> tex2 [[texture(1)]],
@@ -582,87 +578,8 @@ fragment float4 fs_blur(ResolveVertexOut in [[stage_in]],
 
 // Update resolve to composite bloom
 fragment float4 fs_resolve_bloom(ResolveVertexOut in [[stage_in]],
-                                 constant CinematicParams &cinema [[buffer(2)]],
-                                 texture2d<float> hdr_tex [[texture(0)]],
-                                 texture2d<float> bloom_tex [[texture(1)]],
-                                 texture3d<float> lut_tex [[texture(2)]],
-                                 texture2d<float> vel_tex [[texture(3)]],
-                                 texture2d<float> refl_tex [[texture(4)]],
-                                 texture2d<float> aux_tex [[texture(5)]],
-                                 texture2d<float> extra_tex [[texture(6)]],
-                                 sampler s [[sampler(0)]]) {
-    float2 uv = in.uv;
-    
-    float2 dist_from_center_raw = uv - 0.5;
-    float r2 = dot(dist_from_center_raw, dist_from_center_raw);
-    float k = -0.1 * cinema.vignette_intensity;
-    float2 lens_dist_uv = uv + dist_from_center_raw * (k * r2 + k * r2 * r2);
-
-    // Refraction (from aux/extra) adds on top of lens distortion? 
-    // Or refraction is strictly local. Let's apply refraction to lens_dist_uv?
-    // Start with lens_dist_uv as base.
-    
-    float4 aux = aux_tex.sample(s, lens_dist_uv);
-    float4 extra = extra_tex.sample(s, lens_dist_uv);
-    
-    float2 normal_xy = aux.xy - 0.5;
-    float dist_strength = extra.y;
-    float2 refraction_offset = normal_xy * dist_strength * 0.1;
-    
-    float2 refracted_uv = lens_dist_uv + refraction_offset;
-    
-    float2 dist_from_center = refracted_uv - 0.5;
-    
-    // 1. Chromatic Aberration
-    float3 color;
-    float ca = cinema.ca_strength;
-    color.r = hdr_tex.sample(s, refracted_uv + dist_from_center * ca).r;
-    color.g = hdr_tex.sample(s, refracted_uv).g;
-    color.b = hdr_tex.sample(s, refracted_uv - dist_from_center * ca).b;
-    
-    // 2. Exposure
-    color *= cinema.exposure;
-
-    // 2.5 Add Reflection
-    float3 reflection = refl_tex.sample(s, refracted_uv).rgb;
-    
-    // 3. Bloom
-    float3 bloom = bloom_tex.sample(s, refracted_uv).rgb;
-    
-    float emissive_boost = extra.z;
-    
-    color = color + reflection + bloom * cinema.bloom_intensity + emissive_boost;
-    
-    // 4. Tone Mapping
-    if (cinema.tonemap_mode == 1) {
-        color = aces_approx(color);
-    } else if (cinema.tonemap_mode == 2) {
-        color = reinhard(color);
-    }
-    
-    // 5. Vignette
-    float vignette = 1.0 - dot(dist_from_center, dist_from_center) * 1.5;
-    color *= max(vignette, cinema.vignette_intensity);
-    
-    // 6. Film Grain
-    float noise = hash(uv + fract(cinema.time));
-    color += (noise - 0.5) * cinema.grain_strength;
-    
-    // 7. Dithering
-    float dither = hash(uv * 10.0) / 255.0;
-    color += dither;
-    
-    // 8. LUT
-    if (cinema.lut_intensity > 0.0) {
-        float3 lut_color = lut_tex.sample(s, color).rgb;
-        color = mix(color, lut_color, cinema.lut_intensity);
-    }
-    
-    // 9. Debug Modes
-    if (cinema.debug_mode == 1) {
-        float2 vel = vel_tex.sample(s, uv).xy;
-        return float4(vel * 0.1 + 0.5, 0.0, 1.0);
-    }
-    
-    return float4(pow(color, 1.0/2.2), 1.0);
+                                texture2d<float> t_hdr [[texture(0)]],
+                                texture2d<float> t_bloom [[texture(1)]],
+                                sampler s [[sampler(0)]]) {
+    return t_hdr.sample(s, in.uv);
 }
