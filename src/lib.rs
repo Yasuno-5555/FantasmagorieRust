@@ -30,6 +30,9 @@ pub mod renderer;
 pub use tracea;
 pub mod game;
 
+#[cfg(any(feature = "metal", feature = "wgpu"))]
+pub mod tracea_bridge;
+
 #[cfg(any(
     feature = "opengl",
     feature = "wgpu",

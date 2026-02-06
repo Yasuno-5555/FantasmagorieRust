@@ -1,7 +1,10 @@
 use metal::{DeviceRef, CommandBufferRef, TextureRef, MTLPixelFormat};
-#[macro_use] extern crate objc;
 use objc::runtime::{Object, Class};
-use std::ffi::{c_void, CStr};
+use objc::msg_send;
+use objc::sel;
+use objc::sel_impl;
+use objc::class;
+use std::ffi::c_void;
 
 pub struct TemporalScaler {
     scaler: *mut Object,
@@ -34,8 +37,8 @@ impl TemporalScaler {
             // Let's rely on Class::get returning None if not loaded.
             // If strictly needed, we can use `NSBundle`.
             
-            let desc_cls_name = std::ffi::CString::new("MTLFXTemporalScalerDescriptor").unwrap();
-            let mut desc_class = Class::get(&*desc_cls_name);
+            let desc_cls_name = "MTLFXTemporalScalerDescriptor";
+            let mut desc_class = Class::get(desc_cls_name);
             
             if desc_class.is_none() {
                  // Try loading bundle
@@ -48,7 +51,7 @@ impl TemporalScaler {
                          let _: () = msg_send![bundle, load];
                      }
                  }
-                 desc_class = Class::get(&*desc_cls_name);
+                 desc_class = Class::get(desc_cls_name);
             }
 
             let desc_class = desc_class?;

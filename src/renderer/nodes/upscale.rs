@@ -25,7 +25,7 @@ impl<E: GpuExecutor> RenderNode<E> for UpscaleNode {
         let params = crate::backend::hal::UpscaleParams {
             jitter_x: jx,
             jitter_y: jy,
-            reset_history: false,
+            reset_history: ctx.camera_cut,
         };
         ctx.executor.upscale(&input, &output, params)
     }

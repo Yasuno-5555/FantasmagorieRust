@@ -6,8 +6,7 @@ use std::sync::Arc;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::WindowBuilder;
-use raw_window_handle::RawWindowHandle;
+use winit::raw_window_handle::{RawWindowHandle, HasWindowHandle};
 use cocoa::base::id;
 use objc::{msg_send, sel, sel_impl};
 use metal::foreign_types::ForeignType;
@@ -17,10 +16,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Showcasing: Aurora, Glassmorphism, and Native Metal Performance");
 
     let event_loop = EventLoop::new()?;
-    let window = WindowBuilder::new()
+    let window_attrs = winit::window::WindowAttributes::default()
         .with_title("Fantasmagorie: Metal Cinematic Revolution")
-        .with_inner_size(LogicalSize::new(1280, 720))
-        .build(&event_loop)?;
+        .with_inner_size(LogicalSize::new(1280, 720));
+    let window = event_loop.create_window(window_attrs)?;
 
     let window = Arc::new(window);
     
@@ -33,17 +32,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // CAMetalLayer setup
     unsafe {
-        use raw_window_handle::HasRawWindowHandle;
-        if let RawWindowHandle::AppKit(handle) = window.raw_window_handle() {
-            let view = handle.ns_view as id;
-            let layer: id = msg_send![objc::class!(CAMetalLayer), new];
-            let device_ptr = backend.device.as_ptr();
-            let _: () = msg_send![layer, setDevice: device_ptr];
-            let _: () = msg_send![layer, setFramebufferOnly: cocoa::base::NO];
-            let _: () = msg_send![view, setLayer: layer];
-            let _: () = msg_send![view, setWantsLayer: cocoa::base::YES];
-            
-            backend.set_layer(layer as *mut _);
+        if let Ok(handle) = window.window_handle() {
+            if let RawWindowHandle::AppKit(app_handle) = handle.as_raw() {
+                let view = app_handle.ns_view.as_ptr() as id;
+                let layer: id = msg_send![objc::class!(CAMetalLayer), new];
+                let device_ptr = backend.device.as_ptr();
+                let _: () = msg_send![layer, setDevice: device_ptr];
+                let _: () = msg_send![layer, setFramebufferOnly: cocoa::base::NO];
+                let _: () = msg_send![view, setLayer: layer];
+                let _: () = msg_send![view, setWantsLayer: cocoa::base::YES];
+                
+                backend.set_layer(layer as *mut _);
+            }
         }
     }
 

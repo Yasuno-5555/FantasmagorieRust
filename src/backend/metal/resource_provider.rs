@@ -11,16 +11,15 @@ impl MetalResourceProvider {
         Self { device }
     }
 
-    pub fn create_buffer(&self, size: u64, usage: BufferUsage, _label: &str) -> Result<Buffer, String> {
-        let mut options = MTLResourceOptions::StorageModeShared;
-        // Optimization: Use Private storage for GPU-only data (Storage/Vertex) if no CPU access (CopyDst/Uniform) is needed.
-        if usage.contains(BufferUsage::Storage) && !usage.contains(BufferUsage::CopyDst) && !usage.contains(BufferUsage::Uniform) {
-            options = MTLResourceOptions::StorageModePrivate;
-        }
+    pub fn create_buffer(&self, size: u64, _usage: BufferUsage, _label: &str) -> Result<Buffer, String> {
+        // Always use SharedStorage for now to allow CPU writes.
+        // Private storage optimization requires blit encoder uploads.
+        let options = MTLResourceOptions::StorageModeShared;
         
         Ok(self.device.new_buffer(size, options))
     }
 
+    pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<Texture, String> {
         let mtl_desc = metal::TextureDescriptor::new();
         mtl_desc.set_width(desc.width as u64);
         mtl_desc.set_height(desc.height as u64);

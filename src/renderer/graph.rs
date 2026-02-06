@@ -48,6 +48,7 @@ pub struct RenderContext<'a, E: GpuExecutor> {
     pub width: u32,
     pub height: u32,
     pub jitter: (f32, f32),
+    pub camera_cut: bool,
 }
 
 pub trait RenderNode<E: GpuExecutor> {
@@ -72,7 +73,7 @@ impl<E: GpuExecutor> RenderGraph<E> {
         self.nodes.push(Box::new(node));
     }
 
-    pub fn execute(&mut self, executor: &mut E, external_resources: HashMap<ResourceHandle, GraphResource<E>>, time: f32, width: u32, height: u32, jitter: (f32, f32)) -> Result<(), String> {
+    pub fn execute(&mut self, executor: &mut E, external_resources: HashMap<ResourceHandle, GraphResource<E>>, time: f32, width: u32, height: u32, jitter: (f32, f32), camera_cut: bool) -> Result<(), String> {
         let mut ctx = RenderContext {
             executor,
             resources: external_resources,
@@ -80,6 +81,7 @@ impl<E: GpuExecutor> RenderGraph<E> {
             width,
             height,
             jitter,
+            camera_cut,
         };
 
         // Allocate declared resources

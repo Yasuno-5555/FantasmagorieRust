@@ -126,6 +126,12 @@ pub struct WgpuBackend {
 
     pub shader_reload_rx: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     pub _shader_watcher: Option<Box<dyn std::any::Any + Send + Sync>>,
+
+    // Tracea Integration
+    pub tracea_context: crate::tracea_bridge::TraceaContext,
+    pub tracea_particle_cache: Mutex<Option<crate::tracea_bridge::TraceaParticleKernel>>,
+    pub tracea_fft_kernel: Mutex<Option<crate::tracea_bridge::TraceaFFTKernel>>,
+    pub audio_data: Vec<f32>,
 }
 
 impl GpuExecutor for WgpuBackend {
@@ -137,6 +143,87 @@ impl GpuExecutor for WgpuBackend {
     type ComputePipeline = Arc<wgpu::ComputePipeline>;
     type BindGroupLayout = Arc<wgpu::BindGroupLayout>;
     type BindGroup = Arc<wgpu::BindGroup>;
+
+    fn dispatch_tracea_blur(&self, _input: &Self::Texture, _output: &Self::Texture, _sigma: f32) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn supports_tracea_particles(&self) -> bool { true }
+    
+    fn get_tracea_particle_buffer(&self) -> Option<Self::Buffer> { 
+        // TODO: Return GPU buffer for shared rendering. 
+        // Currently returning None implies CPU fallback or separate render path.
+        // Needs refactoring Self::Buffer to Arc<wgpu::Buffer> to support sharing.
+        None 
+    }
+    
+    fn dispatch_tracea_particles(&self, dt: f32, attractor: [f32; 2], sdf_texture: Option<&Self::Texture>) -> Result<bool, String> {
+        let mut cache = self.tracea_particle_cache.lock().unwrap();
+        // Init if missing
+        if cache.is_none() {
+             if let Ok(kernel) = crate::tracea_bridge::TraceaParticleKernel::new(&self.tracea_context, 100_000) {
+                 *cache = Some(kernel);
+             }
+        }
+        
+        if let Some(kernel) = cache.as_ref() {
+            // Need a view for texture. Self::Texture is Arc<wgpu::Texture>.
+            // We need to create a view.
+            let view = sdf_texture.map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
+            // We need a sampler. WGPU backend doesn't store a default sampler accessible here easily?
+            // Actually usually we have one. Let's create a temp one or store in backend.
+            // For now create temp linear sampler.
+            let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            
+            // Dispatch
+            // Note: `kernel.update_wgpu` expects `Option<&wgpu::TextureView>`.
+            // Our view is local, we pass reference.
+            let _ = kernel.update_wgpu(&self.tracea_context, dt, attractor, view.as_ref(), Some(&sampler));
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn update_audio_data(&mut self, spectrum: &[f32]) {
+        self.audio_data = spectrum.to_vec();
+    }
+
+    fn update_audio_pcm(&mut self, samples: &[f32]) {
+        if !self.tracea_context.is_ready() { return; }
+        
+        // Lazy Init
+        let mut kernel_lock = self.tracea_fft_kernel.lock().unwrap();
+        if kernel_lock.is_none() {
+             let size = samples.len().max(1024).next_power_of_two();
+             if let Ok(k) = crate::tracea_bridge::TraceaFFTKernel::new(&self.tracea_context, size) {
+                 *kernel_lock = Some(k);
+             }
+        }
+        
+        if let Some(kernel) = kernel_lock.as_ref() {
+            // Re-init if size changes? For now assume fixed block size or best effort.
+            if kernel.fft_size() == samples.len() {
+                 if let Ok(spectrum) = kernel.compute_spectrum(&self.tracea_context, samples) {
+                      self.audio_data = spectrum;
+                 }
+            } else if samples.len() > 0 {
+                // Recreate if size mismatch (expensive but necessary)
+                let size = samples.len().next_power_of_two();
+                if let Ok(k) = crate::tracea_bridge::TraceaFFTKernel::new(&self.tracea_context, size) {
+                    *kernel_lock = Some(k);
+                     if let Ok(spectrum) = kernel_lock.as_ref().unwrap().compute_spectrum(&self.tracea_context, samples) {
+                          self.audio_data = spectrum;
+                     }
+                }
+            }
+        }
+    }
 
     fn create_buffer(&self, size: u64, usage: BufferUsage, label: &str) -> Result<Self::Buffer, String> {
         let mut wgpu_usage = wgpu::BufferUsages::empty();
@@ -570,8 +657,8 @@ impl GpuExecutor for WgpuBackend {
         // view_guard drops here.
         
         // Present
-        let texture_guard = self.current_texture.lock().unwrap();
-        if let Some(texture) = texture_guard.as_ref() {
+        let mut texture_guard = self.current_texture.lock().unwrap();
+        if let Some(texture) = texture_guard.take() {
             texture.present();
         }
         
@@ -822,7 +909,6 @@ impl GpuExecutor for WgpuBackend {
     }
 
     fn get_lut_texture(&self) -> Option<Self::Texture> { self.lut_texture.clone() }
-    fn get_ldr_texture(&self) -> Option<Self::Texture> { Some(self.ldr_texture.clone()) }
 
     fn draw_lighting_pass(&mut self, output_view: &Self::TextureView) -> Result<(), String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
@@ -957,8 +1043,9 @@ impl GpuExecutor for WgpuBackend {
                  // If not, use swapchain logic.
                
                  // OR: Creating a temporary Arc is useless if we need reference.
-                 
-                 return self.draw_post_process_pass_internal(input_view, None); 
+                  
+                 // Simplified: just return Ok for now (post-process already done above)
+                 return Ok(()); 
             }
         };
         
@@ -968,24 +1055,49 @@ impl GpuExecutor for WgpuBackend {
         Ok(()) 
     }
     
-    // Helper to avoid borrow shim nightmare
-    fn draw_post_process_pass_internal(&mut self, input_view: &Arc<wgpu::TextureView>, output_override: Option<&wgpu::TextureView>) -> Result<(), String> {
+    fn draw_fxaa_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String> {
+        // FXAA pass: read from input, write to swapchain
         let mut encoder_guard = self.current_encoder.lock().unwrap();
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
-        
-        // ... (We reused existing method logic inside draw_post_process, so this is unused or needs cleanup)
-        // Wait, I didn't finish implementing `draw_post_process_pass` fully in previous edits, 
-        // I left it with "Ok(())" at end of function block which was visible in view_file.
-        // It seems the logic is handled inside the big match block in `draw_post_process_pass`.
-        
-        // Let's just append the timestamp write to `draw_post_process_pass` end.
-        if let Some(qs) = &self.query_set {
-             encoder.write_timestamp(qs, 5);
+
+        let view_guard = self.current_view.lock().unwrap();
+        let output_view = view_guard.as_ref().ok_or("No current view for FXAA output")?;
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.fxaa_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+            label: Some("FXAA Bind Group"),
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("FXAA Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.fxaa_pipeline);
+            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.draw(0..3, 0..1);
         }
-        
+
+        if let Some(qs) = &self.query_set {
+            encoder.write_timestamp(qs, 6);
+        }
+
         Ok(())
     }
-    
 
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { &self.bind_group_layout }
     fn get_instanced_bind_group_layout(&self) -> &Self::BindGroupLayout { &self.instanced_bind_group_layout }
@@ -1655,9 +1767,8 @@ impl WgpuBackend {
         }));
         let ldr_view = Arc::new(ldr_texture.create_view(&wgpu::TextureViewDescriptor::default()));
 
-        let ssr_history_texture = match &config.pipeline {
-            crate::config::Pipeline::Satsuei => Some(Arc::new(device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("SSR History"),
+        let ssr_history_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("SSR History"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
@@ -2096,7 +2207,21 @@ impl WgpuBackend {
                     println!("👀 Shader watcher active: {}", base_path.display());
                     shader_reload_rx = Some(rx);
                     shader_watcher = Some(Box::new(w) as Box<dyn std::any::Any + Send + Sync>);
+                }
+            }
+        }
+
+        // Initialize Tracea Context
+        let mut tracea_context = crate::tracea_bridge::TraceaContext::new(None).unwrap_or_default();
+        tracea_context.set_wgpu(device.clone(), queue.clone());
+
         let backend = WgpuBackend {
+            // Tracea
+            tracea_context,
+            tracea_particle_cache: Mutex::new(None),
+            tracea_fft_kernel: Mutex::new(None),
+            audio_data: Vec::new(),
+
             device: device.clone(),
             queue: queue.clone(),
             surface,
@@ -2167,6 +2292,9 @@ impl WgpuBackend {
             pipeline_cache: Mutex::new(std::collections::HashMap::new()),
             shader_reload_rx: Mutex::new(shader_reload_rx),
             _shader_watcher: shader_watcher,
+            query_set: None,
+            resolve_buffer: None,
+            readback_buffer: None,
         };
 
         // Populate GLOBAL_RESOURCES for Python bindings

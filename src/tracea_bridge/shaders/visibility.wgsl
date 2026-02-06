@@ -1,5 +1,5 @@
-// K8: Visibility & Occlusion Culling (HZB)
-// Performs frustum culling and HZB occlusion testing for 2D sprites.
+// Tracea Visibility Kernel (from K8)
+// HZB-based occlusion culling for 2D sprites
 
 struct DrawUniforms {
     rect: vec4<f32>,
@@ -23,6 +23,7 @@ struct CullingUniforms {
     view_proj: mat4x4<f32>,
     num_instances: u32,
     hzb_mip_levels: u32,
+    _pad: vec2<u32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: CullingUniforms;
@@ -41,21 +42,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let inst = instances[idx];
     
     // 1. Frustum Culling
-    // Project AABB to clip space
-    // inst.rect is [x, y, w, h]
     let p_min = uniforms.view_proj * vec4<f32>(inst.rect.xy, 0.0, 1.0);
     let p_max = uniforms.view_proj * vec4<f32>(inst.rect.xy + inst.rect.zw, 0.0, 1.0);
     
-    // Simplistic clip check
+    // Clip check with padding for glow/shadow
     if (p_max.x < -1.1 || p_min.x > 1.1 || p_max.y < -1.1 || p_min.y > 1.1) {
-        // Return but padded slightly for safety with glow/shadow
         return;
     }
 
-    // 2. HZB Occlusion Culling (Currently bypassed/stubbed to ensure basic visibility)
-    // sample max depth etc...
+    // 2. HZB Occlusion Test (stubbed for now)
+    // TODO: Sample HZB mip chain to check occlusion
     
-    // 3. Mark as Visible
+    // 3. Mark as visible
     let out_idx = atomicAdd(&visible_counter, 1u);
     visible_indices[out_idx] = idx;
 }

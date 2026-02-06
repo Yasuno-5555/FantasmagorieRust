@@ -124,6 +124,8 @@ struct ShapeData {
     float lut_intensity;
     int mode;
     int is_squircle;
+    float2 viewport_size;
+    float time;
 };
 
 float4 resolve_shape(VertexOut in, ShapeData u, texture2d<float> tex, texture2d<float> tex2, sampler s, float time) {
@@ -285,6 +287,7 @@ fragment float4 fs_main(VertexOut in [[stage_in]],
     d.glow_color = u.glow_color; d.border_width = u.border_width;
     d.elevation = u.elevation; d.glow_strength = u.glow_strength;
     d.lut_intensity = u.lut_intensity; d.mode = u.mode; d.is_squircle = u.is_squircle;
+    d.viewport_size = u.viewport_size; d.time = u.time;
     return resolve_shape(in, d, tex, tex2, s, u.time);
 }
 
@@ -302,6 +305,7 @@ fragment float4 fs_instanced(VertexOut in [[stage_in]],
     d.border_width = inst.params1.x; d.elevation = inst.params1.y;
     d.glow_strength = inst.params1.z; d.lut_intensity = inst.params1.w;
     d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
+    d.viewport_size = glob.viewport_size; d.time = glob.time;
     
     float4 color = resolve_shape(in, d, tex, tex2, s, glob.time);
     

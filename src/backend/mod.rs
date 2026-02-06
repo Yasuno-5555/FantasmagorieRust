@@ -46,13 +46,13 @@ pub trait GraphicsBackend {
         None
     }
 
-    /// Get the LUT 3D texture
-    fn get_lut_texture(&self) -> Option<Self::Texture> { None }
-    /// Get the LDR texture
-    fn get_ldr_texture(&self) -> Option<Self::Texture> { None }
-
     /// Update audio spectrum data (Phase 5)
     fn update_audio_data(&mut self, _spectrum: &[f32]) {
+        // Default no-op
+    }
+
+    /// Update audio PCM data (for GPU FFT)
+    fn update_audio_pcm(&mut self, _samples: &[f32]) {
         // Default no-op
     }
 

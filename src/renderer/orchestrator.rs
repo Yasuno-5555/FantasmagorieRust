@@ -16,6 +16,7 @@ pub struct Orchestrator<E: GpuExecutor> {
     pub graph: RenderGraph<E>,
     particle_system: Arc<Mutex<ParticleSystem>>,
     pub frame_count: u64,
+    camera_cut: bool,
 }
 
 impl<E: GpuExecutor + 'static> Orchestrator<E> {
@@ -24,7 +25,13 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
             graph: RenderGraph::new(),
             particle_system: Arc::new(Mutex::new(ParticleSystem::new())),
             frame_count: 0,
+            camera_cut: false,
         }
+    }
+
+    /// Mark a camera cut for this frame (used by temporal effects like MetalFX)
+    pub fn mark_camera_cut(&mut self) {
+        self.camera_cut = true;
     }
 
     pub fn plan(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32) {
@@ -77,7 +84,8 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         self.graph.add_node(ParticleNode::new(self.particle_system.clone()));
 
         // Phase 5/6: Pipeline
-        let scale = config.internal_resolution_scale;
+        // TODO: Pass config.internal_resolution_scale from EngineConfig
+        let scale = 1.0f32; // Fallback: native resolution
         let internal_width = (width as f32 * scale) as u32;
         let internal_height = (height as f32 * scale) as u32;
 
@@ -206,6 +214,8 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         let jy = halton(index + 1, 3) - 0.5;
         let jitter = (jx, jy);
 
-        self.graph.execute(backend, external, time, width, height, jitter)
+        let result = self.graph.execute(backend, external, time, width, height, jitter, self.camera_cut);
+        self.camera_cut = false; // Reset after frame
+        result
     }
 }

@@ -32,6 +32,20 @@ impl<E: GpuExecutor> RenderNode<E> for BlurNode {
         };
         let intermediate_tex = ctx.executor.acquire_transient_texture(&intermediate_desc)?;
 
+        // 0. Try Tracea Accelerated Blur
+        if let Ok(true) = ctx.executor.dispatch_tracea_blur(backdrop_tex, backdrop_tex, self.sigma) {
+             // Cleanup unused intermediate (not acquired yet? Acquired on line 33. Release it.)
+             // Actually, move acquisition after this check?
+             // Line 33 acquires intermediate.
+             // If we move it, we save VRAM allocation.
+             // But existing code structure has acquisition at top.
+             // I'll release it here if handled, or better, move acquisition down.
+             // Moving acquisition is cleaner but larger diff.
+             // I'll release it.
+             ctx.executor.release_transient_texture(intermediate_tex, &intermediate_desc);
+             return Ok(());
+        }
+
         // 3. Create/Get Pipeline
         let shader_source = if cfg!(feature = "metal") { 
             include_str!("../../backend/shaders/metal_blur.metal") 

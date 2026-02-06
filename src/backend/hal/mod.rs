@@ -205,6 +205,24 @@ pub trait GpuExecutor: Send + Sync {
     /// Acquire a transient texture from the backend's pool
     fn acquire_transient_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String>;
     
+    /// Dispatch optimized Tracea blur (if supported and enabled)
+    fn dispatch_tracea_blur(&self, _input: &Self::Texture, _output: &Self::Texture, _sigma: f32) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Check if Tracea particles are supported
+    fn supports_tracea_particles(&self) -> bool { false }
+
+    /// Get the particle buffer managed by Tracea (if any)
+    fn get_tracea_particle_buffer(&self) -> Option<Self::Buffer> { None }
+
+    /// Dispatch Tracea particle simulation
+    fn dispatch_tracea_particles(&self, _dt: f32, _attractor: [f32; 2], _sdf_texture: Option<&Self::Texture>) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    fn update_audio_data(&mut self, _data: &[f32]);
+    fn update_audio_pcm(&mut self, _samples: &[f32]);
 
     /// Release a transient texture back to the backend's pool
     fn release_transient_texture(&self, _texture: Self::Texture, desc: &TextureDescriptor);

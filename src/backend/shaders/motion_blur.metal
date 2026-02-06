@@ -1,34 +1,6 @@
-#include <metal_stdlib>
-using namespace metal;
+// motion_blur.metal - Motion blur post-processing shader
+// Note: This file is concatenated with metal_shader.metal, so CinematicParams, etc. are already defined
 
-struct CinematicParams {
-    float exposure;
-    float ca_strength;
-    float vignette_intensity;
-    float bloom_intensity;
-    uint tonemap_mode;
-    uint bloom_mode;
-    float grain_strength;
-    float time;
-    float lut_intensity;
-    float blur_radius;
-    float motion_blur_strength;
-    float _pad;
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float2 uv;
-};
-
-vertex VertexOut vs_main(uint vid [[vertex_id]]) {
-    VertexOut out;
-    float x = (vid == 2) ? 3.0 : -1.0;
-    float y = (vid == 1) ? 3.0 : -1.0;
-    out.position = float4(x, y, 0.0, 1.0);
-    out.uv = float2((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
 
 fragment float4 fs_motion_blur(VertexOut in [[stage_in]],
                        constant CinematicParams &cinema [[buffer(1)]],

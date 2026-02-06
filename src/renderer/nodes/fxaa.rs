@@ -1,24 +1,16 @@
-use std::sync::{Arc, Mutex};
-use crate::backend::hal::{GpuExecutor, RenderPipeline, BindGroup, BindGroupLayout};
-use crate::renderer::graph::{RenderNode, RenderContext, GraphResource, GraphResourceDesc, ResourceHandle, HDR_HIGH_RES_HANDLE, TextureDescriptor, TextureFormat, TextureUsage};
-use crate::backend::hal::TextureViewDescriptor;
+use crate::backend::hal::GpuExecutor;
+use crate::renderer::graph::{RenderNode, RenderContext, GraphResource, ResourceHandle};
 
 pub const FXAA_OUTPUT_HANDLE: ResourceHandle = 40;
 
 pub struct FXAANode<E: GpuExecutor> {
-    pipeline: Option<E::RenderPipeline>,
-    bind_group_layout: Option<E::BindGroupLayout>,
-    bind_group: Option<E::BindGroup>,
-    sampler: Option<E::Sampler>,
+    _phantom: std::marker::PhantomData<E>,
 }
 
 impl<E: GpuExecutor> FXAANode<E> {
     pub fn new() -> Self {
         Self {
-            pipeline: None,
-            bind_group_layout: None,
-            bind_group: None,
-            sampler: None,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
@@ -28,6 +20,7 @@ impl<E: GpuExecutor> RenderNode<E> for FXAANode<E> {
         "FXAA Pass"
     }
 
+    fn execute(&mut self, ctx: &mut RenderContext<E>) -> Result<(), String> {
         // Input: LDR Handle (from Post Process)
         use crate::renderer::graph::{LDR_HANDLE, GraphResource};
         

@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 pub struct AudioManager {
     _stream: cpal::Stream, // Keep stream alive
     spectrum_data: Arc<Mutex<Vec<f32>>>,
+    samples_data: Arc<Mutex<Vec<f32>>>,
 }
 
 impl AudioManager {
@@ -25,9 +26,14 @@ impl AudioManager {
 
         let spectrum_data = Arc::new(Mutex::new(vec![0.0; 512]));
         let spectrum_clone = spectrum_data.clone();
+        
+        let fft_size = 1024;
+
+        // PCM samples storage
+        let samples_data = Arc::new(Mutex::new(vec![0.0; fft_size]));
+        let samples_clone = samples_data.clone();
 
         // FFT Setup
-        let fft_size = 1024;
         let mut planner = RealFftPlanner::<f32>::new();
         let r2c = planner.plan_fft_forward(fft_size);
         let mut spectrum = r2c.make_output_vec();
@@ -55,8 +61,20 @@ impl AudioManager {
                     let window = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (fft_size as f32 - 1.0)).cos());
                     input_buffer[i] = sample * window;
                 }
+                
+                // Update PCM samples for GPU (Tracea)
+                if let Ok(mut lock) = samples_clone.try_lock() {
+                    // We copy input_buffer (windowed)
+                    // Or should we copy raw sample_ring? 
+                    // Windowing is useful for FFT. TraceaFFT expects raw or windowed?
+                    // TraceaFFT is generic. Passing windowed is better for spectral analysis.
+                    if lock.len() != input_buffer.len() {
+                        *lock = vec![0.0; input_buffer.len()];
+                    }
+                    lock.copy_from_slice(&input_buffer);
+                }
 
-                // Execute FFT
+                // Execute FFT (CPU Fallback/Legacy)
                 if let Ok(()) = r2c.process(&mut input_buffer, &mut spectrum) {
                      let mut out_lock = spectrum_clone.lock().unwrap();
                      for (i, val) in spectrum.iter().enumerate().take(512) {
@@ -79,11 +97,17 @@ impl AudioManager {
         Ok(Self {
             _stream: stream,
             spectrum_data,
+            samples_data,
         })
     }
 
     pub fn get_spectrum(&self) -> Vec<f32> {
         let lock = self.spectrum_data.lock().unwrap();
+        lock.clone()
+    }
+
+    pub fn get_samples(&self) -> Vec<f32> {
+        let lock = self.samples_data.lock().unwrap();
         lock.clone()
     }
 }

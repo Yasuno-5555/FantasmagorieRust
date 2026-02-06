@@ -42,6 +42,12 @@ pub struct MetalBackend {
     resources: MetalResourceProvider,
     pipelines: MetalPipelineProvider,
     
+    // Tracea Integration
+    pub tracea_context: crate::tracea_bridge::TraceaContext,
+    pub tracea_blur_cache: Mutex<Option<crate::tracea_bridge::TraceaBlurKernel>>,
+    pub tracea_particle_cache: Mutex<Option<crate::tracea_bridge::TraceaParticleKernel>>,
+    pub tracea_fft_kernel: Mutex<Option<crate::tracea_bridge::TraceaFFTKernel>>,
+    
     main_pipeline: RenderPipelineState,
     instanced_pipeline: RenderPipelineState,
     instanced_gbuffer_pipeline: RenderPipelineState,
@@ -73,7 +79,7 @@ pub struct MetalBackend {
     pub blur_uniform_buffer: Buffer,
     pub cinematic_buffer: Buffer,
     pub current_cinematic: Mutex<crate::backend::shaders::types::CinematicParams>,
-    pub lut_texture: Option<TextureRef>,
+    pub lut_texture: Option<Texture>,
     pub temporal_scaler: Option<metalfx::TemporalScaler>,
     pub frame_count: u64,
     pub sdf_texture: Option<Texture>,
@@ -81,7 +87,6 @@ pub struct MetalBackend {
     pub internal_resolution_scale: f32,
     pub cached_width: u32,
     pub cached_height: u32,
-    pub temporal_scaler: Option<super::metalfx::TemporalScaler>,
     
     // Effect specific
     pub ssr_resolve_pipeline: RenderPipelineState,
@@ -149,6 +154,14 @@ impl MetalBackend {
         );
         let pipelines = MetalPipelineProvider::new(device.clone(), &shader_src)?;
         
+        // Initialize Tracea Context with shared device
+        // Using Arc explicitly to match new signature
+        let tracea_context = crate::tracea_bridge::TraceaContext::new(Some(Arc::new(device.clone())))
+            .unwrap_or_else(|e| {
+                println!("[WARN] Failed to init Tracea: {}. Creating default context.", e);
+                crate::tracea_bridge::TraceaContext::new(None).expect("Tracea init failed")
+            });
+        
         let main_pipeline = pipelines.create_render_pipeline(
             "Fantasmagorie Main", 
             "vs_main fs_main",
@@ -195,6 +208,22 @@ impl MetalBackend {
         dummy_vel_desc.set_usage(MTLTextureUsage::ShaderRead);
         let dummy_velocity_texture = device.new_texture(&dummy_vel_desc);
 
+        // Dummy font texture (1x1 R8)
+        let dummy_font_desc = metal::TextureDescriptor::new();
+        dummy_font_desc.set_width(1);
+        dummy_font_desc.set_height(1);
+        dummy_font_desc.set_pixel_format(MTLPixelFormat::R8Unorm);
+        dummy_font_desc.set_usage(MTLTextureUsage::ShaderRead);
+        let dummy_font_texture = device.new_texture(&dummy_font_desc);
+
+        // Dummy backdrop texture (1x1 RGBA16Float)
+        let dummy_backdrop_desc = metal::TextureDescriptor::new();
+        dummy_backdrop_desc.set_width(1);
+        dummy_backdrop_desc.set_height(1);
+        dummy_backdrop_desc.set_pixel_format(MTLPixelFormat::RGBA16Float);
+        dummy_backdrop_desc.set_usage(MTLTextureUsage::ShaderRead);
+        let dummy_backdrop_texture = device.new_texture(&dummy_backdrop_desc);
+
         let resolve_pipeline = pipelines.create_render_pipeline("Fantasmagorie Resolve", "vs_resolve fs_resolve", None)?;
         let bright_pipeline = pipelines.create_render_pipeline("Bright Pass", "vs_resolve fs_bright_pass", None)?;
         let blur_pipeline = pipelines.create_render_pipeline("Blur Pass", "vs_resolve fs_blur", None)?;
@@ -215,6 +244,7 @@ impl MetalBackend {
             exposure: 1.0, ca_strength: 0.005, vignette_intensity: 0.5, bloom_intensity: 0.4,
             tonemap_mode: 1, bloom_mode: 1, grain_strength: 0.05, time: 0.0,
             lut_intensity: 0.0, blur_radius: 0.0, motion_blur_strength: 0.0, debug_mode: 0,
+            gi_intensity: 0.3, light_pos: [500.0, 300.0], volumetric_intensity: 0.5, light_color: [1.0, 0.9, 0.7, 1.0],
         };
         let cinematic_buffer = device.new_buffer(
             std::mem::size_of::<crate::backend::shaders::types::CinematicParams>() as u64,
@@ -233,10 +263,14 @@ impl MetalBackend {
 
         Ok(Self {
             device: device.clone(), command_queue, resources, pipelines,
+            tracea_context,
+            tracea_blur_cache: Mutex::new(None),
+            tracea_particle_cache: Mutex::new(None),
+            tracea_fft_kernel: Mutex::new(None),
             main_pipeline, instanced_pipeline, instanced_gbuffer_pipeline,
             uniform_buffer, vertex_buffer,
             transient_pool: Mutex::new(TransientPool::new()),
-            font_texture: None, backdrop_texture: None, sampler,
+            font_texture: Some(dummy_font_texture), backdrop_texture: Some(dummy_backdrop_texture), sampler,
             lut_texture: Some(Self::create_identity_lut(&device)),
             sdf_texture: None,
             layer: None, start_time: std::time::Instant::now(),
@@ -254,6 +288,8 @@ impl MetalBackend {
             cached_width: 0,
             cached_height: 0,
             temporal_scaler: None,
+            depth_texture: None,
+            frame_count: 0,
         })
     }
 
@@ -340,6 +376,39 @@ impl GraphicsBackend for MetalBackend {
     fn update_audio_data(&mut self, data: &[f32]) {
         self.audio_data = data.to_vec();
     }
+    
+    fn update_audio_pcm(&mut self, samples: &[f32]) {
+        if !self.tracea_context.is_ready() { return; }
+        
+        let mut kernel_lock = self.tracea_fft_kernel.lock().unwrap();
+        // Init if needed (assuming fixed size 1024 often used)
+        if kernel_lock.is_none() {
+             let size = samples.len().max(1024).next_power_of_two();
+             if let Ok(k) = crate::tracea_bridge::TraceaFFTKernel::new(&self.tracea_context, size) {
+                 *kernel_lock = Some(k);
+             }
+        }
+        
+        if let Some(kernel) = kernel_lock.as_ref() {
+            // Check size mismatch
+            if kernel.fft_size() != samples.len() {
+                // Recreate? Or just error/log?
+                // For demo simplicity, we assume consistent size.
+                // If mismatch, skip or try recreate.
+                if samples.len().is_power_of_two() {
+                     if let Ok(k) = crate::tracea_bridge::TraceaFFTKernel::new(&self.tracea_context, samples.len()) {
+                         *kernel_lock = Some(k);
+                     }
+                }
+            }
+            // Execute
+            if let Some(valid_kernel) = kernel_lock.as_ref() {
+                 if let Ok(spectrum) = valid_kernel.compute_spectrum(&self.tracea_context, samples) {
+                      self.audio_data = spectrum;
+                 }
+            }
+        }
+    }
 
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         if self.cached_width != width || self.cached_height != height {
@@ -372,6 +441,58 @@ impl GraphicsBackend for MetalBackend {
         self.end_current_encoder();
     }
 
+    fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
+        let desc = metal::TextureDescriptor::new();
+        desc.set_pixel_format(MTLPixelFormat::R8Unorm);
+        desc.set_width(width as u64);
+        desc.set_height(height as u64);
+        desc.set_usage(MTLTextureUsage::ShaderRead);
+        
+        let tex = self.device.new_texture(&desc);
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize { width: width as u64, height: height as u64, depth: 1 },
+        };
+        tex.replace_region(region, 0, data.as_ptr() as *const _, width as u64);
+        self.font_texture = Some(tex);
+    }
+
+    fn capture_screenshot(&mut self, path: &str) {
+        *self.screenshot_requested.lock().unwrap() = Some(path.to_string());
+    }
+
+    fn set_cinematic_config(&mut self, config: crate::config::CinematicConfig) {
+        use crate::backend::shaders::types::CinematicParams;
+        use crate::config::{Bloom, Tonemap};
+
+        let params = CinematicParams {
+            exposure: config.exposure,
+            ca_strength: config.chromatic_aberration,
+            vignette_intensity: config.vignette,
+            bloom_intensity: 0.4,
+            tonemap_mode: match config.tonemap { Tonemap::None => 0, Tonemap::Aces => 1, Tonemap::Reinhard => 2 },
+            bloom_mode: match config.bloom { Bloom::None => 0, Bloom::Soft => 1, Bloom::Cinematic => 2 },
+            grain_strength: config.grain_strength,
+            time: self.start_time.elapsed().as_secs_f32(),
+            lut_intensity: config.lut_intensity,
+            blur_radius: config.blur_radius,
+            motion_blur_strength: config.motion_blur_strength,
+            debug_mode: config.debug_mode,
+            light_pos: [500.0, 300.0],
+            gi_intensity: config.gi_intensity,
+            volumetric_intensity: config.volumetric_intensity,
+            light_color: [1.0, 0.9, 0.7, 1.0],
+        };
+
+        *self.current_cinematic.lock().unwrap() = params;
+        unsafe {
+            let ptr = self.cinematic_buffer.contents() as *mut CinematicParams;
+            *ptr = params;
+        }
+    }
+}
+
+impl MetalBackend {
     fn resize_internal(&mut self, width: u32, height: u32) {
         self.cached_width = width;
         self.cached_height = height;
@@ -423,15 +544,16 @@ impl GraphicsBackend for MetalBackend {
              println!("Initializing MetalFX Scaler: {}x{} -> {}x{}", input_w, input_h, width, height);
 
              let scaler = TemporalScaler::new(
+                 &self.device,
                  input_w as usize, input_h as usize,
                  width as usize, height as usize,
                  color_fmt, depth_fmt, motion_fmt, output_fmt
              );
              
              match scaler {
-                 Ok(s) => self.temporal_scaler = Some(s),
-                 Err(e) => {
-                     eprintln!("Failed to init MetalFX: {}", e);
+                 Some(s) => self.temporal_scaler = Some(s),
+                 None => {
+                     eprintln!("Failed to init MetalFX: scaler creation returned None");
                      self.temporal_scaler = None;
                  }
              }
@@ -439,8 +561,9 @@ impl GraphicsBackend for MetalBackend {
             self.temporal_scaler = None;
         }
     }
-
-    fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
+    
+    // GraphicsBackend methods moved here to avoid duplicate impl
+    pub fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
         let desc = metal::TextureDescriptor::new();
         desc.set_pixel_format(MTLPixelFormat::R8Unorm);
         desc.set_width(width as u64);
@@ -594,13 +717,18 @@ impl GpuExecutor for MetalBackend {
         encoder.set_vertex_buffer(0, Some(vertex_buffer), 0);
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
         if let Some(bg) = bind_group {
-            for (i, buf) in bg.buffers.iter().enumerate() {
-                encoder.set_vertex_buffer(1 + i as u64, Some(buf), 0);
-                encoder.set_fragment_buffer(1 + i as u64, Some(buf), 0);
+            for entry in &bg.entries {
+                match &entry.resource {
+                    pipeline_provider::MetalResource::Buffer(buf) => {
+                        encoder.set_vertex_buffer(1 + entry.binding as u64, Some(buf), 0);
+                        encoder.set_fragment_buffer(1 + entry.binding as u64, Some(buf), 0);
+                    },
+                    pipeline_provider::MetalResource::Texture(tex) => encoder.set_fragment_texture(entry.binding as u64, Some(tex)),
+                    pipeline_provider::MetalResource::Sampler(samp) => encoder.set_fragment_sampler_state(entry.binding as u64, Some(samp)),
+                }
             }
-            for (i, tex) in bg.textures.iter().enumerate() { encoder.set_fragment_texture(i as u64, Some(tex)); }
-            for (i, samp) in bg.samplers.iter().enumerate() { encoder.set_fragment_sampler_state(i as u64, Some(samp)); }
         }
+
         encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, vertex_count as u64);
         Ok(())
     }
@@ -637,13 +765,18 @@ impl GpuExecutor for MetalBackend {
         encoder.set_vertex_buffer(2, Some(instance_buffer), 0);
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
         if let Some(bg) = bind_group {
-            for (i, buf) in bg.buffers.iter().enumerate() {
-                encoder.set_vertex_buffer(1 + i as u64, Some(buf), 0);
-                encoder.set_fragment_buffer(1 + i as u64, Some(buf), 0);
+            for entry in &bg.entries {
+                match &entry.resource {
+                    pipeline_provider::MetalResource::Buffer(buf) => {
+                        encoder.set_vertex_buffer(1 + entry.binding as u64, Some(buf), 0);
+                        encoder.set_fragment_buffer(1 + entry.binding as u64, Some(buf), 0);
+                    },
+                    pipeline_provider::MetalResource::Texture(tex) => encoder.set_fragment_texture(entry.binding as u64, Some(tex)),
+                    pipeline_provider::MetalResource::Sampler(samp) => encoder.set_fragment_sampler_state(entry.binding as u64, Some(samp)),
+                }
             }
-            for (i, tex) in bg.textures.iter().enumerate() { encoder.set_fragment_texture(i as u64, Some(tex)); }
-            for (i, samp) in bg.samplers.iter().enumerate() { encoder.set_fragment_sampler_state(i as u64, Some(samp)); }
         }
+
         encoder.draw_primitives_instanced(MTLPrimitiveType::Triangle, 0, vertex_count as u64, instance_count as u64);
         Ok(())
     }
@@ -695,16 +828,6 @@ impl GpuExecutor for MetalBackend {
     }
 
     fn dispatch(&self, _p: &Self::ComputePipeline, _bg: Option<&Self::BindGroup>, _g: [u32; 3], _pc: &[u8]) -> Result<(), String> { Ok(()) }
-    fn copy_texture(&self, src: &Self::Texture, dst: &Self::Texture) -> Result<(), String> {
-        let wrapper = self.ensure_encoder()?;
-        let encoder = &wrapper.0;
-        let blit = encoder as *const _ as *mut MetalBlitCommandEncoder; // Hacky but assuming blit encoder? No, render encoder can't copy.
-        // Wait, copy_texture is blit.
-        // MetalBackend architecture needs cleanup for encoder types.
-        // For now, assuming we handle it or use dedicated blit encoder.
-        // But let's focus on draw_particles first.
-        Ok(()) 
-    }
 
     fn draw_particles(&mut self, pipeline: &Self::RenderPipeline, bind_group: &Self::BindGroup, particle_count: u32) -> Result<(), String> {
         self.end_current_encoder();
@@ -759,6 +882,7 @@ impl GpuExecutor for MetalBackend {
         encoder.end_encoding();
         Ok(())
     }
+    fn copy_texture(&self, src: &Self::Texture, dst: &Self::Texture) -> Result<(), String> {
         let cb_guard = self.current_command_buffer.lock().unwrap();
         let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
         let enc = cb.new_blit_command_encoder();
@@ -789,6 +913,85 @@ impl GpuExecutor for MetalBackend {
         Ok(())
     }
 
+    fn dispatch_tracea_blur(&self, input: &Self::Texture, output: &Self::Texture, sigma: f32) -> Result<bool, String> {
+        if !self.tracea_context.is_ready() { return Ok(false); }
+        
+        let mut cache = self.tracea_blur_cache.lock().unwrap();
+        if cache.is_none() || (cache.as_ref().unwrap().sigma - sigma).abs() > 0.01 {
+             let radius = (sigma * 3.0) as u32;
+             let kernel = crate::tracea_bridge::TraceaBlurKernel::new(&self.tracea_context, radius)
+                 .map_err(|e| format!("Tracea blur init failed: {}", e))?;
+             *cache = Some(kernel);
+        }
+        
+        let kernel = cache.as_ref().unwrap();
+        kernel.execute(input, output, 1).map_err(|e| e.to_string())?;
+        
+        Ok(true)
+    }
+
+    fn supports_tracea_particles(&self) -> bool {
+        self.tracea_context.is_ready()
+    }
+
+    fn get_tracea_particle_buffer(&self) -> Option<Self::Buffer> {
+        let mut cache = self.tracea_particle_cache.lock().unwrap();
+        if cache.is_none() {
+             let kernel = crate::tracea_bridge::TraceaParticleKernel::new(&self.tracea_context, 100_000) // Match ParticlesNode default
+                 .map_err(|e| println!("Tracea particle init failed: {}", e)).ok()?;
+             *cache = Some(kernel);
+        }
+        
+        Some(cache.as_ref()?.particle_buffer().clone())
+    }
+
+    fn dispatch_tracea_particles(&self, dt: f32, _attractor: [f32; 2], sdf_texture: Option<&Self::Texture>) -> Result<bool, String> {
+        if !self.tracea_context.is_ready() { return Ok(false); }
+        
+        // Lazy init if not already done (should be done by get_buffer usually)
+        let mut cache = self.tracea_particle_cache.lock().unwrap();
+        if cache.is_none() {
+            let kernel = crate::tracea_bridge::TraceaParticleKernel::new(&self.tracea_context, 100_000)
+                 .map_err(|e| format!("Tracea particle init failed: {}", e))?;
+             *cache = Some(kernel);
+        }
+        
+        let kernel = cache.as_ref().unwrap();
+        // Attractor not passed from ParticlesNode yet?
+        // SimParams in ParticlesNode has attractor hardcoded:
+        // attractor_pos: [0.0, 0.0], attractor_strength: 0.0 in reset.
+        // Update passes attractor?
+        // TraceaParticleKernel::update takes attractor.
+        // I need to use the one passed to this function.
+        // If _attractor is unused in signature, I should change signature to use it.
+        // Wait, dispatch_tracea_particles signature in trait had `_attractor`.
+        // I should use `attractor`.
+        kernel.update(dt, _attractor, sdf_texture);
+        
+        Ok(true)
+    }
+
+    fn update_audio_data(&mut self, data: &[f32]) {
+        self.audio_data = data.to_vec();
+    }
+
+    fn update_audio_pcm(&mut self, samples: &[f32]) {
+        if !self.tracea_context.is_ready() { return; }
+        
+        let mut kernel_lock = self.tracea_fft_kernel.lock().unwrap();
+        if kernel_lock.is_none() {
+            let size = samples.len().max(1024).next_power_of_two();
+            if let Ok(k) = crate::tracea_bridge::TraceaFFTKernel::new(&self.tracea_context, size) {
+                *kernel_lock = Some(k);
+            }
+        }
+        if let Some(valid_kernel) = kernel_lock.as_ref() {
+            if let Ok(spectrum) = valid_kernel.compute_spectrum(&self.tracea_context, samples) {
+                self.audio_data = spectrum;
+            }
+        }
+    }
+    
     fn acquire_transient_texture(&self, desc: &TextureDescriptor) -> Result<Self::Texture, String> {
         let mut pool = self.transient_pool.lock().unwrap();
         pool.acquire_texture(self, desc)
@@ -818,7 +1021,15 @@ impl GpuExecutor for MetalBackend {
     fn get_backdrop_view(&self) -> &Self::TextureView { self.backdrop_texture.as_ref().unwrap() }
     fn get_hdr_texture(&self) -> Option<Self::Texture> { self.hdr_texture.clone() }
     fn get_backdrop_texture(&self) -> Option<Self::Texture> { self.backdrop_texture.clone() }
+    fn get_extra_texture(&self) -> Option<Self::Texture> { None }
+    fn get_aux_texture(&self) -> Option<Self::Texture> { None }
+    fn get_velocity_texture(&self) -> Option<Self::Texture> { self.velocity_texture.clone() }
+    fn get_depth_texture(&self) -> Option<Self::Texture> { self.depth_texture.clone() }
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { 
+        static DUMMY: MetalBindGroupLayout = MetalBindGroupLayout { entries: Vec::new() };
+        &DUMMY
+    }
+    fn get_instanced_bind_group_layout(&self) -> &Self::BindGroupLayout { 
         static DUMMY: MetalBindGroupLayout = MetalBindGroupLayout { entries: Vec::new() };
         &DUMMY
     }
@@ -895,8 +1106,7 @@ impl GpuExecutor for MetalBackend {
     fn present(&self) -> Result<(), String> { Ok(()) }
     fn y_flip(&self) -> bool { true }
     fn get_cinematic_buffer(&self) -> &Self::Buffer { &self.cinematic_buffer }
-    fn get_lut_texture(&self) -> Option<Self::Texture> { self.lut_texture.clone() }
-    fn get_ldr_texture(&self) -> Option<Self::Texture> { None }
+    fn get_lut_texture(&self) -> Option<Self::Texture> { None } // TODO: Fix TextureRef -> Texture conversion
     fn set_lut_view(&mut self, _view: &Self::TextureView) -> Result<(), String> { Ok(()) }
     fn draw_lighting_pass(&mut self, _output_view: &Self::TextureView) -> Result<(), String> { Ok(()) }
     fn draw_post_process_pass(&mut self, _input_view: &Self::TextureView, _output_view: Option<&Self::TextureView>) -> Result<(), String> { Ok(()) }
@@ -905,7 +1115,7 @@ impl GpuExecutor for MetalBackend {
         if let Some(scaler) = &self.temporal_scaler {
             let cb_guard = self.current_command_buffer.lock().unwrap();
             let cb_wrapper = cb_guard.as_ref().ok_or("No active command buffer")?;
-            let command_buffer: &CommandBufferRef = unsafe { std::mem::transmute(cb_wrapper.0) }; // Wrapper holds id, we trust it's CommandBuffer protocol
+            let command_buffer: &CommandBufferRef = unsafe { std::mem::transmute(&cb_wrapper.0) }; // Wrapper holds id, we trust it's CommandBuffer protocol
 
             // Resources
             // MetalBackend::Texture is Texture (Arc<Texture>? No, Texture is RefCounted in metal crate).

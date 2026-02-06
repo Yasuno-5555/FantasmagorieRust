@@ -1,17 +1,6 @@
-#include <metal_stdlib>
-using namespace metal;
+// ssr.metal - Screen-space reflections shader
+// Note: This file is concatenated with metal_shader.metal, so GlobalUniforms, VertexOut, etc. are already defined
 
-struct GlobalUniforms {
-    float4x4 projection;
-    float time;
-    float2 viewport_size;
-    float _pad;
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float2 uv;
-};
 
 vertex VertexOut vs_ssr(uint vid [[vertex_id]]) {
     float x = (float)(vid / 2) * 4.0 - 1.0;
