@@ -257,7 +257,56 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                     executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
                     i += 1;
                 }
-                DrawCommand::TileMap { pos, size: _, texture_id: _, tile_count, tile_size, data, color, tiles_per_row, tile_uv_size } => {
+                DrawCommand::TileMap { pos, size: _, texture_id, tile_count, tile_size, data, color, tiles_per_row, tile_uv_size } => {
+                    if executor.supports_tilemap() {
+                        let tex_view = if *texture_id > 0 {
+                             if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&(*texture_id as u32)) {
+                                  Some(executor.create_texture_view(tex)?)
+                             } else { None }
+                         } else { None };
+                         
+                         let final_view = tex_view.as_ref().unwrap_or(font_view.as_ref().unwrap());
+
+                         let global = GlobalUniforms {
+                            projection: *bytemuck::cast_ref(&proj),
+                            time, _pad0: 0.0, viewport_size: [width as f32, height as f32],
+                         };
+                         let g_buf = executor.create_buffer(bytemuck::bytes_of(&global).len() as u64, BufferUsage::Uniform, "TileGlobal")?;
+                         executor.write_buffer(&g_buf, 0, bytemuck::bytes_of(&global));
+
+                         let params = crate::backend::shaders::types::TilemapParams {
+                             position: [pos.x, pos.y],
+                             map_size: *tile_count,
+                             tile_size: *tile_size,
+                             uv_size: *tile_uv_size,
+                             columns: *tiles_per_row,
+                             _pad0: 0, _pad1: 0, _pad2: 0,
+                         };
+
+                        let aux_view_opt = if let Some(aux_h) = self.aux_handle {
+                             if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&aux_h) {
+                                  Some(executor.create_texture_view(tex)?)
+                             } else { None }
+                        } else { None };
+
+                        let velocity_view_opt = if let Some(vel_h) = self.velocity_handle {
+                             if let Some(crate::renderer::graph::GraphResource::Texture(_, vtex)) = ctx.resources.get(&vel_h) {
+                                  Some(executor.create_texture_view(vtex)?)
+                             } else { None }
+                        } else { None };
+
+                        let depth_view_opt = if let Some(depth_h) = self.depth_handle {
+                             if let Some(crate::renderer::graph::GraphResource::Texture(_, dtex)) = ctx.resources.get(&depth_h) {
+                                  Some(executor.create_texture_view(dtex)?)
+                             } else { None }
+                        } else { None };
+
+                         executor.draw_tilemap(params, data, final_view, &g_buf, aux_view_opt.as_ref(), velocity_view_opt.as_ref(), depth_view_opt.as_ref())?;
+                         executor.destroy_buffer(g_buf);
+                         i += 1;
+                         continue;
+                    }
+
                     let mut batched_verts = Vec::new();
                     
                     for y in 0..tile_count[1] {
@@ -351,6 +400,52 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
                     }
                     i += 1;
+                }
+                DrawCommand::SkinnedMesh { vertices, indices, texture_id, bone_matrices } => {
+                     let tex_view = if *texture_id > 0 {
+                         if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&(*texture_id as u32)) {
+                              Some(executor.create_texture_view(tex)?)
+                         } else { None }
+                     } else { None };
+                     let final_view = tex_view.as_ref().unwrap_or(font_view.as_ref().unwrap());
+
+                     let global = GlobalUniforms {
+                        projection: *bytemuck::cast_ref(&proj),
+                        time, _pad0: 0.0, viewport_size: [width as f32, height as f32],
+                     };
+                     
+                     // Convert Mat3 to Mat4 for shader (padded)
+                     // Mat3 in Rust is [f32; 9]. WGSL expects mat4x4<f32>.
+                     // We need to expand 3x3 to 4x4.
+                     let mut processed_matrices = Vec::with_capacity(bone_matrices.len() * 16);
+                     for m in bone_matrices {
+                          let arr = m.0; // [f32; 9]
+                          // Row 0
+                          processed_matrices.push(arr[0]); processed_matrices.push(arr[1]); processed_matrices.push(arr[2]); processed_matrices.push(0.0);
+                          // Row 1
+                          processed_matrices.push(arr[3]); processed_matrices.push(arr[4]); processed_matrices.push(arr[5]); processed_matrices.push(0.0);
+                          // Row 2 (Affine translation usually)
+                          processed_matrices.push(arr[6]); processed_matrices.push(arr[7]); processed_matrices.push(arr[8]); processed_matrices.push(0.0);
+                          // Row 3
+                          processed_matrices.push(0.0); processed_matrices.push(0.0); processed_matrices.push(0.0); processed_matrices.push(1.0);
+                     }
+                     
+                     let g_buf = executor.create_buffer(bytemuck::bytes_of(&global).len() as u64, BufferUsage::Uniform, "SkinGlobal")?;
+                     executor.write_buffer(&g_buf, 0, bytemuck::bytes_of(&global));
+                     
+                     let v_buf = executor.create_buffer((vertices.len() * std::mem::size_of::<crate::backend::wgpu::SkinnedVertex>()) as u64, BufferUsage::Vertex, "SkinV")?;
+                     executor.write_buffer(&v_buf, 0, bytemuck::cast_slice(vertices));
+                     
+                     let i_buf = executor.create_buffer((indices.len() * 4) as u64, BufferUsage::Index, "SkinI")?;
+                     executor.write_buffer(&i_buf, 0, bytemuck::cast_slice(indices));
+                     
+                     let b_buf = executor.create_buffer((processed_matrices.len() * 4) as u64, BufferUsage::Storage, "SkinB")?;
+                     executor.write_buffer(&b_buf, 0, bytemuck::cast_slice(&processed_matrices));
+                     
+                     let _ = executor.draw_skinned(&v_buf, &i_buf, indices.len() as u32, &b_buf, final_view, &g_buf);
+                     
+                     executor.destroy_buffer(g_buf); executor.destroy_buffer(v_buf); executor.destroy_buffer(i_buf); executor.destroy_buffer(b_buf);
+                     i += 1;
                 }
                 _ => { i += 1; }
             }

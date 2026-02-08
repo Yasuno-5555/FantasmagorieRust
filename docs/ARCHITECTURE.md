@@ -1,50 +1,68 @@
-# Architecture: The Dual-Persona Design
+# Architecture Overview
 
-Fantasmagorie follows a strict layered architecture designed to isolate user-facing logic from GPU-specific optimizations.
+Fantasmagorie uses a data-oriented **Entity Component System (ECS)** architecture, combined with a high-performance **Deferred Rendering** pipeline.
 
-## The Four Layers
+## high-Level Data Flow
 
 ```mermaid
 graph TD
-    A["Layer 1: User API (Friendly Lie)"] --> B["Layer 2: Tracea (The Brain)"]
-    B --> C["Layer 3: Renderer (The Boundary)"]
-    C --> D["Layer 4: Backend (The Muscle)"]
+    Input --> InputManager
+    InputManager --> Systems
     
-    subgraph "Logic Domain"
-        A
+    subgraph "Game Loop"
+        PhysicsSystem --> World
+        AnimationSystem --> World
+        GameLogicPoints --> World
+        ParticleSystem --> World
     end
     
-    subgraph "Transformation Domain"
-        B
-        C
-    end
-    
-    subgraph "Execution Domain"
-        D
-    end
+    World --> Renderer
+    Renderer --> WgpuBackend
 ```
 
-### 1. User API (The Friendly Lie)
-Located in `src/widgets`, `src/game/sprite.rs`.
-Developers interact with **Builders**. These aren't the actual engine objects; they are high-level descriptions of intent. They allow for a clean, readable syntax that feels like writing UI or game logic without worrying about the underlying complexity.
+## 1. The World (ECS)
+Located in `src/game/world.rs`.
+The `World` struct is the central repository for all game state. It manages:
+-   **Entities:** Unique IDs (`EntityId`) representing game objects.
+-   **Components:** Data attached to entities (e.g., `Transform`, `Sprite`, `RigidBody`).
+-   **Systems:** Logic that iterates over components to update state.
 
-### 2. Tracea (The Brain)
-Located in `src/tracea`.
-Tracea interprets the "Lie" told by the User API. It optimizes the draw commands, handles compute-based effects (like JFA), and decides how to translate abstract shapes into GPU-executable instructions.
+### Key Components
+-   `Transform`: Position, rotation, scale, and hierarchy (parent/child).
+-   `Sprite`: Texture and color data for rendering.
+-   `PhysicsComponent`: Velocity, mass, and restitution.
+-   `Collider`: Shape data (Circle, AABB, Polygon).
+-   `StateMachine`: logic controller for AI.
+-   `AnimationComponent`: Sprite-based frame animation.
+-   `SkeletalAnimationComponent`: Bone-based deformations.
 
-### 3. Renderer (The Boundary)
-Located in `src/renderer`.
-Under the **V5 Crystal** architecture, the Renderer is simplified. It uses the `RenderOrchestrator` to plan execution steps and dispatches them to a single, unified backend interface. It no longer manages complex state transitions directly, delegating that responsibility to the "Muscle".
+## 2. The Renderer
+Located in `src/renderer` and `src/backend`.
+The rendering engine is decoupled from the game logic. It consumes a read-only snapshot of the World state to produce frames.
 
-### 4. Backend (The Muscle)
-Located in `src/backend`.
-The Backend is consolidated into the `GpuExecutor` trait. Fragmentation (separate providers for resources, pipelines, and compute) has been removed. A single backend implementation (like `WgpuBackend`) handles the entire lifecycle of GPU resources and command submission, ensuring extreme stability and predictable state management.
+### Pipeline Stages
+1.  **Geometry Pass:** Renders sprites and meshes into a **G-Buffer** (Albedo, Normal, Emissive).
+2.  **Lighting Pass:** Calculates illumination from point lights and emissive surfaces.
+3.  **Post-Processing:** Applies cinematic effects:
+    -   **Bloom:** Extract bright areas -> Downsample -> Blur -> Upsample -> Mix.
+    -   **Tone Mapping:** High Dynamic Range (HDR) -> Low Dynamic Range (LDR).
+    -   **Vignette & Grain:** Final aesthetic touches.
 
-## Philosophy: The V5 Crystal (The Unified Truth)
+## 3. Specialized Subsystems
 
-In previous versions, the Boundary and Muscle were fragmented. V5 Crystal unifies them:
--   **Centralized Execution:** Every GPU command flows through the `GpuExecutor`.
--   **Arc Ownership:** Backends own their window surfaces via `Arc<Window>`, ensuring `'static` stability across threads.
--   **SDF First:** Rendering is driven by Signed Distance Fields, allowing for infinite resolution UI and complex effects (Glassmorphism, Aurora) with minimal overhead.
+### Physics
+Located in `src/game/physics.rs`.
+-   Uses **Separating Axis Theorem (SAT)** for precise collision detection.
+-   Resolves collisions via impulse application (changing velocity based on mass/restitution).
+-   Optimized with a **Quadtree** for efficient broad-phase queries.
 
-This separation ensures that the user API remains stable even when the underlying rendering technology changes radically.
+### Audio
+Located in `src/audio`.
+-   Fire-and-forget SFX system using `cpal`.
+-   Calculates stereo panning and volume attenuation based on entity position relative to the camera listener.
+-   Uses an object pool for efficient voice management.
+
+### Input
+Located in `src/input`.
+-   Maps raw hardware inputs (keys, buttons) to abstract **Actions** ("Jump", "Fire").
+-   Tracks state (Pressed, Held, Released) for easy logic implementation.

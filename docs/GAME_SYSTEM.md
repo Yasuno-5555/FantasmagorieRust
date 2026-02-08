@@ -1,58 +1,93 @@
-# Game System: Life & Motion
+# Game System Architecture
 
-The game system in Fantasmagorie focuses on high-performance entity management and advanced animation techniques.
+Fantasmagorie's game logic is built on a custom ECS (Entity Component System) and event-driven architecture.
 
-## World & Entities
+## 1. The World (ECS)
 
-The `World` struct is a lightweight ECS-like container.
+The `World` struct (`src/game/world.rs`) is the heart of the simulation.
+
+### Spawning Entities
+Entities are created using a builder pattern:
 
 ```rust
-let mut world = World::new();
-
-// Spawn an entity
-let player_id = world.spawn();
-
-// Access components
-world.transforms[player_id].position = Vec2::new(100.0, 100.0);
-world.entity_states[player_id] = EntityState::Idle;
+let player_id = world.spawn()
+    .with(Transform::from_position(Vec2::new(0.0, 0.0)))
+    .with(Sprite::new("player.png"))
+    .with(PhysicsComponent::new(10.0)) // Mass = 10kg
+    .with(Collider::Circle { offset: Vec2::ZERO, radius: 16.0 })
+    .build();
 ```
 
-### Animation: Motion Morphing
-
-Fantasmagorie uses a unique **Motion Morphing** system. Instead of simple sprite flipping, it can interpolate between animations using SDF (Signed Distance Fields). This enables smooth, liquid-like transitions between character poses, handled entirely on the GPU via the WGPU/Metal pipelines.
-
-### Animation Clips
-An `AnimationClip` defines a sequence of frames.
+### System Iteration
+Systems iterate over components to update state. For example, the Physics System:
 
 ```rust
-let idle_clip = AnimationClip {
-    frames: vec![
-        AnimationFrame { texture_id: 1, duration: 0.5, uv_rect: None },
-    ],
-    loop_clip: true,
-};
-```
-
-### Sprite Builder
-The `SpriteBuilder` allows you to apply these animations to entities in the world.
-
-```rust
-SpriteBuilder::new(&mut frame, pos, size)
-    .animate(anim.clone())
-    .draw(&sprite, Some(&idle_clip));
-```
-
-## Input Mapping
-
-The engine abstracts raw input (keys, mouse) into **Actions**.
-
-```rust
-let mut action_map = ActionMap::new_default();
-action_map.bind(KeyCode::KeyW, Action::MoveUp);
-
-if action_state.is_active(Action::MoveUp) {
-    // Move character
+pub fn update_physics(world: &mut World, dt: f32) {
+    // 1. Integrate Velocity
+    for i in 0..world.entities.len() {
+        if let Some(phys) = &mut world.physics_components[i] {
+            if let Some(trans) = &mut world.transforms[i] {
+                trans.position += phys.velocity * dt;
+            }
+        }
+    }
+    // 2. Resolve Collisions...
 }
 ```
 
-This allows for easy rebinding and controller support without changing game logic.
+## 2. Scene Graph
+Entities support parent-child relationships. When a parent moves, all children move relative to it.
+
+```rust
+// Attach weapon to player
+fanta::game::hierarchy::attach(&mut world, weapon_id, player_id);
+```
+
+The `Transform` component automatically calculates `global_matrix` by combining its `local_matrix` with the parent's global matrix.
+
+## 3. State Machines
+Complex entity logic (like AI) is managed via the `StateMachine` component (`src/game/state_machine.rs`).
+
+```rust
+// Define states
+#[derive(Clone, Debug, PartialEq)]
+enum EnemyState {
+    Idle,
+    Chase,
+    Attack
+}
+
+// Update logic
+fn update_ai(world: &mut World) {
+    for (id, state_machine) in world.query_mut::<StateMachine>() {
+        match state_machine.current_state {
+            EnemyState::Idle => {
+                if player_in_range() {
+                    state_machine.transition_to(EnemyState::Chase);
+                }
+            }
+            // ...
+        }
+    }
+}
+```
+
+## 4. Signal Bus
+Entities communicate without tight coupling using the `SignalBus`.
+
+```rust
+// Emit signal
+signal_bus.emit(Signal {
+    event: "entity_damaged",
+    source: Some(entity_id),
+    data: SignalData::Float(damage_amount)
+});
+
+// Handle signal
+if let Some(signal) = signal_bus.pop() {
+    match signal.event {
+        "entity_damaged" => play_sound("hurt.wav"),
+        _ => {}
+    }
+}
+```

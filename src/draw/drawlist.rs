@@ -197,10 +197,17 @@ pub enum DrawCommand {
         tile_uv_size: [f32; 2],
     },
 
-    /// Particles (CPU to GPU Batch)
     Particles {
         texture_id: u64,
         particles: Vec<crate::game::particles::Particle>,
+    },
+
+    /// Skinned Mesh
+    SkinnedMesh {
+        vertices: Vec<crate::backend::wgpu::SkinnedVertex>,
+        indices: Vec<u32>,
+        texture_id: u64,
+        bone_matrices: Vec<crate::core::Mat3>,
     },
 }
 
@@ -400,6 +407,48 @@ impl DrawList {
             size,
             uv,
             color,
+        });
+    }
+
+    /// Add helper for simple string rendering (using FontManager)
+    pub fn add_text_simple(&mut self, mut pos: Vec2, text: &str, size: f32, color: ColorF) {
+        crate::text::FONT_MANAGER.with(|fm| {
+            let mut fm = fm.borrow_mut();
+            
+            // Baseline adjustment? Let's assume pos is baseline for now.
+            // If pos is top-left, we'd need metrics.ascent.
+            // Let's check vertical metrics.
+            if let Some((ascent, _, _)) = fm.vertical_metrics(size) {
+                 pos.y += ascent; // Move baseline down so text starts at `pos`
+            }
+
+            for c in text.chars() {
+                if let Some(glyph) = fm.get_glyph(0, c, size) { // 0 = System font
+                    let u0 = glyph.uv.x;
+                    let v0 = glyph.uv.y;
+                    let u1 = glyph.uv.x + glyph.uv.w;
+                    let v1 = glyph.uv.y + glyph.uv.h;
+                    
+                    let w = glyph.size.x;
+                    let h = glyph.size.y;
+
+                    // Y-down coordinate system assumption
+                    // glyph.bearing.y is distance from baseline to bottom of glyph (in Y-up)
+                    // So in Y-down, bottom is (baseline_y - bearing.y).
+                    // Top is bottom - height = baseline_y - bearing.y - h.
+                    let x = pos.x + glyph.bearing.x;
+                    let y = pos.y - glyph.bearing.y - h;
+                    
+                    self.commands.push(DrawCommand::Text {
+                        pos: Vec2::new(x, y),
+                        size: glyph.size,
+                        uv: [u0, v0, u1, v1],
+                        color,
+                    });
+                    
+                    pos.x += glyph.advance;
+                }
+            }
         });
     }
 
@@ -673,6 +722,21 @@ impl DrawList {
              texture_id,
              particles,
          });
+    }
+
+    pub fn add_skinned_mesh(
+        &mut self,
+        vertices: Vec<crate::backend::wgpu::SkinnedVertex>,
+        indices: Vec<u32>,
+        texture_id: u64,
+        bone_matrices: Vec<crate::core::Mat3>,
+    ) {
+        self.commands.push(DrawCommand::SkinnedMesh {
+            vertices,
+            indices,
+            texture_id,
+            bone_matrices,
+        });
     }
 
     /// Add 3D viewport

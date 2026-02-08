@@ -29,6 +29,7 @@ pub mod widgets;
 pub mod renderer;
 pub use tracea;
 pub mod game;
+pub mod input;
 
 #[cfg(any(feature = "metal", feature = "wgpu"))]
 pub mod tracea_bridge;

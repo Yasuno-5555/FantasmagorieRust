@@ -212,6 +212,36 @@ pub trait GpuExecutor: Send + Sync {
 
     /// Check if Tracea particles are supported
     fn supports_tracea_particles(&self) -> bool { false }
+    
+    /// Check if native tilemap rendering is supported
+    fn supports_tilemap(&self) -> bool { false }
+
+    /// Draw a tilemap using native support
+    fn draw_tilemap(
+        &mut self,
+        _params: crate::backend::shaders::types::TilemapParams,
+        _data: &[u32],
+        _texture_view: &Self::TextureView,
+        _global_buffer: &Self::Buffer,
+        _aux_view: Option<&Self::TextureView>,
+        _velocity_view: Option<&Self::TextureView>,
+        _depth_view: Option<&Self::TextureView>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Draw a skinned mesh
+    fn draw_skinned(
+        &mut self,
+        _vertex_buffer: &Self::Buffer,
+        _index_buffer: &Self::Buffer,
+        _index_count: u32,
+        _bone_matrices_buffer: &Self::Buffer,
+        _texture_view: &Self::TextureView,
+        _global_buffer: &Self::Buffer,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Get the particle buffer managed by Tracea (if any)
     fn get_tracea_particle_buffer(&self) -> Option<Self::Buffer> { None }

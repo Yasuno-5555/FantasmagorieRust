@@ -1,62 +1,95 @@
 # Fantasmagorie Engine (Project Crystal)
 
-**The Dual-Persona Engine** - A 2D-first, GPU-native rendering engine built in Rust.
+**The Production-Ready 2D Game Engine** - Built in Rust, powered by WGPU.
 
-Fantasmagorie is designed to bridge the gap between "Logic" (the abstract game world) and "Visuals" (the concrete GPU execution). It uses a layered architecture to provide a friendly, fluent API for developers while maintaining high performance and modern GPU features like SDF-based rendering and Jump Flooding Algorithms (JFA).
+Fantasmagorie has evolved from a simple rendering framework into a full-scale 2D game engine. It bridges the gap between high-level game logic and low-level GPU execution, offering a "Dual-Persona" architecture:
+-   **Lite Mode:** Efficient, minimal overhead for simple apps.
+-   **Cinema Mode:** High-end visual fidelity with deferred shading and post-processing.
 
 ## 🌟 Key Features
 
--   **Dual-Persona:** Lite mode for efficiency (embedded, mobile) and Cinema mode for high-end visuals.
--   **Friendly API:** Fluent builders for UI and Sprites ("The Friendly Lie").
--   **WGPU Unified Backend:** Modern, stable, and cross-platform rendering (Web, Windows, Linux, macOS).
--   **SDF Visual Revolution:** High-performance UI rendering using Signed Distance Fields with Glassmorphism and Aurora effects.
--   **Immediate Mode UI:** Lightweight, responsive UI system with a Flex-like layout.
+### 🎨 Visual Revolution (WGPU)
+-   **Deferred Shading:** Decoupled G-Buffer rendering (Color, Normal, Emissive).
+-   **Cinematic Post-Processing:**
+    -   **Bloom:** High-quality neon glow.
+    -   **Tone Mapping:** ACES Filmic & Reinhard.
+    -   **Vignette & Film Grain:** For that polished look.
+-   **Skeletal Animation:** Bone-based skinning with smooth blending and IK support.
+-   **Particle System:** High-performance CPU/GPU hybrid effects.
+-   **Tilemap Renderer:** Batched rendering for massive grid-based worlds.
+-   **Parallax Scrolling:** Depth-based background layers.
 
-## 🏗️ Architecture
+### ⚛️ Physics & Simulation
+-   **Impulse-Based Physics:** Realistic 2D collision resolution.
+-   **SAT Collision Detection:** Accurate intersections for Circles, AABBs, and Polygons.
+-   **Spatial Partitioning:** Quadtree optimization for broad-phase queries.
+-   **Inverse Kinematics (IK):**
+    -   `TwoBoneIK`: Analytic solver for limbs.
+    -   `CCDIK`: Iterative solver for chains/tentacles.
 
-The engine uses the **V5 Crystal** architecture, consolidating implementation into two primary domains:
+### 🔊 Audio System
+-   **2D Positional Audio:** Stereo panning and distance attenuation.
+-   **Fire-and-Forget SFX:** Efficient voice recycling system.
 
-1.  **The Brain (Tracea):** Logic optimization and meaning interpretation.
-2.  **The Muscle (Unified Backend):** GPU execution via a centralized `GpuExecutor`.
+### 🧠 Gameplay Framework
+-   **ECS Architecture:** Entity-Component-System for data-oriented design.
+-   **Scene Management:** Stack-based transitions (Menu -> Game -> Pause).
+-   **Prefab System:** JSON-based entity templates.
+-   **Signal Bus:** Decoupled event communication.
+-   **Input System:** Action mapping (e.g., "Jump" = Space) and state tracking.
 
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for more details.
+### 🛠️ UI & Tools
+-   **Immediate Mode UI:** Flex-based layout with a rich widget set (Buttons, Knobs, Nodes).
+-   **Visual Debugging:** Built-in debug draw for skeletons and colliders.
 
 ## 🚀 Quick Start
 
 ```rust
 use fanta_rust::prelude::*;
-use fanta_rust::backend::WgpuBackend;
-use fanta_rust::config::{EngineConfig, CinematicConfig, Bloom};
 
-fn main() -> Result<(), String> {
-    // 1. Initialize the Muscle (Backend)
-    let backend = WgpuBackend::new_async(window_handle, 1280, 720)?;
+fn main() {
+    // 1. Initialize Engine
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let window = std::sync::Arc::new(event_loop.create_window(winit::window::WindowAttributes::default()).unwrap());
     
-    // 2. Configure the Brain (Cinema Profile)
-    let config = EngineConfig::cinematic()
-        .with_bloom(Bloom::Cinematic)
-        .with_exposure(1.2);
-    
-    // 3. Initialize the Carrier (Renderer)
-    let mut renderer = Renderer::new(Box::new(backend), config);
-    
-    // ... Frame loop logic ...
-    
-    // Update visuals at runtime (The Operational API)
-    renderer.update_cinematic(CinematicConfig::default());
-    
-    Ok(())
+    // 2. Setup Backend & Renderer
+    let backend = Box::new(fanta_rust::backend::wgpu::WgpuBackend::new_async(window.clone(), 1280, 720, 1.0).unwrap());
+    let mut renderer = fanta_rust::renderer::Renderer::new_lite(backend);
+
+    // 3. Create World & Add Entities
+    let mut world = fanta_rust::game::World::new();
+    let entity = world.spawn()
+        .with(Transform::from_position(Vec2::new(100.0, 100.0)))
+        .with(Sprite::new("player.png"))
+        .build();
+
+    // 4. Run Game Loop
+    event_loop.run(move |event, _, control_flow| {
+        // ... (Handle input, update world, render)
+    }).unwrap();
 }
 ```
+
+## 🎮 Demos
+
+Explore the `examples/` directory to see the engine in action:
+
+| Demo | Description |
+| :--- | :--- |
+| **`breakout_demo.rs`** | **Must See!** "The World's Most Luxurious Breakout". Showcases Neon Bloom, Particles, Screenshake, and Audio. |
+| `evolution_showcase.rs` | Integrated demo of Physics, AI, and Hierarchy. |
+| `skeletal_blend_demo.rs` | Skeletal animation blending and playback. |
+| `ik_demo.rs` | Interactive Inverse Kinematics (Two-Bone & CCD). |
+| `tilemap_demo.rs` | Infinite scrolling tilemap renderer. |
+| `physics_demo.rs` | SAT collision and rigid body dynamics. |
+| `visual_demo.rs` | Deferred shading and post-processing showcase. |
 
 ## 📖 Documentation
 
 -   [Architecture Overview](docs/ARCHITECTURE.md)
--   [UI System](docs/UI_SYSTEM.md)
--   [Game & Animation System](docs/GAME_SYSTEM.md)
--   [Semantic Contracts (Internal)](docs/semantic_contracts.md)
+-   [Walkthrough](docs/walkthrough.md) (See `walkthrough.md` in project root for latest progress)
 
 ## 🛠️ Requirements
 
 -   Rust 1.75+
--   Vulkan (recommended), OpenGL, or DX12 compatible hardware.
+-   WGPU-compatible GPU (Vulkan, Metal, DX12, WebGPU).

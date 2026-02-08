@@ -102,6 +102,15 @@ impl Renderer {
     /// Direct render path for a DrawList.
     /// Renderer acts as a carrier to the backend.
     pub fn render_list(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32) {
+        // Auto-update font texture if dirty
+        crate::text::FONT_MANAGER.with(|fm| {
+            let mut fm = fm.borrow_mut();
+            if fm.texture_dirty {
+                self.backend.update_font_texture(fm.atlas.width, fm.atlas.height, &fm.atlas.texture_data);
+                fm.texture_dirty = false;
+            }
+        });
+
         self.backend.render(dl, width, height);
         self.backend.present();
 

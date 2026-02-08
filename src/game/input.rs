@@ -11,6 +11,10 @@ pub enum Action {
     Jump,
     Attack,
     Interact,
+    Start,
+    Back,
+    Restart,
+    Debug,
 }
 
 /// Abstract mapping of inputs to actions.

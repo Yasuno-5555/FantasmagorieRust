@@ -259,15 +259,100 @@ impl World {
         }
     }
 
-    /// Resolves collisions using impulse-based physics.
+    /// Resolves collisions using impulse-based physics (Optimized with Quadtree).
     pub fn system_physics_collision(&mut self) {
+        // 1. Build Quadtree
+        // Use a large bounds for valid world area
+        let bounds = Rectangle::new(-10000.0, -10000.0, 20000.0, 20000.0);
+        let mut quadtree = super::spatial::Quadtree::new(0, bounds);
+        
         let count = self.ids.len();
+        
+        // Insert all dynamic and static colliders
         for i in 0..count {
-            for j in i + 1..count {
-                let col_i = match &self.colliders[i] { Some(c) => c, None => continue };
-                let col_j = match &self.colliders[j] { Some(c) => c, None => continue };
+            if let Some(col) = &self.colliders[i] {
+                let pos = self.transforms[i].world_position();
+                let rect = match col {
+                    Collider::AABB { offset, size } => Rectangle::new(pos.x + offset.x, pos.y + offset.y, size.x, size.y),
+                    Collider::Circle { offset, radius } => Rectangle::new(pos.x + offset.x - radius, pos.y + offset.y - radius, radius * 2.0, radius * 2.0),
+                    Collider::Polygon { offset, vertices } => {
+                        let mut min = Vec2::new(f32::MAX, f32::MAX);
+                        let mut max = Vec2::new(f32::MIN, f32::MIN);
+                        for v in vertices {
+                            let p = pos + *offset + *v;
+                            min = min.min(p);
+                            max = max.max(p);
+                        }
+                        if min.x > max.x { // Empty poly
+                            Rectangle::new(pos.x, pos.y, 0.0, 0.0) 
+                        } else {
+                            Rectangle::new(min.x, min.y, max.x - min.x, max.y - min.y)
+                        }
+                    }
+                };
+                quadtree.insert(self.ids[i], rect);
+            }
+        }
+
+        let mut candidates = Vec::with_capacity(32);
+        
+        // 2. Query and Resolve
+        for i in 0..count {
+            if self.colliders[i].is_none() { continue; }
+            if self.physics[i].mass == 0.0 { continue; } // Optimization: Only dynamic bodies check for collisions? 
+            // Note: If both are static, no resolution needed. If one is dynamic, we need to resolve.
+            // If we skip static here, we won't check Static vs Dynamic if iteration order is wrong?
+            // Actually, if we only iterate dynamic bodies `i`, we check against all potential `j` (static or dynamic) from tree.
+            // This is correct and optimized.
+
+            // Recompute rect (could cache this)
+            let col_i = self.colliders[i].as_ref().unwrap();
+            let pos_i = self.transforms[i].world_position();
+            let rect_i = match col_i {
+                    Collider::AABB { offset, size } => Rectangle::new(pos_i.x + offset.x, pos_i.y + offset.y, size.x, size.y),
+                    Collider::Circle { offset, radius } => Rectangle::new(pos_i.x + offset.x - radius, pos_i.y + offset.y - radius, radius * 2.0, radius * 2.0),
+                    Collider::Polygon { offset, vertices } => {
+                        let mut min = Vec2::new(f32::MAX, f32::MAX);
+                        let mut max = Vec2::new(f32::MIN, f32::MIN);
+                        for v in vertices {
+                            let p = pos_i + *offset + *v;
+                            min = min.min(p);
+                            max = max.max(p);
+                        }
+                        if min.x > max.x { Rectangle::new(pos_i.x, pos_i.y, 0.0, 0.0) } else { Rectangle::new(min.x, min.y, max.x - min.x, max.y - min.y) }
+                    }
+            };
+            
+            candidates.clear();
+            quadtree.retrieve(&rect_i, &mut candidates);
+            
+            for &other_id in &candidates {
+                if other_id == self.ids[i] { continue; }
                 
-                let pos_i = self.transforms[i].world_position();
+                let j = match self.id_to_index.get(&other_id) {
+                    Some(&idx) => idx,
+                    None => continue, // Should not happen
+                };
+                
+                // Avoid double resolution: iterate i, query returns j.
+                // Resolution modifies both.
+                // Standard approach: Only resolve if i < j OR if one is static.
+                // Here we iterate all Dynamic `i`. `j` can be static or dynamic.
+                // If `j` is dynamic and `j > i`, we process it now.
+                // If `j` is dynamic and `j < i`, we already processed it when we were at `j`.
+                // BUT, `resolve_collision` applies impulses to both.
+                // So we should only process if `i < j` to avoid double counting impulse.
+                // What if `j` is static?
+                // Static has mass 0. Collision resolution handles it (mass infinite).
+                // If `j` is static, `j` index logic check?
+                // `i` is always dynamic loop.
+                // If `j` is static, we MUST process it (because static loop won't run).
+                // If `j` is dynamic, we enforce `i < j`.
+                
+                let is_j_dynamic = self.physics[j].mass > 0.0;
+                if is_j_dynamic && i > j { continue; }
+
+                let col_j = self.colliders[j].as_ref().unwrap(); 
                 let pos_j = self.transforms[j].world_position();
                 
                 if let Some(manifold) = super::physics::check_collision(pos_i, col_i, pos_j, col_j) {

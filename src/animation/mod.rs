@@ -8,6 +8,8 @@
 pub mod groups;
 pub mod keyframe;
 pub mod spring;
+pub mod skeleton;
+pub mod ik;
 
 // Re-export commonly used types
 pub use groups::{
@@ -16,3 +18,4 @@ pub use groups::{
 };
 pub use keyframe::{easing, Keyframe, KeyframeTrack, LoopMode, PlaybackState, Timeline};
 pub use spring::{presets as spring_presets, Spring, Spring2D, SpringColor, SpringConfig};
+pub use skeleton::{Bone, Skeleton};

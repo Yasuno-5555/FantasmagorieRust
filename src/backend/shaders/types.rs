@@ -208,3 +208,17 @@ impl ProjectionParams {
         Self { flip_y: false, z_range: (0.0, 1.0) }
     }
 }
+
+/// Tilemap uniform parameters
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct TilemapParams {
+    pub position: [f32; 2],
+    pub map_size: [u32; 2],
+    pub tile_size: [f32; 2],
+    pub uv_size: [f32; 2],
+    pub columns: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
+}

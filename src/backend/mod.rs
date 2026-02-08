@@ -70,6 +70,17 @@ pub trait GraphicsBackend {
     fn set_resolution_scale(&mut self, _scale: f32) {
         // Default no-op
     }
+
+    /// Draw a tilemap
+    fn draw_tilemap(
+        &mut self,
+        _params: crate::backend::shaders::types::TilemapParams,
+        _data: &[u32],
+        _texture_id: u64,
+        _color: crate::core::ColorF
+    ) {
+        // Default no-op
+    }
 }
 
 #[cfg(feature = "wgpu")]

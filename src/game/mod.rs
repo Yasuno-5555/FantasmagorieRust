@@ -13,12 +13,13 @@ pub mod tilemap;
 pub mod particles;
 pub mod audio;
 pub mod parallax;
+pub mod scene;
 
 pub use crate::renderer::Camera;
 pub use world::{World, EntityId, Transform, PhysicsComponent};
 pub use sprite::{Sprite, SpriteBuilder};
 pub use interaction::{Collider, InteractionState};
-pub use animation::{AnimationComponent, EntityState, AnimationClip, AnimationFrame};
+pub use animation::{AnimationComponent, EntityState, AnimationClip, AnimationFrame, SkeletalAnimationComponent, SkeletalAnimationClip, BoneKeyframe, BoneTrack};
 pub use input::{Action, ActionMap, ActionState};
 pub use hierarchy::{attach, detach};
 pub use spatial::Quadtree;

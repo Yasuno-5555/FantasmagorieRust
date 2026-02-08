@@ -30,6 +30,36 @@ impl Vertex {
     }
 }
 
+/// Vertex format for Skinned Meshes
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SkinnedVertex {
+    pub pos: [f32; 2],
+    pub uv: [f32; 2],
+    pub color: [f32; 4],
+    pub bone_indices: [u32; 4],
+    pub bone_weights: [f32; 4],
+}
+
+impl SkinnedVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x2,  // pos
+        1 => Float32x2,  // uv
+        2 => Float32x4,  // color
+        3 => Uint32x4,   // bone_indices
+        4 => Float32x4,  // bone_weights
+    ];
+
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SkinnedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+
 pub struct WgpuBackend {
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
@@ -112,6 +142,15 @@ pub struct WgpuBackend {
     pub blur_uniform_buffer: wgpu::Buffer,
     pub cinematic_buffer: wgpu::Buffer,
     pub dummy_storage_buffer: wgpu::Buffer, // Fallback for instanced bindings
+    
+    // Tilemap
+    pub tilemap_pipeline: Arc<wgpu::RenderPipeline>,
+    pub tilemap_gbuffer_pipeline: Arc<wgpu::RenderPipeline>,
+    pub tilemap_bind_group_layout: Arc<wgpu::BindGroupLayout>,
+
+    pub skinned_pipeline: Arc<wgpu::RenderPipeline>,
+    pub skinned_bind_group_layout: Arc<wgpu::BindGroupLayout>,
+
     pub current_cinematic: Mutex<crate::backend::shaders::types::CinematicParams>,
 
     pub current_encoder: Mutex<Option<wgpu::CommandEncoder>>,
@@ -573,6 +612,174 @@ impl GpuExecutor for WgpuBackend {
         if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
         rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
         rpass.draw(0..vertex_count, 0..instance_count);
+        Ok(())
+    }
+
+    fn supports_tilemap(&self) -> bool { true }
+
+    fn draw_tilemap(
+        &mut self,
+        params: crate::backend::shaders::types::TilemapParams,
+        data: &[u32],
+        texture_view: &Self::TextureView,
+        global_buffer: &Self::Buffer,
+        aux_view: Option<&Self::TextureView>,
+        velocity_view: Option<&Self::TextureView>,
+        depth_view: Option<&Self::TextureView>,
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+
+        // 1. Create Buffers
+        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Tilemap Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let data_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Tilemap Data"),
+            contents: bytemuck::cast_slice(data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Vertex Buffer (Unit Quad)
+        let quad_verts = crate::renderer::nodes::geometry::unit_quad();
+        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Tilemap Quad Vertex"),
+            contents: &quad_verts,
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // 2. Create Bind Group 1 (Tilemap Specific)
+        let bg1 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Tile BG1"),
+            layout: &self.tilemap_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: data_buffer.as_entire_binding() },
+            ],
+        });
+
+        // 3. Create Bind Group 0 (Shared)
+        let bg0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Tile BG0"),
+            layout: &self.instanced_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: global_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.dummy_storage_buffer.as_entire_binding() }, // Placeholder for Instance Buffer
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(texture_view) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&self.backdrop_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+
+        // 4. Determine Pipeline & Attachments
+        let use_gbuffer = aux_view.is_some() && velocity_view.is_some() && depth_view.is_some();
+        let pipeline = if use_gbuffer { &self.tilemap_gbuffer_pipeline } else { &self.tilemap_pipeline };
+
+        // 5. Begin Render Pass
+        {
+            let color_attachments = if use_gbuffer {
+                 vec![
+                    Some(wgpu::RenderPassColorAttachment { view: &self.hdr_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+                    Some(wgpu::RenderPassColorAttachment { view: aux_view.unwrap(), resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+                    Some(wgpu::RenderPassColorAttachment { view: velocity_view.unwrap(), resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+                    Some(wgpu::RenderPassColorAttachment { view: &self.extra_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+                 ]
+            } else {
+                 vec![
+                    Some(wgpu::RenderPassColorAttachment { view: &self.hdr_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+                 ]
+            };
+
+            let depth_att = if use_gbuffer {
+                Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view.unwrap(),
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                })
+            } else {
+                None
+            };
+            
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Tilemap Draw"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: depth_att,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            
+            rpass.set_pipeline(pipeline);
+            rpass.set_bind_group(0, &bg0, &[]);
+            rpass.set_bind_group(1, &bg1, &[]);
+            rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            rpass.draw(0..6, 0..data.len() as u32);
+        }
+
+        Ok(())
+    }
+
+    fn draw_skinned(
+        &mut self,
+        vertex_buffer: &Self::Buffer,
+        index_buffer: &Self::Buffer,
+        index_count: u32,
+        bone_matrices_buffer: &Self::Buffer,
+        texture_view: &Self::TextureView,
+        global_buffer: &Self::Buffer,
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Skinned Bind Group"),
+            layout: &self.skinned_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: global_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(texture_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: bone_matrices_buffer.as_entire_binding() },
+            ],
+        });
+
+        // Use G-buffer attachments if we want skinning to participate in lighting
+        // Same logic as tilemap: check if we have G-buffer targets
+        
+        // Safety check for views (velocity is optional but others are mandatory for deferred)
+        // Note: aux_view and extra_view are Arc<TextureView>, so always present.
+        
+        let velocity_view = self.velocity_view.as_ref().unwrap_or(&self.dummy_velocity_view);
+
+        let color_attachments = [
+            Some(wgpu::RenderPassColorAttachment { view: &self.hdr_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+            Some(wgpu::RenderPassColorAttachment { view: &self.aux_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+            Some(wgpu::RenderPassColorAttachment { view: velocity_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+            Some(wgpu::RenderPassColorAttachment { view: &self.extra_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } }),
+        ];
+        
+        // Depth is always present in WgpuBackend
+        let depth_att = Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &self.depth_view,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+            stencil_ops: None,
+        });
+
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Skinned Mesh Draw"),
+            color_attachments: &color_attachments,
+            depth_stencil_attachment: depth_att,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        rpass.set_pipeline(&self.skinned_pipeline);
+        rpass.set_bind_group(0, &bg, &[]);
+        rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        rpass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        rpass.draw_indexed(0..index_count, 0, 0..1);
+
         Ok(())
     }
 
@@ -1630,6 +1837,86 @@ impl WgpuBackend {
             multiview: None,
         }));
 
+        // --- Tilemap Pipeline ---
+        let tilemap_bind_group_layout = Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Tilemap Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        }));
+
+        let tilemap_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Tilemap Pipeline Layout"),
+            bind_group_layouts: &[&instanced_bind_group_layout, &tilemap_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let tilemap_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Tilemap Pipeline"),
+            layout: Some(&tilemap_pipeline_layout),
+            vertex: wgpu::VertexState { module: &main_shader, entry_point: "vs_tilemap", buffers: &[Vertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &main_shader,
+                entry_point: "fs_tilemap",
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less, // Use Less for consistent depth test
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        let tilemap_gbuffer_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Tilemap GBuffer Pipeline"),
+            layout: Some(&tilemap_pipeline_layout),
+            vertex: wgpu::VertexState { module: &main_shader, entry_point: "vs_tilemap", buffers: &[Vertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &main_shader,
+                entry_point: "fs_tilemap_gbuffer",
+                targets: &[
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend:Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+                ],
+            }),
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
         // --- HDR Resources ---
         let hdr_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("HDR Texture"),
@@ -2272,6 +2559,51 @@ impl WgpuBackend {
             multiview: None,
         });
 
+        // --- Skinned Pipeline ---
+        let skinned_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Skinned Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/skinned.wgsl").into()),
+        });
+
+        let skinned_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Skinned Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::VERTEX, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let skinned_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Skinned Pipeline Layout"),
+            bind_group_layouts: &[&skinned_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let skinned_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Skinned Pipeline"),
+            layout: Some(&skinned_pipeline_layout),
+            vertex: wgpu::VertexState { module: &skinned_shader, entry_point: "vs_main", buffers: &[SkinnedVertex::desc()] },
+            fragment: Some(wgpu::FragmentState {
+                module: &skinned_shader,
+                entry_point: "fs_gbuffer", // Writing to G-buffer
+                targets: &[
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL }), // Color
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL }), // Aux
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL }), // Velocity
+                    Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL }), // Extra
+                ],
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, strip_index_format: None, front_face: wgpu::FrontFace::Ccw, cull_mode: None, unclipped_depth: false, polygon_mode: wgpu::PolygonMode::Fill, conservative: false },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+        let skinned_pipeline = Arc::new(skinned_pipeline);
+        let skinned_bind_group_layout = Arc::new(skinned_bind_group_layout);
+
         // --- Hot Reloading Setup ---
         let (tx, rx) = std::sync::mpsc::channel();
         let mut shader_reload_rx = None;
@@ -2366,6 +2698,12 @@ impl WgpuBackend {
             blur_uniform_buffer,
             cinematic_buffer,
             dummy_storage_buffer,
+            tilemap_pipeline,
+            tilemap_gbuffer_pipeline,
+            tilemap_bind_group_layout,
+
+            skinned_pipeline,
+            skinned_bind_group_layout,
             lut_texture: Some(Arc::new(lut_texture)),
             lut_view: Some(Arc::new(lut_view)),
             blit_pipeline,

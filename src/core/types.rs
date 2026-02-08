@@ -189,16 +189,36 @@ impl Vec2 {
 
     pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
 
+    pub fn length_squared(self) -> f32 {
+        self.x * self.x + self.y * self.y
+    }
+    
     pub fn length(self) -> f32 {
-        (self.x * self.x + self.y * self.y).sqrt()
+        self.length_squared().sqrt()
     }
 
     pub fn dot(self, other: Self) -> f32 {
         self.x * other.x + self.y * other.y
     }
     
+    pub fn distance_squared(self, other: Self) -> f32 {
+        (self - other).length_squared()
+    }
+
     pub fn distance(self, other: Self) -> f32 {
-        (self - other).length()
+        self.distance_squared(other).sqrt()
+    }
+
+    pub fn min(self, other: Self) -> Self {
+        Self::new(self.x.min(other.x), self.y.min(other.y))
+    }
+
+    pub fn max(self, other: Self) -> Self {
+        Self::new(self.x.max(other.x), self.y.max(other.y))
+    }
+
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        self + (other - self) * t
     }
 
     pub fn normalized(self) -> Self {
@@ -467,6 +487,34 @@ impl Mat3 {
             y: self.0[3] * p.x + self.0[4] * p.y + self.0[5],
         }
     }
+
+    pub fn inverse(&self) -> Self {
+        let m = self.0;
+        let det = m[0] * (m[4] * m[8] - m[5] * m[7]) -
+                  m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                  m[2] * (m[3] * m[7] - m[4] * m[6]);
+        
+        if det.abs() < 1e-6 {
+            return Self::IDENTITY;
+        }
+        
+        let inv_det = 1.0 / det;
+        
+        Self([
+            (m[4] * m[8] - m[5] * m[7]) * inv_det,
+            (m[2] * m[7] - m[1] * m[8]) * inv_det,
+            (m[1] * m[5] - m[2] * m[4]) * inv_det,
+            
+            (m[5] * m[6] - m[3] * m[8]) * inv_det,
+            (m[0] * m[8] - m[2] * m[6]) * inv_det,
+            (m[2] * m[3] - m[0] * m[5]) * inv_det,
+            
+            (m[3] * m[7] - m[4] * m[6]) * inv_det,
+            (m[1] * m[6] - m[0] * m[7]) * inv_det,
+            (m[0] * m[4] - m[1] * m[3]) * inv_det,
+        ])
+    }
+
 }
 
 impl Mul<Mat3> for Mat3 {

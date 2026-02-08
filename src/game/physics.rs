@@ -11,15 +11,57 @@ pub fn check_collision(pos_a: Vec2, col_a: &Collider, pos_b: Vec2, col_b: &Colli
         (Collider::Circle { offset: oa, radius: ra }, Collider::Circle { offset: ob, radius: rb }) => {
             let p_a = pos_a + *oa;
             let p_b = pos_b + *ob;
-            let dist = p_a.distance(p_b);
+            let dist_sq = p_a.distance_squared(p_b);
             let combined_radius = ra + rb;
             
-            if dist < combined_radius {
-                let normal = (p_b - p_a).normalized();
+            if dist_sq < combined_radius * combined_radius {
+                let dist = dist_sq.sqrt();
+                let normal = if dist > 0.0 { (p_b - p_a) / dist } else { Vec2::new(1.0, 0.0) };
                 Some(CollisionManifold {
                     normal,
                     penetration: combined_radius - dist,
                 })
+            } else {
+                None
+            }
+        }
+        (Collider::AABB { offset: oa, size: sa }, Collider::AABB { offset: ob, size: sb }) => {
+            let p_a = pos_a + *oa;
+            let p_b = pos_b + *ob;
+            
+            let a_half = *sa * 0.5;
+            let b_half = *sb * 0.5;
+            let a_center = p_a + a_half;
+            let b_center = p_b + b_half;
+            
+            let delta = b_center - a_center;
+            let overlap_x = (a_half.x + b_half.x) - delta.x.abs();
+            let overlap_y = (a_half.y + b_half.y) - delta.y.abs();
+            
+            if overlap_x > 0.0 && overlap_y > 0.0 {
+                // Determine minimum penetration axis
+                if overlap_x < overlap_y {
+                    Some(CollisionManifold {
+                        normal: if delta.x < 0.0 { Vec2::new(-1.0, 0.0) } else { Vec2::new(1.0, 0.0) },
+                        penetration: overlap_x,
+                    })
+                } else {
+                    Some(CollisionManifold {
+                        normal: if delta.y < 0.0 { Vec2::new(0.0, -1.0) } else { Vec2::new(0.0, 1.0) },
+                        penetration: overlap_y,
+                    })
+                }
+            } else {
+                None
+            }
+        }
+        (Collider::Circle { offset: oa, radius: ra }, Collider::AABB { offset: ob, size: sb }) => {
+            check_circle_aabb(pos_a + *oa, *ra, pos_b + *ob, *sb)
+        }
+        (Collider::AABB { offset: oa, size: sa }, Collider::Circle { offset: ob, radius: rb }) => {
+            if let Some(mut m) = check_circle_aabb(pos_b + *ob, *rb, pos_a + *oa, *sa) {
+                m.normal = m.normal * -1.0;
+                Some(m)
             } else {
                 None
             }
@@ -44,7 +86,68 @@ pub fn check_collision(pos_a: Vec2, col_a: &Collider, pos_b: Vec2, col_b: &Colli
                 None
             }
         }
-        _ => None,
+        // Handle AABB vs Polys by converting AABB to Poly on the fly or implementing specialized SAT
+        (Collider::AABB { offset: oa, size: sa }, Collider::Polygon { offset: ob, vertices: vb }) => {
+             let abs_va = vec![
+                 pos_a + *oa,
+                 pos_a + *oa + Vec2::new(sa.x, 0.0),
+                 pos_a + *oa + Vec2::new(sa.x, sa.y),
+                 pos_a + *oa + Vec2::new(0.0, sa.y)
+             ];
+             let abs_vb: Vec<Vec2> = vb.iter().map(|&v| v + pos_b + *ob).collect();
+             check_sat(&abs_va, &abs_vb)
+        }
+        (Collider::Polygon { offset: oa, vertices: va }, Collider::AABB { offset: ob, size: sb }) => {
+             let abs_va: Vec<Vec2> = va.iter().map(|&v| v + pos_a + *oa).collect();
+             let abs_vb = vec![
+                 pos_b + *ob,
+                 pos_b + *ob + Vec2::new(sb.x, 0.0),
+                 pos_b + *ob + Vec2::new(sb.x, sb.y),
+                 pos_b + *ob + Vec2::new(0.0, sb.y)
+             ];
+             check_sat(&abs_va, &abs_vb)
+        }
+    }
+}
+
+fn check_circle_aabb(center: Vec2, radius: f32, aabb_pos: Vec2, aabb_size: Vec2) -> Option<CollisionManifold> {
+    let aabb_center = aabb_pos + aabb_size * 0.5;
+    let half_extents = aabb_size * 0.5;
+    
+    // Get difference vector between both centers
+    let difference = center - aabb_center;
+    
+    // Clamp difference to AABB half extents
+    let clamped = Vec2::new(
+        difference.x.clamp(-half_extents.x, half_extents.x),
+        difference.y.clamp(-half_extents.y, half_extents.y)
+    );
+    
+    // Closest point on AABB boundary to circle center
+    let closest = aabb_center + clamped;
+    
+    // Vector from closest point to circle center
+    let diff = center - closest;
+    let dist_sq = diff.x * diff.x + diff.y * diff.y;
+    
+    if dist_sq < radius * radius {
+         let dist = dist_sq.sqrt();
+         let normal = if dist > 0.0 { diff / dist } else { 
+             // Center is inside AABB. Need to push out via shortest path.
+             // Re-calculate based on clamped deviation
+             if difference.x.abs() > difference.y.abs() {
+                 if difference.x > 0.0 { Vec2::new(1.0, 0.0) } else { Vec2::new(-1.0, 0.0) }
+             } else {
+                 if difference.y > 0.0 { Vec2::new(0.0, 1.0) } else { Vec2::new(0.0, -1.0) }
+             }
+         };
+         
+         Some(CollisionManifold {
+             normal,
+             penetration: radius - dist,
+         })
+    } else {
+        None
     }
 }
 

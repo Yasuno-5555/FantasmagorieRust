@@ -11,6 +11,7 @@ struct AudioState {
     voices: Vec<Voice>,
     listener_pos: Vec2,
     sample_rate: f32,
+    next_id: u64,
 }
 
 struct Voice {
@@ -53,6 +54,7 @@ impl AudioEngine {
             voices: Vec::new(),
             listener_pos: Vec2::ZERO,
             sample_rate,
+            next_id: 1,
         }));
 
         let state_clone = state.clone();
@@ -95,6 +97,8 @@ impl AudioEngine {
                 v.volume = volume;
                 v.pitch = pitch;
                 v.playing = true;
+                v.looping = looping;
+                v.sample_cursor = 0.0;
             } else {
                 state.voices.push(Voice {
                     id,
@@ -106,6 +110,51 @@ impl AudioEngine {
                     sample_cursor: 0.0,
                     playing: true,
                     params: SoundParams { attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.1, duration: 2.0 },
+                    seed: id as u32,
+                });
+            }
+        }
+    }
+
+    /// Fire-and-forget SFX playback (reuses finished voices)
+    pub fn play_sfx(&self, sound_type: SoundType, volume: f32, pitch: f32) {
+        if let Ok(mut state) = self.state.lock() {
+            let mut reused_index = None;
+            let seed = state.next_id as u32; // Simple seed
+            let listener_pos = state.listener_pos; // Copy listener pos
+            
+            // Try to find a finished voice to recycle
+            for (i, v) in state.voices.iter_mut().enumerate() {
+                if !v.playing {
+                    reused_index = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(index) = reused_index {
+                let v = &mut state.voices[index];
+                v.sound_type = sound_type;
+                v.volume = volume;
+                v.pitch = pitch;
+                v.playing = true;
+                v.looping = false;
+                v.sample_cursor = 0.0;
+                v.position = listener_pos;
+                v.seed = seed;
+                v.params = SoundParams { attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.1, duration: 1.0 };
+            } else {
+                let id = state.next_id;
+                state.next_id += 1;
+                state.voices.push(Voice {
+                    id,
+                    sound_type,
+                    position: listener_pos,
+                    volume,
+                    pitch,
+                    looping: false,
+                    sample_cursor: 0.0,
+                    playing: true,
+                    params: SoundParams { attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.1, duration: 1.0 },
                     seed: id as u32,
                 });
             }
@@ -135,6 +184,13 @@ fn write_data(output: &mut [f32], channels: usize, state: &Arc<Mutex<AudioState>
         for voice in &mut state.voices {
             if !voice.playing { continue; }
 
+            // Check duration
+            let t = voice.sample_cursor / sr;
+            if !voice.looping && t > voice.params.duration {
+                voice.playing = false;
+                continue;
+            }
+
             // Spatialization
             let delta = voice.position - listener;
             let dist = (delta.x * delta.x + delta.y * delta.y).sqrt();
@@ -151,18 +207,20 @@ fn write_data(output: &mut [f32], channels: usize, state: &Arc<Mutex<AudioState>
             let vol_l = (1.0 - pan).min(1.0);
             let vol_r = (1.0 + pan).min(1.0);
 
-            let base_vol = voice.volume * attenuation * 0.2; 
+            // Envelope (Basic Fade Out at end)
+            let mut env = 1.0;
+            if !voice.looping {
+                let remaining = voice.params.duration - t;
+                if remaining < voice.params.release {
+                    env = remaining / voice.params.release;
+                }
+            }
+
+            let base_vol = voice.volume * attenuation * 0.2 * env; 
 
             let frame_count = output.len() / channels;
             for i in 0..frame_count {
                 let sample = generate_sample(voice, sr);
-                
-                // Sample advance
-                voice.sample_cursor += voice.pitch;
-                
-                // Stop if one-shot and done
-                // For procedural infinite sounds (Sine), we might want duration?
-                // For now looping/infinite.
                 
                 // Writing to channels
                 if channels >= 2 {
@@ -174,6 +232,11 @@ fn write_data(output: &mut [f32], channels: usize, state: &Arc<Mutex<AudioState>
                 }
             }
         }
+    }
+    
+    // Soft clipping to prevent harsh digital distortion
+    for sample in output.iter_mut() {
+        *sample = sample.tanh();
     }
 }
 
