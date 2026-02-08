@@ -446,7 +446,18 @@ impl GraphicsBackend for MetalBackend {
             }
         }
 
-        orchestrator.plan(dl, width, height);
+        // Handle Jittering & Frame Index
+        self.frame_count = self.frame_count.wrapping_add(1);
+        let jitter = crate::renderer::gpu::jitter::get_jitter_offset(self.frame_count as u32, width, height);
+
+        // Update cinematic jitter
+        {
+            let mut params = self.current_cinematic.lock().unwrap();
+            params.jitter = [jitter.0, jitter.1];
+            params.render_size = [width as f32, height as f32];
+        }
+
+        orchestrator.plan(dl, width, height, self.internal_resolution_scale);
         
         // 1. Begin Frame (acquire drawable, create command buffer)
         if let Err(e) = self.begin_execute() {
@@ -454,7 +465,7 @@ impl GraphicsBackend for MetalBackend {
              return;
         }
 
-        if let Err(e) = orchestrator.execute(self, time, width, height) {
+        if let Err(e) = orchestrator.execute(self, time, width, height, jitter) {
             eprintln!("Metal render error: {}", e);
         }
 

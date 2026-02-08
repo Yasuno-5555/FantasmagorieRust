@@ -109,6 +109,10 @@ pub struct CinematicConfig {
     pub gi_intensity: f32,
     /// Volumetric lighting intensity (God Rays)
     pub volumetric_intensity: f32,
+    /// Light position in screen space
+    pub light_pos: [f32; 2],
+    /// Light color (RGBA)
+    pub light_color: [f32; 4],
 }
 
 impl Default for CinematicConfig {
@@ -120,13 +124,15 @@ impl Default for CinematicConfig {
             exposure: 1.0,
             chromatic_aberration: 0.0015,
             vignette: 0.7,
-            grain_strength: 0.05,
+            grain_strength: 0.00,
             lut_intensity: 0.0,
             blur_radius: 0.0,
             motion_blur_strength: 0.0,
             debug_mode: 0,
             gi_intensity: 0.5,
             volumetric_intensity: 0.0,
+            light_pos: [500.0, 300.0],
+            light_color: [1.0, 0.9, 0.7, 1.0],
         }
     }
 }
@@ -399,6 +405,16 @@ impl EngineConfigBuilder {
 
     pub fn with_volumetrics(mut self, intensity: f32) -> Self {
         self.config.cinematic.volumetric_intensity = intensity;
+        self
+    }
+
+    pub fn with_light_pos(mut self, x: f32, y: f32) -> Self {
+        self.config.cinematic.light_pos = [x, y];
+        self
+    }
+
+    pub fn with_light_color(mut self, r: f32, g: f32, b: f32, a: f32) -> Self {
+        self.config.cinematic.light_color = [r, g, b, a];
         self
     }
 

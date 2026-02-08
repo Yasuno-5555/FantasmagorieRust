@@ -394,9 +394,9 @@ impl GpuExecutor for WgpuBackend {
         
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Frame Encoder") });
         
-        // Clear all targets and depth at start of frame
+        // Clear main targets (internal resolution)
         {
-            let mut color_attachments = vec![
+            let color_attachments = [
                 Some(wgpu::RenderPassColorAttachment {
                     view: &*self.hdr_view,
                     resolve_target: None,
@@ -414,24 +414,8 @@ impl GpuExecutor for WgpuBackend {
                 }),
             ];
             
-            for v in &self.bloom_views {
-                color_attachments.push(Some(wgpu::RenderPassColorAttachment {
-                    view: &**v,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                }));
-            }
-            
-            if let Some(vel) = &self.velocity_view {
-                color_attachments.push(Some(wgpu::RenderPassColorAttachment {
-                    view: &**vel,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                }));
-            }
-
             let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Frame Global Clear"),
+                label: Some("Frame Main Clear"),
                 color_attachments: &color_attachments,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
@@ -444,7 +428,36 @@ impl GpuExecutor for WgpuBackend {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            // rpass dropped here, clearing is done.
+        }
+
+        // Clear bloom targets (downsampled)
+        for (i, v) in self.bloom_views.iter().enumerate() {
+            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&format!("Bloom Clear {}", i)),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &**v,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        
+        // Clear velocity target
+        if let Some(vel) = &self.velocity_view {
+            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Velocity Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &**vel,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
         }
 
         *self.current_encoder.lock().unwrap() = Some(encoder);
@@ -903,10 +916,10 @@ impl GpuExecutor for WgpuBackend {
             });
         }
 
-        println!("DEBUG: create_bind_group: descriptor entries={}, layout={:?}", wgpu_entries.len(), layout);
-        for (i, entry) in wgpu_entries.iter().enumerate() {
-            println!("  DEBUG: binding[{}] = {}", i, entry.binding);
-        }
+        // println!("DEBUG: create_bind_group: descriptor entries={}, layout={:?}", wgpu_entries.len(), layout);
+        // for (i, entry) in wgpu_entries.iter().enumerate() {
+        //     println!("  DEBUG: binding[{}] = {}", i, entry.binding);
+        // }
         
         Ok(Arc::new(self.device.create_bind_group(&wgpu::BindGroupDescriptor { 
             label: Some("Dynamic Bind Group"), 
@@ -1359,7 +1372,7 @@ impl GpuExecutor for WgpuBackend {
         let view_guard = self.current_view.lock().unwrap();
         let view = view_guard.as_ref().ok_or("No active swapchain view")?;
 
-        let vel_view = self.velocity_view.as_ref().unwrap_or(&self.dummy_velocity_view);
+        
         let k4_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Resolve Bind Group"),
             layout: &self.k4_bind_group_layout,
@@ -2369,9 +2382,9 @@ impl WgpuBackend {
             pipeline_cache: Mutex::new(std::collections::HashMap::new()),
             shader_reload_rx: Mutex::new(shader_reload_rx),
             _shader_watcher: shader_watcher,
-            query_set: None,
-            resolve_buffer: None,
-            readback_buffer: None,
+            query_set,
+            resolve_buffer,
+            readback_buffer,
 
             frame_index: 0,
             internal_width: i_width,
@@ -2750,11 +2763,93 @@ impl GraphicsBackend for WgpuBackend {
             }));
             self.hdr_view = Arc::new(hdr_texture.create_view(&wgpu::TextureViewDescriptor::default()));
             self.hdr_texture = hdr_texture;
-            
-            // Re-create dummy views if needed (they don't strictly need resizing but good for consistency)
+
+            // Re-create G-Buffer textures
+            let extra_texture = Arc::new(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Extra G-Buffer Texture"),
+                size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }));
+            self.extra_view = Arc::new(extra_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.extra_texture = extra_texture;
+
+            let aux_texture = Arc::new(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Aux G-Buffer Texture"),
+                size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }));
+            self.aux_view = Arc::new(aux_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.aux_texture = aux_texture;
+
+            let velocity_texture = Arc::new(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Velocity G-Buffer Texture"),
+                size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }));
+            self.velocity_view = Some(Arc::new(velocity_texture.create_view(&wgpu::TextureViewDescriptor::default())));
+            self.velocity_texture = Some(velocity_texture);
+
+            // Re-create Depth texture
+            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Depth Texture"),
+                size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            self.depth_view = Arc::new(depth_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.depth_texture = Arc::new(depth_texture);
+
+            // Re-create Backdrop texture (Native resolution)
+            let backdrop_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Backdrop Texture"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.backdrop_view = Arc::new(backdrop_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.backdrop_texture = Arc::new(backdrop_texture);
+
+            // Re-create LDR texture (Native resolution)
+            let ldr_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("LDR Texture"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            self.ldr_view = Arc::new(ldr_texture.create_view(&wgpu::TextureViewDescriptor::default()));
+            self.ldr_texture = Arc::new(ldr_texture);
+
+            // Re-create dummy views
             let dummy_tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Dummy Velocity"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d { width: i_width.max(1), height: i_height.max(1), depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -2766,8 +2861,8 @@ impl GraphicsBackend for WgpuBackend {
 
             // Re-create bloom textures
             for i in 0..self.bloom_textures.len() {
-                let w = (width >> (i+1)).max(1);
-                let h = (height >> (i+1)).max(1);
+                let w = (i_width >> (i+1)).max(1);
+                let h = (i_height >> (i+1)).max(1);
                 let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&format!("Bloom {}", i)),
                     size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -2823,6 +2918,18 @@ impl GraphicsBackend for WgpuBackend {
         let mut current_texture = self.current_texture.lock().unwrap();
         if let Some(output) = current_texture.take() {
             output.present();
+        }
+
+        // Handle screenshot request
+        let request = {
+            let mut guard = self.screenshot_requested.lock().unwrap();
+            guard.take()
+        };
+        
+        if let Some(path) = request {
+            if let Err(e) = self.perform_screenshot(&path) {
+                eprintln!("Screenshot failed: {}", e);
+            }
         }
     }
     fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
@@ -2943,10 +3050,10 @@ impl GraphicsBackend for WgpuBackend {
             blur_radius: config.blur_radius,
             motion_blur_strength: config.motion_blur_strength,
             debug_mode: config.debug_mode,
-            light_pos: [500.0, 300.0],
+            light_pos: config.light_pos,
             gi_intensity: config.gi_intensity,
             volumetric_intensity: config.volumetric_intensity,
-            light_color: [1.0, 0.9, 0.7, 1.0],
+            light_color: config.light_color,
             jitter: [0.0, 0.0],
             render_size: [self.internal_width as f32, self.internal_height as f32],
         };

@@ -2,7 +2,7 @@
 //! Ported from types_core.hpp
 
 use serde::{Deserialize, Serialize};
-use std::ops::{Add, Mul, Sub};
+use std::ops::{Add, Div, Mul, Sub};
 
 /// Unique identifier for an OS window
 /// Used for multi-window context management
@@ -257,13 +257,20 @@ impl Vec3 {
     pub fn normalized(self) -> Self {
         let len = self.length();
         if len > 0.0 {
-            Self {
-                x: self.x / len,
-                y: self.y / len,
-                z: self.z / len,
-            }
+            self / len
         } else {
             Self::ZERO
+        }
+    }
+}
+
+impl Div<f32> for Vec3 {
+    type Output = Self;
+    fn div(self, rhs: f32) -> Self {
+        Self {
+            x: self.x / rhs,
+            y: self.y / rhs,
+            z: self.z / rhs,
         }
     }
 }
@@ -331,6 +338,16 @@ impl Mul<f32> for Vec2 {
     }
 }
 
+impl Div<f32> for Vec2 {
+    type Output = Self;
+    fn div(self, rhs: f32) -> Self {
+        Self {
+            x: self.x / rhs,
+            y: self.y / rhs,
+        }
+    }
+}
+
 /// Axis-aligned rectangle
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rectangle {
@@ -388,5 +405,94 @@ mod tests {
         let rect = Rectangle::new(10.0, 20.0, 100.0, 50.0);
         assert!(rect.contains(50.0, 40.0));
         assert!(!rect.contains(5.0, 40.0));
+    }
+
+    #[test]
+    fn test_mat3_mul() {
+        let m1 = Mat3::translation(10.0, 20.0);
+        let m2 = Mat3::scale(2.0, 2.0);
+        let m3 = m1 * m2;
+        let v = m3 * Vec2::new(1.0, 1.0);
+        // (1.0, 1.0) * Scale(2,2) = (2,2) -> Translate(10,20) = (12, 22)
+        assert!((v.x - 12.0).abs() < 0.001);
+        assert!((v.y - 22.0).abs() < 0.001);
+    }
+}
+
+/// 3x3 Matrix for 2D affine transformations
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Mat3(pub [f32; 9]);
+
+impl Default for Mat3 {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl Mat3 {
+    pub const IDENTITY: Self = Self([
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    ]);
+
+    pub fn translation(x: f32, y: f32) -> Self {
+        Self([
+            1.0, 0.0, x,
+            0.0, 1.0, y,
+            0.0, 0.0, 1.0,
+        ])
+    }
+
+    pub fn rotation(angle_rad: f32) -> Self {
+        let (s, c) = angle_rad.sin_cos();
+        Self([
+            c,   -s,  0.0,
+            s,    c,  0.0,
+            0.0, 0.0, 1.0,
+        ])
+    }
+
+    pub fn scale(sx: f32, sy: f32) -> Self {
+        Self([
+            sx,  0.0, 0.0,
+            0.0, sy,  0.0,
+            0.0, 0.0, 1.0,
+        ])
+    }
+
+    pub fn transform_point(&self, p: Vec2) -> Vec2 {
+        Vec2 {
+            x: self.0[0] * p.x + self.0[1] * p.y + self.0[2],
+            y: self.0[3] * p.x + self.0[4] * p.y + self.0[5],
+        }
+    }
+}
+
+impl Mul<Mat3> for Mat3 {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self {
+        let a = self.0;
+        let b = rhs.0;
+        Self([
+            a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+            a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+            a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+
+            a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+            a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+            a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+
+            a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+            a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+            a[6] * b[2] + a[7] * b[5] + a[8] * b[8],
+        ])
+    }
+}
+
+impl Mul<Vec2> for Mat3 {
+    type Output = Vec2;
+    fn mul(self, rhs: Vec2) -> Vec2 {
+        self.transform_point(rhs)
     }
 }

@@ -28,6 +28,6 @@ pub use mobile::{
     DesktopPlatform, HapticType, ImeAction, ImeHint, ImePosition, MobilePlatform, SafeAreaInsets,
 };
 pub use theme::{Style, Theme};
-pub use types::{ColorF, Rectangle, Vec2, Vec3, WindowID};
+pub use types::{ColorF, Mat3, Rectangle, Vec2, Vec3, WindowID};
 pub use undo::{BatchCommand, CallbackCommand, Command, CommandStack};
 pub use wire::{Connection, ConnectionResult, Port, PortId, PortType, WireInteraction, WireState};

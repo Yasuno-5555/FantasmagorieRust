@@ -183,6 +183,25 @@ pub enum DrawCommand {
         color: ColorF,
         zoom: f32,
     },
+
+    /// Tilemap (Batch Rendering)
+    TileMap {
+        pos: Vec2,
+        size: Vec2,
+        texture_id: u64,
+        tile_count: [u32; 2],
+        tile_size: [f32; 2],
+        data: Vec<u32>,
+        color: ColorF,
+        tiles_per_row: u32,
+        tile_uv_size: [f32; 2],
+    },
+
+    /// Particles (CPU to GPU Batch)
+    Particles {
+        texture_id: u64,
+        particles: Vec<crate::game::particles::Particle>,
+    },
 }
 
 /// Draw list - accumulates commands for a frame
@@ -622,6 +641,38 @@ impl DrawList {
             color,
             zoom,
         });
+    }
+
+    pub fn add_tilemap(
+        &mut self,
+        pos: Vec2,
+        size: Vec2,
+        texture_id: u64,
+        tile_count: [u32; 2],
+        tile_size: [f32; 2],
+        data: Vec<u32>,
+        color: ColorF,
+        tiles_per_row: u32,
+        tile_uv_size: [f32; 2],
+    ) {
+        self.commands.push(DrawCommand::TileMap {
+            pos,
+            size,
+            texture_id,
+            tile_count,
+            tile_size,
+            data,
+            color,
+            tiles_per_row,
+            tile_uv_size,
+        });
+    }
+
+    pub fn add_particles(&mut self, texture_id: u64, particles: Vec<crate::game::particles::Particle>) {
+         self.commands.push(DrawCommand::Particles {
+             texture_id,
+             particles,
+         });
     }
 
     /// Add 3D viewport

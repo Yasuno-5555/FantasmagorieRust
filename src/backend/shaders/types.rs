@@ -51,7 +51,7 @@ impl Default for CinematicParams {
             bloom_intensity: 0.4,
             tonemap_mode: 1, // Aces
             bloom_mode: 1,   // Soft
-            grain_strength: 0.05,
+            grain_strength: 0.0,
             time: 0.0,
             lut_intensity: 1.0,
             blur_radius: 0.0,

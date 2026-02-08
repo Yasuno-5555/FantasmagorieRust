@@ -226,6 +226,132 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         i = j;
                     }
                 }
+                DrawCommand::Image { pos, size, texture_id, uv, color, .. } => {
+                    let uniforms = DrawUniforms {
+                        projection: *bytemuck::cast_ref(&proj),
+                        mode: 0, time, viewport_size: [width as f32, height as f32],
+                        ..Zeroable::zeroed()
+                    };
+                    let verts = quad_vertices_uv(*pos, *size, *uv, *color);
+                    
+                    // Note: We need to resolve the texture_id to a texture view.
+                    // For now, we assume the backend can provide views by ID or we fallback to font_view.
+                    let tex_view = font_view.as_ref().unwrap(); // Fallback for now if not found
+                    
+                    let u_buf = executor.create_buffer(bytemuck::bytes_of(&uniforms).len() as u64, BufferUsage::Uniform, "ImageU")?;
+                    executor.write_buffer(&u_buf, 0, bytemuck::bytes_of(&uniforms));
+                    let v_buf = executor.create_buffer(verts.len() as u64, BufferUsage::Vertex, "ImageV")?;
+                    executor.write_buffer(&v_buf, 0, &verts);
+                    
+                    use crate::backend::hal::{BindGroupEntry, BindingResource};
+                    let bg = executor.create_bind_group(&layout, &[
+                        BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
+                        BindGroupEntry { binding: 1, resource: BindingResource::Texture(tex_view) },
+                        BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
+                        BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
+                        BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
+                        BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                    ])?;
+                    
+                    executor.draw(&pipeline, Some(&bg), &v_buf, 6, &[])?;
+                    executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
+                    i += 1;
+                }
+                DrawCommand::TileMap { pos, size: _, texture_id: _, tile_count, tile_size, data, color, tiles_per_row, tile_uv_size } => {
+                    let mut batched_verts = Vec::new();
+                    
+                    for y in 0..tile_count[1] {
+                        for x in 0..tile_count[0] {
+                            let idx = (y * tile_count[0] + x) as usize;
+                            if idx >= data.len() { continue; }
+                            let tile_id = data[idx];
+                            if tile_id == 0 { continue; }
+
+                            let tx = (tile_id % tiles_per_row) as f32;
+                            let ty = (tile_id / tiles_per_row) as f32;
+                            
+                            let uv = [
+                                tx * tile_uv_size[0],
+                                ty * tile_uv_size[1],
+                                tile_uv_size[0],
+                                tile_uv_size[1]
+                            ];
+                            
+                            let world_pos = Vec2::new(
+                                pos.x + x as f32 * tile_size[0],
+                                pos.y + y as f32 * tile_size[1]
+                            );
+                            let world_size = Vec2::new(tile_size[0], tile_size[1]);
+                            
+                            batched_verts.extend(quad_vertices_uv(world_pos, world_size, uv, *color));
+                        }
+                    }
+
+                    if !batched_verts.is_empty() {
+                        let uniforms = DrawUniforms {
+                            projection: *bytemuck::cast_ref(&proj),
+                            mode: 0, time, viewport_size: [width as f32, height as f32],
+                            ..Zeroable::zeroed()
+                        };
+                        let tex_view = font_view.as_ref().unwrap(); // Fallback
+                        
+                        let u_buf = executor.create_buffer(bytemuck::bytes_of(&uniforms).len() as u64, BufferUsage::Uniform, "TileU")?;
+                        executor.write_buffer(&u_buf, 0, bytemuck::bytes_of(&uniforms));
+                        let v_buf = executor.create_buffer(batched_verts.len() as u64, BufferUsage::Vertex, "TileV")?;
+                        executor.write_buffer(&v_buf, 0, &batched_verts);
+                        
+                        use crate::backend::hal::{BindGroupEntry, BindingResource};
+                        let bg = executor.create_bind_group(&layout, &[
+                            BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
+                            BindGroupEntry { binding: 1, resource: BindingResource::Texture(tex_view) },
+                            BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
+                            BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
+                            BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
+                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                        ])?;
+                        
+                        executor.draw(&pipeline, Some(&bg), &v_buf, (batched_verts.len() / (std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 4]>())) as u32, &[])?;
+                        executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
+                    }
+                    i += 1;
+                }
+                DrawCommand::Particles { texture_id: _, particles } => {
+                    let mut batched_verts = Vec::new();
+                    for p in particles {
+                        let uv = [0.0, 0.0, 1.0, 1.0];
+                        let p_size = Vec2::new(p.size, p.size);
+                        let p_pos = p.position - p_size * 0.5;
+                        batched_verts.extend(quad_vertices_uv(p_pos, p_size, uv, p.color));
+                    }
+                    
+                    if !batched_verts.is_empty() {
+                        let uniforms = DrawUniforms {
+                            projection: *bytemuck::cast_ref(&proj),
+                            mode: 0, time, viewport_size: [width as f32, height as f32],
+                            ..Zeroable::zeroed()
+                        };
+                        let tex_view = font_view.as_ref().unwrap(); // Fallback
+                        
+                        let u_buf = executor.create_buffer(bytemuck::bytes_of(&uniforms).len() as u64, BufferUsage::Uniform, "PartU")?;
+                        executor.write_buffer(&u_buf, 0, bytemuck::bytes_of(&uniforms));
+                        let v_buf = executor.create_buffer(batched_verts.len() as u64, BufferUsage::Vertex, "PartV")?;
+                        executor.write_buffer(&v_buf, 0, &batched_verts);
+                        
+                        use crate::backend::hal::{BindGroupEntry, BindingResource};
+                        let bg = executor.create_bind_group(&layout, &[
+                            BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
+                            BindGroupEntry { binding: 1, resource: BindingResource::Texture(tex_view) },
+                            BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
+                            BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
+                            BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
+                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                        ])?;
+                        
+                        executor.draw(&pipeline, Some(&bg), &v_buf, (batched_verts.len() / (std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 4]>())) as u32, &[])?;
+                        executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
+                    }
+                    i += 1;
+                }
                 _ => { i += 1; }
             }
         }

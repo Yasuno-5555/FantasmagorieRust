@@ -1,24 +1,42 @@
 ﻿use crate::core::Vec2;
 use serde::{Deserialize, Serialize};
 
-/// Simple AABB Collider for spatial triggers.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct Collider {
-    pub offset: Vec2,
-    pub size: Vec2,
+/// Collider types for spatial triggers and physics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Collider {
+    AABB { offset: Vec2, size: Vec2 },
+    Circle { offset: Vec2, radius: f32 },
+    Polygon { offset: Vec2, vertices: Vec<Vec2> },
 }
 
 impl Collider {
-    pub fn new(width: f32, height: f32) -> Self {
-        Self {
+    pub fn aabb(width: f32, height: f32) -> Self {
+        Self::AABB {
             offset: Vec2::new(0.0, 0.0),
             size: Vec2::new(width, height),
         }
     }
 
-    pub fn with_offset(mut self, x: f32, y: f32) -> Self {
-        self.offset = Vec2::new(x, y);
-        self
+    pub fn circle(radius: f32) -> Self {
+        Self::Circle {
+            offset: Vec2::new(0.0, 0.0),
+            radius,
+        }
+    }
+    
+    pub fn polygon(vertices: Vec<Vec2>) -> Self {
+        Self::Polygon {
+            offset: Vec2::new(0.0, 0.0),
+            vertices,
+        }
+    }
+
+    pub fn get_offset(&self) -> Vec2 {
+        match self {
+            Self::AABB { offset, .. } => *offset,
+            Self::Circle { offset, .. } => *offset,
+            Self::Polygon { offset, .. } => *offset,
+        }
     }
 }
 
@@ -56,30 +74,20 @@ impl InteractionState {
     }
 }
 
-/// Helper for AABB overlap check.
+/// Helper for collision overlap check.
 pub fn intersects(pos_a: Vec2, col_a: &Collider, pos_b: Vec2, col_b: &Collider) -> bool {
-    let a_min = pos_a + col_a.offset - col_a.size * 0.5;
-    let a_max = pos_a + col_a.offset + col_a.size * 0.5;
-    let b_min = pos_b + col_b.offset - col_b.size * 0.5;
-    let b_max = pos_b + col_b.offset + col_b.size * 0.5;
-
-    a_min.x < b_max.x && a_max.x > b_min.x &&
-    a_min.y < b_max.y && a_max.y > b_min.y
+    super::physics::check_collision(pos_a, col_a, pos_b, col_b).is_some()
 }
 
 /// Helper for proximity check.
 pub fn get_proximity(pos_a: Vec2, col_a: &Collider, pos_b: Vec2, col_b: &Collider, radius: f32) -> f32 {
-    let dist = (pos_a + col_a.offset).distance(pos_b + col_b.offset);
-    let min_dist = (col_a.size.x.max(col_a.size.y) + col_b.size.x.max(col_b.size.y)) * 0.5;
+    let p_a = pos_a + col_a.get_offset();
+    let p_b = pos_b + col_b.get_offset();
+    let dist = p_a.distance(p_b);
     
-    if dist < min_dist {
-        return 1.0;
-    }
+    // Simple distance-based proximity
+    if dist < 1.0 { return 1.0; }
+    if dist > radius { return 0.0; }
     
-    let range = radius;
-    if dist > min_dist + range {
-        return 0.0;
-    }
-    
-    1.0 - ((dist - min_dist) / range).clamp(0.0, 1.0)
+    1.0 - (dist / radius).clamp(0.0, 1.0)
 }

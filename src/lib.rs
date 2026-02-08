@@ -48,7 +48,7 @@ pub mod python;
 /// Convenient re-exports for common usage
 pub mod prelude {
     // Core types
-    pub use crate::core::{ColorF, FrameArena, Rectangle, Theme, Style, Vec2, ID};
+    pub use crate::core::{ColorF, FrameArena, Mat3, Rectangle, Theme, Style, Vec2, Vec3, ID};
     pub use crate::draw::DrawList;
     pub use crate::view::{Align, ViewHeader, ViewType};
     pub use crate::widgets::{BoxBuilder, ButtonBuilder, TextBuilder, UIContext};

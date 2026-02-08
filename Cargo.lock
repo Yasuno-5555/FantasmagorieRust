@@ -846,6 +846,7 @@ dependencies = [
  "realfft",
  "safetensors",
  "serde",
+ "serde_json",
  "tracea",
  "wgpu",
  "winit",

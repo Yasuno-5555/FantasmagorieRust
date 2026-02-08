@@ -9,6 +9,9 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use cocoa::base::id;
 use objc::{msg_send, sel, sel_impl};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
+
+static mut FRAME_COUNT: u32 = 0;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Fantasmagorie Rust - Metal Demo");
 
@@ -87,24 +90,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                // Screenshot verification logic
-                static mut FRAME_COUNT: u32 = 0;
-                unsafe {
-                    FRAME_COUNT += 1;
-                    if FRAME_COUNT % 10 == 0 {
-                         println!("DEBUG: Frame {}", FRAME_COUNT);
-                    }
-                    let path = "/Users/yasuno/.gemini/antigravity/brain/ec06709f-9a1b-4607-9380-6abfa5bd5090/metal_final.png";
-                    if FRAME_COUNT == 5 {
-                        println!("Requesting screenshot to {}...", path);
-                        backend.capture_screenshot(path);
-                    }
-                    if FRAME_COUNT == 15 {
-                        println!("Exiting after frame 15.");
-                        elwt.exit();
-                    }
-                }
-
                 let arena = FrameArena::new();
                 let mut ui = UIContext::new(&arena);
 
@@ -193,6 +178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
 
                     backend.render(&dl, current_width, current_height);
+                }
                 }
             }
             Event::AboutToWait => {
