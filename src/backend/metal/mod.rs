@@ -20,7 +20,7 @@ use pipeline_provider::{MetalPipelineProvider, MetalBindGroup, MetalBindGroupLay
 use resource_provider::MetalResourceProvider;
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct Vertex {
     pub pos: [f32; 2],
     pub uv: [f32; 2],
@@ -253,6 +253,8 @@ impl MetalBackend {
             tonemap_mode: 1, bloom_mode: 1, grain_strength: 0.05, time: 0.0,
             lut_intensity: 0.0, blur_radius: 0.0, motion_blur_strength: 0.0, debug_mode: 0,
             gi_intensity: 0.3, light_pos: [500.0, 300.0], volumetric_intensity: 0.5, light_color: [1.0, 0.9, 0.7, 1.0],
+            jitter: [0.0, 0.0],
+            render_size: [1.0, 1.0],
         };
         let cinematic_buffer = device.new_buffer(
             std::mem::size_of::<crate::backend::shaders::types::CinematicParams>() as u64,
@@ -381,6 +383,9 @@ impl MetalBackend {
 
 impl GraphicsBackend for MetalBackend {
     fn name(&self) -> &str { "Metal" }
+    fn set_resolution_scale(&mut self, scale: f32) {
+        self.internal_resolution_scale = scale;
+    }
 
     fn update_audio_data(&mut self, data: &[f32]) {
         self.audio_data = data.to_vec();
@@ -507,6 +512,8 @@ impl GraphicsBackend for MetalBackend {
             gi_intensity: config.gi_intensity,
             volumetric_intensity: config.volumetric_intensity,
             light_color: [1.0, 0.9, 0.7, 1.0],
+            jitter: [0.0, 0.0],
+            render_size: [self.cached_width as f32, self.cached_height as f32],
         };
 
         *self.current_cinematic.lock().unwrap() = params;
@@ -600,56 +607,6 @@ impl MetalBackend {
         }
     }
     
-    // GraphicsBackend methods moved here to avoid duplicate impl
-    pub fn update_font_texture(&mut self, width: u32, height: u32, data: &[u8]) {
-        let desc = metal::TextureDescriptor::new();
-        desc.set_pixel_format(MTLPixelFormat::R8Unorm);
-        desc.set_width(width as u64);
-        desc.set_height(height as u64);
-        desc.set_usage(MTLTextureUsage::ShaderRead);
-        
-        let tex = self.device.new_texture(&desc);
-        let region = MTLRegion {
-            origin: MTLOrigin { x: 0, y: 0, z: 0 },
-            size: MTLSize { width: width as u64, height: height as u64, depth: 1 },
-        };
-        tex.replace_region(region, 0, data.as_ptr() as *const _, width as u64);
-        self.font_texture = Some(tex);
-    }
-
-    fn capture_screenshot(&mut self, path: &str) {
-        *self.screenshot_requested.lock().unwrap() = Some(path.to_string());
-    }
-
-    fn set_cinematic_config(&mut self, config: crate::config::CinematicConfig) {
-        use crate::backend::shaders::types::CinematicParams;
-        use crate::config::{Bloom, Tonemap};
-
-        let params = CinematicParams {
-            exposure: config.exposure,
-            ca_strength: config.chromatic_aberration,
-            vignette_intensity: config.vignette,
-            bloom_intensity: 0.4,
-            tonemap_mode: match config.tonemap { Tonemap::None => 0, Tonemap::Aces => 1, Tonemap::Reinhard => 2 },
-            bloom_mode: match config.bloom { Bloom::None => 0, Bloom::Soft => 1, Bloom::Cinematic => 2 },
-            grain_strength: config.grain_strength,
-            time: self.start_time.elapsed().as_secs_f32(),
-            lut_intensity: config.lut_intensity,
-            blur_radius: config.blur_radius,
-            motion_blur_strength: config.motion_blur_strength,
-            debug_mode: config.debug_mode,
-            light_pos: [500.0, 300.0],
-            gi_intensity: config.gi_intensity,
-            volumetric_intensity: config.volumetric_intensity,
-            light_color: [1.0, 0.9, 0.7, 1.0],
-        };
-
-        *self.current_cinematic.lock().unwrap() = params;
-        unsafe {
-            let ptr = self.cinematic_buffer.contents() as *mut CinematicParams;
-            *ptr = params;
-        }
-    }
 }
 
 impl GpuExecutor for MetalBackend {

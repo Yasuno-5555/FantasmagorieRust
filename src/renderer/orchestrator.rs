@@ -34,7 +34,7 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         self.camera_cut = true;
     }
 
-    pub fn plan(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32) {
+    pub fn plan(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32, scale: f32) {
         self.graph = RenderGraph::new();
 
         // 1. Process Draw List into Geometry Nodes
@@ -44,7 +44,10 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         }
         
         if !current_batch.is_empty() {
-            self.graph.add_node(GeometryNode::new(current_batch));
+            self.graph.add_node(GeometryNode::new(current_batch)
+                .with_aux(AUX_HANDLE)
+                .with_velocity(VELOCITY_HANDLE)
+                .with_depth(DEPTH_HANDLE));
         }
 
         // 2. Add SSR Node (Aux, Depth, HDR)
@@ -79,13 +82,9 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         }));
 
         self.graph.add_node(crate::renderer::nodes::jfa::JfaSdfNode::new(EXTRA_HANDLE));
-
         // 4. Particle System
         self.graph.add_node(ParticleNode::new(self.particle_system.clone()));
 
-        // Phase 5/6: Pipeline
-        // TODO: Pass config.internal_resolution_scale from EngineConfig
-        let scale = 1.0f32; // Fallback: native resolution
         let internal_width = (width as f32 * scale) as u32;
         let internal_height = (height as f32 * scale) as u32;
 
@@ -103,19 +102,12 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         }));
 
         self.graph.add_node(crate::renderer::nodes::lighting::LightingNode);
-        
-        // Bloom Node reused (usually takes input? Needs generic handle support or hardcoded to HDR_LOW_RES?)
-        // Currently BlurNode/Bloom logic might need updating if it expects specific handles.
-        // Assuming Bloom can read from HDR_LOW_RES if we configure it?
-        // Or we assume Bloom reads from "SceneColor" which was HDR_HANDLE.
-        // But HDR_HANDLE is now G-Buffer. Lighting Result is HDR_LOW_RES.
-        // We probably need to update Bloom to read from HDR_LOW_RES.
-        
         self.graph.add_node(crate::renderer::nodes::upscale::UpscaleNode);
+        self.graph.add_node(crate::renderer::nodes::bloom::BloomNode);
         self.graph.add_node(crate::renderer::nodes::post::PostProcessNode);
     }
 
-    pub fn execute(&mut self, backend: &mut E, time: f32, width: u32, height: u32) -> Result<(), String> {
+    pub fn execute(&mut self, backend: &mut E, time: f32, width: u32, height: u32, jitter: (f32, f32)) -> Result<(), String> {
         let mut external = std::collections::HashMap::new();
         
         // Pass backend-owned textures as external resources to the graph if they exist
@@ -194,25 +186,6 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         // `PostProcessNode` outputs to `LDR_HANDLE`.
         // So I don't need to manually insert it here IF RenderGraph handles internal resources.
         // Let's check RenderGraph implementation.
-
-        self.frame_count += 1;
-        let index = self.frame_count % 8; // 8-phase cycle
-        
-        fn halton(index: u64, base: u32) -> f32 {
-            let mut f = 1.0;
-            let mut r = 0.0;
-            let mut i = index;
-            while i > 0 {
-                f = f / (base as f32);
-                r = r + f * ((i % (base as u64)) as f32);
-                i = i / (base as u64);
-            }
-            r
-        }
-        
-        let jx = halton(index + 1, 2) - 0.5;
-        let jy = halton(index + 1, 3) - 0.5;
-        let jitter = (jx, jy);
 
         let result = self.graph.execute(backend, external, time, width, height, jitter, self.camera_cut);
         self.camera_cut = false; // Reset after frame

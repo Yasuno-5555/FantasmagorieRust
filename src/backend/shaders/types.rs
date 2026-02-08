@@ -20,7 +20,7 @@ pub struct GlobalUniforms {
 
 /// Cinematic post-processing parameters
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct CinematicParams {
     pub exposure: f32,
     pub ca_strength: f32,
@@ -38,6 +38,8 @@ pub struct CinematicParams {
     pub gi_intensity: f32,
     pub volumetric_intensity: f32,
     pub light_color: [f32; 4],
+    pub jitter: [f32; 2],            // 8 bytes at offset 80
+    pub render_size: [f32; 2],       // 8 bytes at offset 88 -> total 96 bytes
 }
 
 impl Default for CinematicParams {
@@ -59,6 +61,8 @@ impl Default for CinematicParams {
             gi_intensity: 0.5,       // Default GI strength
             volumetric_intensity: 0.0, // Default off for now
             light_color: [1.0, 0.9, 0.7, 1.0],
+            jitter: [0.0, 0.0],
+            render_size: [1280.0, 720.0],
         }
     }
 }

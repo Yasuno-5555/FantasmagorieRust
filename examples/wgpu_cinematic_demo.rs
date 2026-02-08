@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.clone(),
         size.width,
         size.height,
+        0.5,
     )
     .map_err(|e| format!("WGPU creation failed: {}", e))?;
 
@@ -249,6 +250,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Render with Unified Backend
                     backend.render(&dl, current_width, current_height);
+
+                    // Auto-screenshot for verification
+                    static mut FRAME_COUNT: u64 = 0;
+                    unsafe {
+                        FRAME_COUNT += 1;
+                        if FRAME_COUNT == 100 {
+                            backend.capture_screenshot("upscale_test.png");
+                            println!("📸 Screenshot captured to upscale_test.png");
+                        }
+                        if FRAME_COUNT > 110 {
+                            elwt.exit();
+                        }
+                    }
                 }
             }
             _ => {}

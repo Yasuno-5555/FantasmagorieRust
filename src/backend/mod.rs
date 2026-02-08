@@ -65,6 +65,11 @@ pub trait GraphicsBackend {
     fn update_lut_texture(&mut self, _data: &[f32], _size: u32) {
         // Default no-op
     }
+
+    /// Set internal resolution scale for upscaling (0.5 = 50% resolution)
+    fn set_resolution_scale(&mut self, _scale: f32) {
+        // Default no-op
+    }
 }
 
 #[cfg(feature = "wgpu")]

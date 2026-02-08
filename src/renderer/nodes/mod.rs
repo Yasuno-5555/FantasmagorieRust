@@ -9,5 +9,6 @@ pub mod post;
 pub mod upscale;
 pub mod jfa;
 pub mod particles;
+pub mod bloom;
 pub mod fxaa;
 

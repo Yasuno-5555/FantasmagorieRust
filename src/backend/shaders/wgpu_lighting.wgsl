@@ -15,6 +15,8 @@ struct CinematicParams {
     gi_intensity: f32,
     volumetric_intensity: f32,
     light_color: vec4<f32>,
+    jitter: vec2<f32>,
+    render_size: vec2<f32>,
 };
 
 @group(0) @binding(0) var t_hdr: texture_2d<f32>;

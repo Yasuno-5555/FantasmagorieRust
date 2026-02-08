@@ -7,3 +7,4 @@ pub mod particle;
 pub mod resolver;
 pub mod sdf;
 pub mod visibility;
+pub mod jitter;

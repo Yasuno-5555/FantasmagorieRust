@@ -81,21 +81,19 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
         println!("DEBUG: GeometryNode::execute called with {} commands", self.commands.len());
         let mut i = 0;
         while i < self.commands.len() {
-            let cmd = &self.commands[i];
+            let start_cmd = &self.commands[i];
             
-            match cmd {
-                DrawCommand::Text { pos, size, uv, color } => {
-                    // Logic moved from orchestrator
-                    let mut batched_verts = quad_vertices_uv(*pos, *size, *uv, *color);
-                    let mut j = if self.batching_enabled { i + 1 } else { i + 1 };
-                    if self.batching_enabled {
-                        while j < self.commands.len() {
-                            if let DrawCommand::Text { pos, size, uv, color } = &self.commands[j] {
-                                batched_verts.extend(quad_vertices_uv(*pos, *size, *uv, *color));
-                                j += 1;
-                            } else { break; }
-                        }
+            match start_cmd {
+                DrawCommand::Text { .. } => {
+                    let mut batched_verts = Vec::new();
+                    let mut j = i;
+                    while j < self.commands.len() {
+                        if let DrawCommand::Text { pos, size, uv, color } = &self.commands[j] {
+                            batched_verts.extend(quad_vertices_uv(*pos, *size, *uv, *color));
+                            j += 1;
+                        } else { break; }
                     }
+                    
                     let uniforms = DrawUniforms {
                         projection: *bytemuck::cast_ref(&proj),
                         mode: 1, time, viewport_size: [width as f32, height as f32],
@@ -105,6 +103,7 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                     executor.write_buffer(&u_buf, 0, bytemuck::bytes_of(&uniforms));
                     let v_buf = executor.create_buffer(batched_verts.len() as u64, BufferUsage::Vertex, "TextV")?;
                     executor.write_buffer(&v_buf, 0, &batched_verts);
+                    
                     use crate::backend::hal::{BindGroupEntry, BindingResource};
                     let bg = executor.create_bind_group(&layout, &[
                         BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
@@ -114,81 +113,54 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
                         BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
                     ])?;
+                    
                     executor.draw(&pipeline, Some(&bg), &v_buf, ((j - i) * 6) as u32, &[])?;
                     executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
                     i = j;
                 }
                 DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, shader_inject, .. } => {
                     if shader_inject.is_some() {
-                        // Fallback logic for injected shaders
-                        let (uniforms, verts, custom_pipeline): (DrawUniforms, Vec<u8>, Option<E::RenderPipeline>) = {
+                        // Custom shader path (single object)
+                        let uniforms = {
                             let mut u: DrawUniforms = Zeroable::zeroed();
                             u.projection = *bytemuck::cast_ref(&proj); u.rect = [pos.x, pos.y, size.x, size.y];
                             u.radii = *radii; u.border_color = [border_color.r, border_color.g, border_color.b, border_color.a];
                             u.glow_color = [glow_color.r, glow_color.g, glow_color.b, glow_color.a];
                             u.border_width = *border_width; u.elevation = *elevation; u.glow_strength = *glow_strength;
-                            u.mode = 2; u.is_squircle = if *is_squircle { 1 } else { 0 };
+                            u.mode = 100; u.is_squircle = if *is_squircle { 1 } else { 0 };
                             u.time = time; u.viewport_size = [width as f32, height as f32];
-                            
-                            let mut cp: Option<E::RenderPipeline> = None;
-                            if let Some(source) = shader_inject {
-                                if let Ok(p) = executor.get_custom_render_pipeline(source) {
-                                    cp = Some(p); u.mode = 100;
-                                }
-                            }
-                            (u, quad_vertices(*pos, *size, *color), cp)
+                            u
                         };
+                        let verts = quad_vertices(*pos, *size, *color);
+                        let p = executor.get_custom_render_pipeline(shader_inject.as_ref().unwrap()).unwrap_or(pipeline.clone());
 
-                        let p = custom_pipeline.as_ref().unwrap_or(&pipeline);
                         let u_buf = executor.create_buffer(bytemuck::bytes_of(&uniforms).len() as u64, BufferUsage::Uniform, "FallbackU")?;
                         executor.write_buffer(&u_buf, 0, bytemuck::bytes_of(&uniforms));
                         let v_buf = executor.create_buffer(verts.len() as u64, BufferUsage::Vertex, "FallbackV")?;
                         executor.write_buffer(&v_buf, 0, &verts);
+                        
                         use crate::backend::hal::{BindGroupEntry, BindingResource};
                         let bg = executor.create_bind_group(&layout, &[
                             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
                             BindGroupEntry { binding: 1, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
                             BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
                             BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
-                            BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) }, // Reusing u_buf as Global
+                            BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
                             BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
                         ])?;
-                        executor.draw(p, Some(&bg), &v_buf, 6, &[])?;
+                        executor.draw(&p, Some(&bg), &v_buf, 6, &[])?;
                         executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
                         i += 1;
                     } else {
-                        // Instanced path
+                        // Batch contiguous rounded rects
                         let mut instances = Vec::new();
                         let mut j = i;
-                        if self.batching_enabled {
-                            while j < self.commands.len() {
-                                if let DrawCommand::RoundedRect { 
-                                    pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, 
-                                    velocity, reflectivity, roughness, normal_map, distortion_strength, emissive_intensity, parallax_factor, .. 
-                                } = &self.commands[j] {
-                                    if let DrawCommand::RoundedRect { shader_inject, .. } = &self.commands[j] {
-                                        if shader_inject.is_some() { break; }
-                                    }
-                                    instances.push(ShapeInstance {
-                                        rect: [pos.x, pos.y, size.x, size.y],
-                                        radii: *radii,
-                                        color: [color.r, color.g, color.b, color.a],
-                                        border_color: [border_color.r, border_color.g, border_color.b, border_color.a],
-                                        glow_color: [glow_color.r, glow_color.g, glow_color.b, glow_color.a],
-                                        params1: [*border_width, *elevation, *glow_strength, 0.0],
-                                        params2: [2, if *is_squircle { 1 } else { 0 }, 0, 0],
-                                        material: [velocity.x, velocity.y, *reflectivity, *roughness],
-                                        pbr_params: [normal_map.unwrap_or(0) as f32, *distortion_strength, *emissive_intensity, *parallax_factor],
-                                    });
-                                    j += 1;
-                                }
- else { break; }
-                            }
-                        } else {
+                        while j < self.commands.len() {
                             if let DrawCommand::RoundedRect { 
-                                pos, size, radii, color: _, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, 
-                                velocity, reflectivity, roughness, normal_map, distortion_strength, emissive_intensity, parallax_factor, ..
+                                pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, 
+                                velocity, reflectivity, roughness, normal_map, distortion_strength, emissive_intensity, parallax_factor, shader_inject, .. 
                             } = &self.commands[j] {
+                                if shader_inject.is_some() { break; }
                                 instances.push(ShapeInstance {
                                     rect: [pos.x, pos.y, size.x, size.y],
                                     radii: *radii,
@@ -201,27 +173,21 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                                     pbr_params: [normal_map.unwrap_or(0) as f32, *distortion_strength, *emissive_intensity, *parallax_factor],
                                 });
                                 j += 1;
-                            }
+                            } else { break; }
                         }
-                        println!("GeometryPass: Drawing {} instances", instances.len());
-                        println!("DEBUG: Size of ShapeInstance in Rust is {}", std::mem::size_of::<ShapeInstance>());
-                        println!("DEBUG: Instance[0] rect: {:?}", instances[0].rect);
-                        println!("DEBUG: Instance[0] color: {:?}", instances[0].color);
-                        println!("DEBUG: GlobalUniforms size: {}", std::mem::size_of::<GlobalUniforms>());
-                        println!("DEBUG: Projection Matrix: {:?}", proj);
+
                         let global = GlobalUniforms {
                             projection: *bytemuck::cast_ref(&proj),
-                            time,
-                            _pad0: 0.0,
-                            viewport_size: [width as f32, height as f32],
+                            time, _pad0: 0.0, viewport_size: [width as f32, height as f32],
                         };
                         let ui_quad = unit_quad();
                         let g_buf = executor.create_buffer(bytemuck::bytes_of(&global).len() as u64, BufferUsage::Uniform, "GlobalU")?;
                         executor.write_buffer(&g_buf, 0, bytemuck::bytes_of(&global));
-                        let inst_buf = executor.create_buffer(16384, BufferUsage::Storage, "InstU")?;
+                        let inst_buf = executor.create_buffer((instances.len() * std::mem::size_of::<ShapeInstance>()) as u64, BufferUsage::Storage, "InstU")?;
                         executor.write_buffer(&inst_buf, 0, bytemuck::cast_slice(&instances));
                         let v_buf = executor.create_buffer(ui_quad.len() as u64, BufferUsage::Vertex, "QuadV")?;
                         executor.write_buffer(&v_buf, 0, &ui_quad);
+                        
                         use crate::backend::hal::{BindGroupEntry, BindingResource};
                         let bg = executor.create_bind_group(&instanced_layout, &[
                             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&g_buf) },
@@ -230,37 +196,7 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                             BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
                             BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&sampler) },
                         ])?;
-                        
-                        if let Some(aux_h) = self.aux_handle {
-                             // Look up aux resource
-                             // Note: RenderContext doesn't expose easy lookup of raw view from handle if generic E is opaque?
-                             // But RenderContext.resources has GraphResource::Texture(desc, tex).
-                             // We need E::Texture to create view? Or E::Texture IS the view?
-                             // HAL defines type Texture and TextureView.
-                             // TransientPool returns E::Texture.
-                             // We need a view. GpuExecutor has create_texture_view.
-                             // But we can't create view inside execute easily without mutating resources?
-                             // Let's assume resources map has the texture.
-                             // This part is tricky given current GraphResource definition.
-                             // GraphResource has E::Texture.
-                             // We need a way to get E::TextureView.
-                             // For now, let's assume we create view on fly or Graph stores View?
-                             // Graph stores Resource which owns E::Texture.
-                             // We should probably cache views in Context or GraphResource.
-                             // For this task, I'll create a view temporarily.
-                             if let Some(crate::renderer::graph::GraphResource::Texture(_, _tex)) = ctx.resources.get(&aux_h) {
-                                  // This requires E to expose create_texture_view which it does.
-                                  // But execute takes &mut self, ctx. ctx.executor is &mut E.
-                                  // We can call executor.create_texture_view(tex).
-                                  // But tex is borrowed from ctx.resources.
-                                  // Rust borrow checker might complain if we borrow tex (immutable) and executor (mutable).
-                                  // ctx splits borrows?
-                                  // RenderContext struct: { executor, resources, ... }
-                                  // Yes, we can borrow resources independently of executor.
-                             }
-                             // Actually, let's implement the branch:
-                        }
-                        
+
                         let aux_view_opt = if let Some(aux_h) = self.aux_handle {
                              if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&aux_h) {
                                   Some(executor.create_texture_view(tex)?)
@@ -279,29 +215,18 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                              } else { None }
                         } else { None };
 
-                        if let Some(aux) = &aux_view_opt {
-                             if let Some(vel) = &velocity_view_opt {
-                                 if let Some(depth) = &depth_view_opt {
-                                     let gb_pipeline = executor.get_instanced_gbuffer_render_pipeline().clone();
-                                     executor.draw_instanced_gbuffer(&gb_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32, aux, vel, depth)?;
-                                 }
-                             } else {
-                                 // Fallback if velocity not provided? (Should not happen if cinematic)
-                                 // For now, if no velocity, use aux as fake velocity to avoid crash but it's wrong.
-                                 // Better: add a branch to HAL?
-                                 // Actually, orchestrator should provide both.
-                             }
+                        if let (Some(aux), Some(vel), Some(depth)) = (&aux_view_opt, &velocity_view_opt, &depth_view_opt) {
+                            let gb_pipeline = executor.get_instanced_gbuffer_render_pipeline().clone();
+                            executor.draw_instanced_gbuffer(&gb_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32, aux, vel, depth)?;
                         } else {
-                             executor.draw_instanced(&instanced_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32)?;
+                            executor.draw_instanced(&instanced_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32)?;
                         }
+
                         executor.destroy_bind_group(bg); executor.destroy_buffer(g_buf); executor.destroy_buffer(inst_buf); executor.destroy_buffer(v_buf);
                         i = j;
                     }
                 }
-                _ => {
-                    // Other commands fallback
-                    i += 1;
-                }
+                _ => { i += 1; }
             }
         }
 

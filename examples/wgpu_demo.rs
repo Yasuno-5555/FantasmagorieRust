@@ -27,6 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.clone(),
         size.width,
         size.height,
+        1.0,
     )
     .map_err(|e: String| -> Box<dyn std::error::Error> { Box::from(e) })?;
 

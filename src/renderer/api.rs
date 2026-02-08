@@ -58,6 +58,7 @@ impl Renderer {
 
         // Pass initial cinematic config to backend
         renderer.backend.set_cinematic_config(renderer.config.cinematic);
+        renderer.backend.set_resolution_scale(renderer.config.internal_resolution_scale);
         
         renderer
     }

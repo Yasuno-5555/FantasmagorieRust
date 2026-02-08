@@ -69,6 +69,9 @@ pub struct WgpuBackend {
     pub blit_pipeline: wgpu::RenderPipeline,
     pub blit_bind_group_layout: wgpu::BindGroupLayout,
     
+    pub upscale_pipeline: wgpu::RenderPipeline,
+    pub upscale_bind_group_layout: wgpu::BindGroupLayout,
+    
     pub k4_pipeline: Arc<wgpu::RenderPipeline>, // Resolve/Post-process
     pub k4_bind_group_layout: Arc<wgpu::BindGroupLayout>,
     
@@ -132,6 +135,12 @@ pub struct WgpuBackend {
     pub tracea_particle_cache: Mutex<Option<crate::tracea_bridge::TraceaParticleKernel>>,
     pub tracea_fft_kernel: Mutex<Option<crate::tracea_bridge::TraceaFFTKernel>>,
     pub audio_data: Vec<f32>,
+    
+    // Resolution & Jitter
+    pub frame_index: u32,
+    pub internal_width: u32,
+    pub internal_height: u32,
+    pub resolution_scale: f32,
 }
 
 impl GpuExecutor for WgpuBackend {
@@ -382,24 +391,60 @@ impl GpuExecutor for WgpuBackend {
         let view = Arc::new(output.texture.create_view(&wgpu::TextureViewDescriptor::default()));
         *self.current_texture.lock().unwrap() = Some(output);
         *self.current_view.lock().unwrap() = Some(view);
+        
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Frame Encoder") });
         
-        // Clear HDR texture at start of frame
+        // Clear all targets and depth at start of frame
         {
-            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("HDR Clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            let mut color_attachments = vec![
+                Some(wgpu::RenderPassColorAttachment {
                     view: &*self.hdr_view,
                     resolve_target: None,
-                    ops: wgpu::Operations { 
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store 
-                    },
-                })],
-                depth_stencil_attachment: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &*self.aux_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &*self.extra_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                }),
+            ];
+            
+            for v in &self.bloom_views {
+                color_attachments.push(Some(wgpu::RenderPassColorAttachment {
+                    view: &**v,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                }));
+            }
+            
+            if let Some(vel) = &self.velocity_view {
+                color_attachments.push(Some(wgpu::RenderPassColorAttachment {
+                    view: &**vel,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                }));
+            }
+
+            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Frame Global Clear"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            // rpass dropped here, clearing is done.
         }
 
         *self.current_encoder.lock().unwrap() = Some(encoder);
@@ -408,6 +453,7 @@ impl GpuExecutor for WgpuBackend {
 
     fn end_execute(&self) -> Result<(), String> {
         println!("DEBUG: [PASS] end_execute starting");
+        
         let encoder = self.current_encoder.lock().unwrap().take().ok_or("No active encoder")?;
         self.queue.submit(Some(encoder.finish()));
         Ok(())
@@ -450,7 +496,7 @@ impl GpuExecutor for WgpuBackend {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.hdr_view,
                 resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -459,7 +505,6 @@ impl GpuExecutor for WgpuBackend {
         rpass.set_pipeline(pipeline);
         if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
         rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        // We use @builtin(instance_index) in shader, so we just say 0..instance_count
         rpass.draw(0..vertex_count, 0..instance_count);
         Ok(())
     }
@@ -478,7 +523,6 @@ impl GpuExecutor for WgpuBackend {
     ) -> Result<(), String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
-        
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("G-Buffer Draw"),
             color_attachments: &[
@@ -490,25 +534,22 @@ impl GpuExecutor for WgpuBackend {
                 Some(wgpu::RenderPassColorAttachment {
                     view: aux_view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 }),
                 Some(wgpu::RenderPassColorAttachment {
                     view: velocity_view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 }),
                 Some(wgpu::RenderPassColorAttachment {
                     view: &self.extra_view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 })
             ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
                 stencil_ops: None,
             }),
             timestamp_writes: None,
@@ -516,9 +557,7 @@ impl GpuExecutor for WgpuBackend {
         });
 
         rpass.set_pipeline(pipeline);
-        if let Some(bg) = bind_group {
-            rpass.set_bind_group(0, bg, &[]);
-        }
+        if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
         rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
         rpass.draw(0..vertex_count, 0..instance_count);
         Ok(())
@@ -532,30 +571,20 @@ impl GpuExecutor for WgpuBackend {
     ) -> Result<(), String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
-        
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Particle Draw"),
+            label: Some("Particles Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.hdr_view,
                 resolve_target: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
             })],
-            depth_stencil_attachment: None, // Particles usually don't write depth or test? Or enable depth test but no write?
-            // For 2D particles, simple painter's algo or additive usually fine.
-            // If depth buffer exists, we should probably respect it?
-            // But GBuffer pass cleared it?
-            // Actually GBuffer runs before this. So depth buffer is populated.
-            // If we want particles to be occluded by geometry, we need depth.
-            // But we don't have `depth_view` passed here. 
-            // In WgpuBackend, we have `self.depth_view`.
-            // Let's attach it read-only? 
-            // WGPU requires depth attachment to use depth test.
+            depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
         });
         rpass.set_pipeline(pipeline);
         rpass.set_bind_group(0, bind_group, &[]);
-        rpass.draw(0..4, 0..particle_count); // Quad instances
+        rpass.draw(0..4, 0..particle_count); 
         Ok(())
     }
 
@@ -934,16 +963,16 @@ impl GpuExecutor for WgpuBackend {
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.lighting_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(hdr) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&*hdr) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.bloom_views[2]) }, // Bloom
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&*self.bloom_views[2]) }, // Bloom
                 wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(velocity) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(reflection) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(aux) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(extra) },
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(sdf) },
-                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().unwrap()) }, // LUT
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&*velocity) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&*reflection) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&*aux) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&*extra) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&*sdf) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().map(|v| &**v).expect("LUT view not initialized")) }, // LUT
             ],
             label: Some("Lighting Bind Group"),
         });
@@ -981,19 +1010,54 @@ impl GpuExecutor for WgpuBackend {
         
         // Final blit to swapchain if output_view is None
         if output_view.is_none() {
-             drop(encoder_guard); // Release for draw_fxaa_pass
-             return self.draw_fxaa_pass(input_view);
+             // If no output view, we still want to apply post-processing to the swapchain
+             // We need to acquire the swapchain view
+             let view_guard = self.current_view.lock().unwrap();
+             let target_view = view_guard.as_ref().ok_or("No current view for post-process output")?;
+             
+             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.post_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&*self.bloom_views[2]) },
+                    wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().map(|v| &**v).expect("LUT view not initialized in post-process")) },
+                ],
+                label: Some("Post Bind Group"),
+            });
+
+            {
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Post Process Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                rpass.set_pipeline(&self.post_pipeline);
+                rpass.set_bind_group(0, &bind_group, &[]);
+                rpass.draw(0..3, 0..1);
+            }
+            return Ok(());
         }
 
         // Otherwise blit to provided view
         let target_view = output_view.unwrap();
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.fxaa_bind_group_layout,
+            layout: &self.post_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&**input_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&*self.bloom_views[2]) },
+                wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().map(|v| &**v).expect("LUT view not initialized in resolve")) },
             ],
-            label: Some("FXAA Bind Group"),
+            label: Some("Post Bind Group"),
         });
 
         {
@@ -1003,7 +1067,7 @@ impl GpuExecutor for WgpuBackend {
                     view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1011,7 +1075,7 @@ impl GpuExecutor for WgpuBackend {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            rpass.set_pipeline(&self.fxaa_pipeline);
+            rpass.set_pipeline(&self.post_pipeline);
             rpass.set_bind_group(0, &bind_group, &[]);
             rpass.draw(0..3, 0..1);
         }
@@ -1089,30 +1153,28 @@ impl GpuExecutor for WgpuBackend {
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.blit_bind_group_layout,
+            layout: &self.upscale_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.cinematic_buffer.as_entire_binding() },
             ],
-            label: Some("Blit Bind Group"),
+            label: Some("Upscale Bind Group"),
         });
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Upscale/Blit Pass"),
+                label: Some("Upscale Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: output,
                     resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            rpass.set_pipeline(&self.blit_pipeline);
+            rpass.set_pipeline(&self.upscale_pipeline);
             rpass.set_bind_group(0, &bind_group, &[]);
             rpass.draw(0..3, 0..1); // triangle
         }
@@ -1303,14 +1365,15 @@ impl GpuExecutor for WgpuBackend {
             layout: &self.k4_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&*self.hdr_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&*self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&*self.bloom_views[2]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.bloom_views[2]) },
                 wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&*vel_view) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&*self.reflection_view.as_ref().unwrap_or(&self.dummy_velocity_view)) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&*self.aux_view) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&*self.extra_view) },
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&*self.sdf_view.as_ref().unwrap_or(&self.dummy_velocity_view)) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(self.velocity_view.as_ref().unwrap_or(&self.dummy_velocity_view)) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(self.reflection_view.as_ref().unwrap_or(&self.dummy_velocity_view)) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&self.aux_view) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&self.extra_view) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(self.sdf_view.as_ref().map(|v| &**v).unwrap_or(&*self.dummy_velocity_view)) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().map(|v| &**v).expect("LUT view not initialized in resolve")) }, 
             ],
         });
 
@@ -1349,7 +1412,7 @@ impl GpuExecutor for WgpuBackend {
 }
 
 impl WgpuBackend {
-    pub fn new_async(window: Arc<impl winit::raw_window_handle::HasWindowHandle + winit::raw_window_handle::HasDisplayHandle + std::marker::Send + std::marker::Sync + 'static>, width: u32, height: u32) -> Result<Self, String> {
+    pub fn new_async(window: Arc<impl winit::raw_window_handle::HasWindowHandle + winit::raw_window_handle::HasDisplayHandle + std::marker::Send + std::marker::Sync + 'static>, width: u32, height: u32, resolution_scale: f32) -> Result<Self, String> {
         let instance = wgpu::Instance::default();
         
         let surface = instance.create_surface(window)
@@ -1407,6 +1470,9 @@ impl WgpuBackend {
             wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
         );
         let _font_view = Some(font_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+
+        let i_width = (width as f32 * resolution_scale) as u32;
+        let i_height = (height as f32 * resolution_scale) as u32;
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Default Sampler"),
@@ -1554,7 +1620,7 @@ impl WgpuBackend {
         // --- HDR Resources ---
         let hdr_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("HDR Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1566,7 +1632,7 @@ impl WgpuBackend {
 
         let extra_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Extra G-Buffer Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1578,7 +1644,7 @@ impl WgpuBackend {
 
         let aux_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Aux G-Buffer Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1590,7 +1656,7 @@ impl WgpuBackend {
 
         let velocity_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Velocity G-Buffer Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1633,7 +1699,7 @@ impl WgpuBackend {
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1828,6 +1894,8 @@ impl WgpuBackend {
             gi_intensity: 0.5,
             volumetric_intensity: 0.0,
             light_color: [1.0, 0.9, 0.7, 1.0],
+            jitter: [0.0, 0.0],
+            render_size: [i_width as f32, i_height as f32],
         };
         let cinematic_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Cinematic Params Buffer"),
@@ -1873,7 +1941,12 @@ impl WgpuBackend {
             wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(lut_size * 4), rows_per_image: Some(lut_size) },
             wgpu::Extent3d { width: lut_size, height: lut_size, depth_or_array_layers: lut_size },
         );
-        let lut_view = lut_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let lut_view = lut_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("LUT View"),
+            dimension: Some(wgpu::TextureViewDimension::D3),
+            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            ..Default::default()
+        });
 
         // --- Post Process Shader (ACES + CA + Vignette) ---
         let k4_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1982,7 +2055,7 @@ impl WgpuBackend {
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Bloom
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 9, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D3, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // LUT
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D3, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // LUT
             ],
         });
 
@@ -2030,13 +2103,52 @@ impl WgpuBackend {
             bind_group_layouts: &[&blit_bind_group_layout],
             push_constant_ranges: &[],
         });
-
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Blit Pipeline"),
             layout: Some(&blit_pipeline_layout),
             vertex: wgpu::VertexState { module: &blit_shader, entry_point: "vs_main", buffers: &[] },
             fragment: Some(wgpu::FragmentState {
                 module: &blit_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+        // --- Upscale Shader ---
+        let upscale_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Upscale Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/wgpu_upscale.wgsl").into()),
+        });
+
+        let upscale_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Upscale Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let upscale_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Upscale Pipeline Layout"),
+            bind_group_layouts: &[&upscale_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let upscale_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Upscale Pipeline"),
+            layout: Some(&upscale_pipeline_layout),
+            vertex: wgpu::VertexState { module: &upscale_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &upscale_shader,
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -2245,6 +2357,8 @@ impl WgpuBackend {
             lut_view: Some(Arc::new(lut_view)),
             blit_pipeline,
             blit_bind_group_layout,
+            upscale_pipeline,
+            upscale_bind_group_layout,
             transient_pool: Mutex::new(TransientPool::new()),
             current_cinematic: Mutex::new(cinematic_params),
             current_encoder: Mutex::new(None),
@@ -2258,6 +2372,11 @@ impl WgpuBackend {
             query_set: None,
             resolve_buffer: None,
             readback_buffer: None,
+
+            frame_index: 0,
+            internal_width: i_width,
+            internal_height: i_height,
+            resolution_scale,
         };
 
         // Populate GLOBAL_RESOURCES for Python bindings
@@ -2271,6 +2390,7 @@ impl WgpuBackend {
     }
 
     fn perform_screenshot(&self, path: &str) -> Result<(), String> {
+        println!("DEBUG: [SCREENSHOT] Starting perform_screenshot to {}", path);
         let width = self.surface_config.width;
         let height = self.surface_config.height;
 
@@ -2310,19 +2430,19 @@ impl WgpuBackend {
         let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let k4_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
+            label: Some("Screenshot Resolve Bind Group"), // Added label for debugging
             layout: &self.k4_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&*self.hdr_view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.bloom_views[2]) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&*self.bloom_views[2]) },
                 wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(self.velocity_view.as_ref().unwrap_or(&self.dummy_velocity_view)) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(self.reflection_view.as_ref().unwrap_or(&self.dummy_velocity_view)) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&self.aux_view) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&self.extra_view) }, // Distortion
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(self.sdf_view.as_ref().unwrap_or(&self.dummy_velocity_view)) }, // SDF (using dummy view if missing is sketchy but okay if shader handles it)
-                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().unwrap()) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(self.velocity_view.as_ref().map(|v| &**v).unwrap_or(&*self.dummy_velocity_view)) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(self.reflection_view.as_ref().map(|v| &**v).unwrap_or(&*self.dummy_velocity_view)) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&*self.aux_view) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(&*self.extra_view) }, // Distortion
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(self.sdf_view.as_ref().map(|v| &**v).unwrap_or(&*self.dummy_velocity_view)) }, 
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(self.lut_view.as_ref().map(|v| &**v).expect("LUT view not initialized in perform_screenshot")) },
             ],
         });
 
@@ -2386,13 +2506,17 @@ impl WgpuBackend {
                 }
             }
 
+            println!("DEBUG: [SCREENSHOT] image::save_buffer starting...");
             image::save_buffer(
                 path,
                 &raw_pixels,
                 width,
                 height,
                 image::ColorType::Rgba8,
-            ).map_err(|e| e.to_string())?;
+            ).map_err(|e| {
+                println!("DEBUG: [SCREENSHOT] save_buffer FAILED: {}", e);
+                e.to_string()
+            })?;
             
             println!("✨ Screenshot saved to: {}", path);
             drop(data);
@@ -2536,6 +2660,37 @@ impl WgpuBackend {
             multiview: None,
         }));
 
+        // Upscale
+        let upscale_src = std::fs::read_to_string(base_path.join("shaders/wgpu_upscale.wgsl"))
+            .unwrap_or_else(|_| include_str!("../shaders/wgpu_upscale.wgsl").to_string());
+        let upscale_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Upscale Shader (Reloaded)"),
+            source: wgpu::ShaderSource::Wgsl(upscale_src.into()),
+        });
+        let upscale_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Upscale Pipeline Layout (Reloaded)"),
+            bind_group_layouts: &[&self.upscale_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        self.upscale_pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Upscale Pipeline (Reloaded)"),
+            layout: Some(&upscale_layout),
+            vertex: wgpu::VertexState { module: &upscale_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &upscale_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
         println!("✅ Shaders reloaded successfully.");
         Ok(())
     }
@@ -2543,6 +2698,17 @@ impl WgpuBackend {
 
 impl GraphicsBackend for WgpuBackend {
     fn name(&self) -> &str { "WGPU" }
+
+    fn set_resolution_scale(&mut self, scale: f32) {
+        if (self.resolution_scale - scale).abs() > 1e-6 {
+            self.resolution_scale = scale;
+            // Resolution change will be handled in the next render() call via the auto-resize logic
+            // But we need to update internal_width/height here to trigger it
+            self.internal_width = (self.surface_config.width as f32 * scale) as u32;
+            self.internal_height = (self.surface_config.height as f32 * scale) as u32;
+        }
+    }
+
     fn render(&mut self, dl: &DrawList, width: u32, height: u32) {
         println!("DEBUG: WgpuBackend::render called");
         // Check for shader hot-reload
@@ -2565,11 +2731,16 @@ impl GraphicsBackend for WgpuBackend {
             self.surface_config.width = width;
             self.surface_config.height = height;
             self.surface.configure(&self.device, &self.surface_config);
+
+            let i_width = (width as f32 * self.resolution_scale) as u32;
+            let i_height = (height as f32 * self.resolution_scale) as u32;
+            self.internal_width = i_width;
+            self.internal_height = i_height;
             
             // Re-create HDR texture
             let hdr_texture = Arc::new(self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("HDR Texture"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d { width: i_width, height: i_height, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -2612,18 +2783,34 @@ impl GraphicsBackend for WgpuBackend {
             }
         }
 
+        // --- Handle Jittering & Frame Index ---
+        self.frame_index = self.frame_index.wrapping_add(1);
+        let (jitter_x, jitter_y) = crate::renderer::gpu::jitter::get_jitter_offset(self.frame_index, self.internal_width, self.internal_height);
+
+        // Update Cinematic Buffer
+        {
+            let mut params = self.current_cinematic.lock().unwrap();
+            params.jitter = [jitter_x, jitter_y];
+            params.render_size = [self.internal_width as f32, self.internal_height as f32];
+            self.queue.write_buffer(&self.cinematic_buffer, 0, bytemuck::bytes_of(&*params));
+        }
+
         // 1. Begin Frame (acquire surface, create encoder)
         if let Err(e) = self.begin_execute() {
              eprintln!("Failed to begin frame: {}", e);
              return;
         }
 
+
+
         let mut orchestrator = crate::renderer::orchestrator::Orchestrator::<WgpuBackend>::new();
         let time = self.start_time.elapsed().as_secs_f32();
 
-        orchestrator.plan(dl, width, height);
+        orchestrator.plan(dl, width, height, self.resolution_scale);
         
-        if let Err(e) = orchestrator.execute(self, time, width, height) {
+        let (jitter_x, jitter_y) = crate::renderer::gpu::jitter::get_jitter_offset(self.frame_index, self.internal_width, self.internal_height);
+
+        if let Err(e) = orchestrator.execute(self, time, width, height, (jitter_x, jitter_y)) {
             eprintln!("WGPU render error: {}", e);
         }
 
@@ -2718,9 +2905,12 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn present(&mut self) {
-        GpuExecutor::present(self).unwrap();
+        if let Err(e) = GpuExecutor::present(self) {
+            eprintln!("WGPU present error: {}", e);
+        }
     }
     fn capture_screenshot(&mut self, path: &str) {
+        println!("DEBUG: [SCREENSHOT] Requested capture to {}", path);
         *self.screenshot_requested.lock().unwrap() = Some(path.to_string());
     }
 
@@ -2757,6 +2947,8 @@ impl GraphicsBackend for WgpuBackend {
             gi_intensity: config.gi_intensity,
             volumetric_intensity: config.volumetric_intensity,
             light_color: [1.0, 0.9, 0.7, 1.0],
+            jitter: [0.0, 0.0],
+            render_size: [self.internal_width as f32, self.internal_height as f32],
         };
 
         *self.current_cinematic.lock().unwrap() = params;

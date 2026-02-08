@@ -46,7 +46,7 @@ pub enum ColorSpace {
 }
 
 /// Bloom style configuration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Bloom {
     /// No bloom applied
     None,
@@ -57,7 +57,7 @@ pub enum Bloom {
 }
 
 /// Tone mapping algorithm
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tonemap {
     /// No tone mapping (raw HDR output, likely clamped)
     None,
@@ -67,13 +67,28 @@ pub enum Tonemap {
     Reinhard,
 }
 
+/// Upscaling algorithm
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum UpscalerType {
+    /// No upscaling (internal resolution = output resolution)
+    None,
+    /// Simple linear interpolation
+    Linear,
+    /// High-quality shader-based upscaling (FSR-style)
+    HighQuality,
+    /// NVIDIA Deep Learning Super Sampling (requires SDK)
+    Dlss,
+}
+
 /// Detailed configuration for Cinema profile effects
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct CinematicConfig {
     /// Bloom style
     pub bloom: Bloom,
     /// Tone mapping style
     pub tonemap: Tonemap,
+    /// Upscaling type
+    pub upscaler: UpscalerType,
     /// Overall exposure adjustment
     pub exposure: f32,
     /// Chromatic aberration strength
@@ -101,6 +116,7 @@ impl Default for CinematicConfig {
         Self {
             bloom: Bloom::Soft,
             tonemap: Tonemap::Aces,
+            upscaler: UpscalerType::None,
             exposure: 1.0,
             chromatic_aberration: 0.0015,
             vignette: 0.7,
