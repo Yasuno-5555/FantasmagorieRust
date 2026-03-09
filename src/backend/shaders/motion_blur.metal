@@ -1,8 +1,8 @@
 // motion_blur.metal - Motion blur post-processing shader
-// Note: This file is concatenated with metal_shader.metal, so CinematicParams, etc. are already defined
+// Note: This file is concatenated with metal_shader.metal, so CinematicParams, ResolveVertexOut, etc. are already defined
 
 
-fragment float4 fs_motion_blur(VertexOut in [[stage_in]],
+fragment float4 fs_motion_blur(ResolveVertexOut in [[stage_in]],
                        constant CinematicParams &cinema [[buffer(1)]],
                        texture2d<float> hdr_tex [[texture(0)]],
                        texture2d<float> vel_tex [[texture(1)]],

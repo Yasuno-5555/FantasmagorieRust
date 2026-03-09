@@ -37,6 +37,7 @@ impl MetalResourceProvider {
             crate::backend::hal::TextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
             crate::backend::hal::TextureFormat::Depth32Float => MTLPixelFormat::Depth32Float,
             crate::backend::hal::TextureFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
+            crate::backend::hal::TextureFormat::Rg16Float => MTLPixelFormat::RG16Float,
         });
         
         let mut usage = MTLTextureUsage::ShaderRead;
@@ -68,6 +69,7 @@ impl MetalResourceProvider {
         unsafe {
             std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.add(offset as usize), data.len());
         }
+        buffer.did_modify_range(NSRange { location: offset, length: data.len() as u64 });
     }
 
     pub fn write_texture(&self, texture: &Texture, data: &[u8], width: u32, height: u32) {

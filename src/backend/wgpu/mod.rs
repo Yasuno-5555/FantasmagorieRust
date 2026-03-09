@@ -69,8 +69,10 @@ pub struct WgpuBackend {
     pub main_pipeline: Arc<wgpu::RenderPipeline>,
     pub instanced_pipeline: Arc<wgpu::RenderPipeline>,
     pub instanced_gbuffer_pipeline: Arc<wgpu::RenderPipeline>,
+    pub culling_pipeline: Arc<wgpu::ComputePipeline>,
     pub bind_group_layout: Arc<wgpu::BindGroupLayout>,
     pub instanced_bind_group_layout: Arc<wgpu::BindGroupLayout>,
+    pub culling_bind_group_layout: Arc<wgpu::BindGroupLayout>,
     pub pipeline_layout: wgpu::PipelineLayout,
     
     pub sampler: Arc<wgpu::Sampler>,
@@ -110,6 +112,12 @@ pub struct WgpuBackend {
     
     pub post_pipeline: wgpu::RenderPipeline,
     pub post_bind_group_layout: wgpu::BindGroupLayout,
+    
+    pub dof_pipeline: Arc<wgpu::RenderPipeline>,
+    pub dof_bind_group_layout: Arc<wgpu::BindGroupLayout>,
+    
+    pub flare_pipeline: Arc<wgpu::RenderPipeline>,
+    pub flare_bind_group_layout: Arc<wgpu::BindGroupLayout>,
     
     pub fxaa_pipeline: Arc<wgpu::RenderPipeline>,
     pub fxaa_bind_group_layout: wgpu::BindGroupLayout,
@@ -283,6 +291,7 @@ impl GpuExecutor for WgpuBackend {
         if usage.contains(BufferUsage::Uniform) { wgpu_usage |= wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST; }
         if usage.contains(BufferUsage::CopySrc) { wgpu_usage |= wgpu::BufferUsages::COPY_SRC; }
         if usage.contains(BufferUsage::CopyDst) { wgpu_usage |= wgpu::BufferUsages::COPY_DST; }
+        if usage.contains(BufferUsage::Indirect) { wgpu_usage |= wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST; }
         Ok(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size,
@@ -298,6 +307,7 @@ impl GpuExecutor for WgpuBackend {
             TextureFormat::Bgra8Unorm => wgpu::TextureFormat::Bgra8UnormSrgb,
             TextureFormat::Depth32Float => wgpu::TextureFormat::Depth32Float,
             TextureFormat::Rgba16Float => wgpu::TextureFormat::Rgba16Float,
+            TextureFormat::Rg16Float => wgpu::TextureFormat::Rg16Float,
         };
         let mut usage = wgpu::TextureUsages::empty();
         if desc.usage.contains(TextureUsage::COPY_SRC) { usage |= wgpu::TextureUsages::COPY_SRC; }
@@ -641,11 +651,19 @@ impl GpuExecutor for WgpuBackend {
         Err("Visibility kernel not available".into())
     }
 
-    fn draw_instanced_indirect(&self, pipeline: &Self::RenderPipeline, bind_group: Option<&Self::BindGroup>, vertex_buffer: &Self::Buffer, indirect_buffer: &Self::Buffer, indirect_offset: u64) -> Result<(), String> {
+    fn draw_instanced_indirect(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        _instance_buffer: &Self::Buffer,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
+    ) -> Result<(), String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Indirect Instanced Geometry Draw"),
+            label: Some("Instanced Indirect Geometry Draw"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.hdr_view,
                 resolve_target: None,
@@ -713,6 +731,61 @@ impl GpuExecutor for WgpuBackend {
         if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
         rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
         rpass.draw(0..vertex_count, 0..instance_count);
+        Ok(())
+    }
+
+    fn draw_instanced_gbuffer_indirect(
+        &mut self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        _instance_buffer: &Self::Buffer,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
+        aux_view: &Self::TextureView,
+        velocity_view: &Self::TextureView,
+        depth_view: &Self::TextureView,
+    ) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Instanced GBuffer Indirect Geometry Draw"),
+            color_attachments: &[
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &*self.hdr_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: aux_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: velocity_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &self.extra_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                }),
+            ],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        rpass.set_pipeline(pipeline);
+        if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
+        rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        rpass.draw_indirect(indirect_buffer, indirect_offset);
         Ok(())
     }
 
@@ -1392,6 +1465,163 @@ impl GpuExecutor for WgpuBackend {
         }
         Ok(())
     }
+
+    fn draw_bloom_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+
+        // 1. Bright Pass
+        let bright_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bright Bind Group"),
+            layout: &self.bloom_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
+            ],
+        });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Bright Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.bloom_views[0],
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&*self.bright_pipeline);
+            rpass.set_bind_group(0, &bright_bg, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // 2. Horizontal Blur
+        self.queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::cast_slice(&[1.0f32, 0.0f32, 0.0f32, 0.0f32]));
+        let blur_h_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blur H Bind Group"),
+            layout: &self.bloom_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.bloom_views[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
+            ],
+        });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Blur H Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.bloom_views[1],
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&*self.blur_pipeline);
+            rpass.set_bind_group(0, &blur_h_bg, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // 3. Vertical Blur
+        self.queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::cast_slice(&[0.0f32, 1.0f32, 0.0f32, 0.0f32]));
+        let blur_v_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blur V Bind Group"),
+            layout: &self.bloom_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.bloom_views[1]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
+            ],
+        });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Bloom Blur V Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.bloom_views[2],
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&*self.blur_pipeline);
+            rpass.set_bind_group(0, &blur_v_bg, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        Ok(())
+    }
+
+    fn draw_dof_pass(&mut self, input_view: &Self::TextureView, depth_view: &Self::TextureView, output_view: &Self::TextureView) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.dof_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(depth_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: self.cinematic_buffer.as_entire_binding() },
+            ],
+            label: Some("DoF Bind Group"),
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("DoF Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.dof_pipeline);
+            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+        Ok(())
+    }
+
+    fn draw_flare_pass(&mut self, input_view: &Self::TextureView, output_view: &Self::TextureView) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.flare_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.cinematic_buffer.as_entire_binding() },
+            ],
+            label: Some("Flare Bind Group"),
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Lens Flare Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.flare_pipeline);
+            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+        Ok(())
+    }
     
     fn draw_fxaa_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String> {
         // FXAA pass: read from input, write to swapchain
@@ -1439,11 +1669,13 @@ impl GpuExecutor for WgpuBackend {
 
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { &self.bind_group_layout }
     fn get_instanced_bind_group_layout(&self) -> &Self::BindGroupLayout { &self.instanced_bind_group_layout }
+    fn get_culling_bind_group_layout(&self) -> &Self::BindGroupLayout { &self.culling_bind_group_layout }
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline { &self.main_pipeline }
     fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline { &self.instanced_pipeline }
     fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline {
         &self.instanced_gbuffer_pipeline
     }
+    fn get_culling_pipeline(&self) -> &Self::ComputePipeline { &self.culling_pipeline }
     fn get_dummy_storage_buffer(&self) -> &Self::Buffer { &self.dummy_storage_buffer }
 
     fn set_reflection_texture(&mut self, texture: &Self::TextureView) -> Result<(), String> {
@@ -1582,91 +1814,7 @@ impl GpuExecutor for WgpuBackend {
             self.hdr_texture.size(),
         );
 
-        // 2. Bloom Passes
-        // Bright Pass
-        let bright_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bright Bind Group"),
-            layout: &self.bloom_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.hdr_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
-            ],
-        });
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Bloom Bright Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.bloom_views[0],
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            rpass.set_pipeline(&*self.bright_pipeline);
-            rpass.set_bind_group(0, &bright_bg, &[]);
-            rpass.draw(0..3, 0..1);
-        }
-
-        // Horizontal Blur
-        self.queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::cast_slice(&[1.0f32, 0.0f32, 0.0f32, 0.0f32]));
-        let blur_h_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Blur H Bind Group"),
-            layout: &self.bloom_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.bloom_views[0]) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
-            ],
-        });
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Bloom Blur H Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.bloom_views[1],
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            rpass.set_pipeline(&*self.blur_pipeline);
-            rpass.set_bind_group(0, &blur_h_bg, &[]);
-            rpass.draw(0..3, 0..1);
-        }
-
-        // Vertical Blur
-        self.queue.write_buffer(&self.blur_uniform_buffer, 0, bytemuck::cast_slice(&[0.0f32, 1.0f32, 0.0f32, 0.0f32]));
-        let blur_v_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Blur V Bind Group"),
-            layout: &self.bloom_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.bloom_views[1]) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform_buffer.as_entire_binding() },
-            ],
-        });
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Bloom Blur V Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.bloom_views[2],
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            rpass.set_pipeline(&*self.blur_pipeline);
-            rpass.set_bind_group(0, &blur_v_bg, &[]);
-            rpass.draw(0..3, 0..1);
-        }
-
-        // 3. Fragment Resolve Pass (K4 replacement)
+        // 2. Fragment Resolve Pass (K4 replacement)
         let view_guard = self.current_view.lock().unwrap();
         let view = view_guard.as_ref().ok_or("No active swapchain view")?;
 
@@ -2476,6 +2624,87 @@ impl WgpuBackend {
             multiview: None,
         });
 
+        // --- DoF Pipeline ---
+        let dof_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("DoF Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/dof.wgsl").into()),
+        });
+
+        let dof_bind_group_layout = Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("DoF Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Depth }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        }));
+
+        let dof_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("DoF Pipeline Layout"),
+            bind_group_layouts: &[&dof_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let dof_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("DoF Pipeline"),
+            layout: Some(&dof_pipeline_layout),
+            vertex: wgpu::VertexState { module: &dof_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &dof_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        // --- Lens Flare Pipeline ---
+        let flare_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Flare Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/flare.wgsl").into()),
+        });
+
+        let flare_bind_group_layout = Arc::new(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Flare Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        }));
+
+        let flare_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Flare Pipeline Layout"),
+            bind_group_layouts: &[&flare_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let flare_pipeline = Arc::new(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Flare Pipeline"),
+            layout: Some(&flare_pipeline_layout),
+            vertex: wgpu::VertexState { module: &flare_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &flare_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
         // --- Blit Shader ---
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blit Shader"),
@@ -2696,6 +2925,35 @@ impl WgpuBackend {
         let skinned_pipeline = Arc::new(skinned_pipeline);
         let skinned_bind_group_layout = Arc::new(skinned_bind_group_layout);
 
+        // --- Culling Pipeline ---
+        let culling_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Culling Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/culling.wgsl").into()),
+        });
+
+        let culling_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Culling Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let culling_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Culling Pipeline Layout"),
+            bind_group_layouts: &[&culling_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let culling_pipeline = Arc::new(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Culling Pipeline"),
+            layout: Some(&culling_pipeline_layout),
+            module: &culling_shader,
+            entry_point: "main",
+        }));
+
         // --- Hot Reloading Setup ---
         let (tx, rx) = std::sync::mpsc::channel();
         let mut shader_reload_rx = None;
@@ -2743,8 +3001,10 @@ impl WgpuBackend {
             main_pipeline,
             instanced_pipeline,
             instanced_gbuffer_pipeline,
+            culling_pipeline,
             bind_group_layout: Arc::new(bind_group_layout),
             instanced_bind_group_layout: Arc::new(instanced_bind_group_layout),
+            culling_bind_group_layout: Arc::new(culling_bind_group_layout),
             pipeline_layout,
             sampler: Arc::new(sampler),
             font_texture,
@@ -2795,6 +3055,11 @@ impl WgpuBackend {
             tilemap_pipeline,
             tilemap_gbuffer_pipeline,
             tilemap_bind_group_layout,
+            
+            dof_pipeline,
+            dof_bind_group_layout,
+            flare_pipeline,
+            flare_bind_group_layout,
 
             skinned_pipeline,
             skinned_bind_group_layout,
@@ -3136,12 +3401,69 @@ impl WgpuBackend {
             multiview: None,
         });
 
+        // DoF
+        let dof_src = std::fs::read_to_string(base_path.join("shaders/dof.wgsl"))
+            .unwrap_or_else(|_| include_str!("../shaders/dof.wgsl").to_string());
+        let dof_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("DoF Shader (Reloaded)"),
+            source: wgpu::ShaderSource::Wgsl(dof_src.into()),
+        });
+        let dof_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("DoF Pipeline Layout (Reloaded)"),
+            bind_group_layouts: &[&self.dof_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        self.dof_pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("DoF Pipeline (Reloaded)"),
+            layout: Some(&dof_layout),
+            vertex: wgpu::VertexState { module: &dof_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &dof_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
+        // Flare
+        let flare_src = std::fs::read_to_string(base_path.join("shaders/flare.wgsl"))
+            .unwrap_or_else(|_| include_str!("../shaders/flare.wgsl").to_string());
+        let flare_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Flare Shader (Reloaded)"),
+            source: wgpu::ShaderSource::Wgsl(flare_src.into()),
+        });
+        let flare_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Flare Pipeline Layout (Reloaded)"),
+            bind_group_layouts: &[&self.flare_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        self.flare_pipeline = Arc::new(self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Flare Pipeline (Reloaded)"),
+            layout: Some(&flare_layout),
+            vertex: wgpu::VertexState { module: &flare_shader, entry_point: "vs_main", buffers: &[] },
+            fragment: Some(wgpu::FragmentState {
+                module: &flare_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }));
+
         println!("✅ Shaders reloaded successfully.");
         Ok(())
     }
 }
 
 impl GraphicsBackend for WgpuBackend {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+
     fn name(&self) -> &str { "WGPU" }
 
     fn set_resolution_scale(&mut self, scale: f32) {

@@ -64,16 +64,22 @@ notify = "6.1.1"
 cpal = "0.15"
 realfft = "3.3"
 log = "0.4"
+core-graphics-types = "0.2.0"
 
 [build-dependencies]
 cc = "1.0"
 
 [dev-dependencies]
 image = "0.24"
+core-graphics-types = "0.1"
 
 [[example]]
 name = "visual_demo"
 path = "examples/visual_demo.rs"
+
+[[example]]
+name = "visual_showcase"
+path = "examples/visual_showcase.rs"
 
 [profile.release]
 lto = true

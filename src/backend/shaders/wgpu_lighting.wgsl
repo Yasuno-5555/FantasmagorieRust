@@ -91,38 +91,37 @@ fn raymarch_shadow(pixel_pos: vec2<f32>, light_pos: vec2<f32>) -> f32 {
 }
 
 fn volumetric_lighting(pixel_pos: vec2<f32>, light_posd: vec2<f32>) -> vec3<f32> {
+    if (cinema.volumetric_intensity <= 0.0) { return vec3<f32>(0.0); }
+    
     let dir = normalize(light_posd - pixel_pos);
     let max_dist = distance(pixel_pos, light_posd);
     var t = 0.0;
     var accumulation = 0.0;
-    let step_size = 20.0; // Larger steps for performance, maybe dithering needed
-    let density = 0.002;
+    let step_count = 32;
+    let step_size = max_dist / f32(step_count);
+    let density = 0.005;
     
-    // Dithering start offset
-    let dither = fract(sin(dot(pixel_pos, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+    // Dithering start offset to reduce banding
+    let dither = fract(sin(dot(pixel_pos + cinema.time, vec2<f32>(12.9898, 78.233))) * 43758.5453);
     t += dither * step_size;
 
     let size = vec2<f32>(textureDimensions(t_sdf));
 
-    for (var i = 0; i < 16; i++) {
+    for (var i = 0; i < 32; i++) {
         if (t >= max_dist) { break; }
         
         let p = pixel_pos + dir * t;
         let uv = p / size;
         
-        // Check if point is in shadow (simple point lookup in SDF)
+        // Sample SDF for occlusion
         let d = textureSampleLevel(t_sdf, s_hdr, uv, 0.0).x;
         
-        if (d > 0.1) {
-            // Not occluded (or at least close to surface), accumulate light
-            // Distance falloff from light
+        if (d > 0.5) {
+            // Point is not inside an object
             let dist_to_light = max_dist - t;
-            let falloff = 1.0 / (1.0 + 0.00005 * dist_to_light * dist_to_light);
+            // Quadratic falloff + scattering
+            let falloff = 1.0 / (1.0 + 0.00002 * dist_to_light * dist_to_light);
             accumulation += density * falloff;
-        } else {
-             // In shadow/solid, absorb light? 
-             // For simple god rays, we just don't accumulate
-             // Optionally, if we hit solid, we could stop, but god rays pass through "empty" space
         }
         
         t += step_size;

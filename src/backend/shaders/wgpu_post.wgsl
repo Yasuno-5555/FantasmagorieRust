@@ -62,12 +62,23 @@ fn fs_post(in: VertexOutput) -> @location(0) vec4<f32> {
     // Simple sampling (no distortion for now to isolate crash)
     let dist_uv = in.uv;
     
-    // Sample Lighting Result
-    let scene_color = textureSample(t_hdr, s_hdr, dist_uv).rgb;
-    
-    // Apply Bloom
-    let bloom_color = textureSample(t_bloom, s_hdr, dist_uv).rgb;
-    let combined = scene_color + bloom_color * cinema.bloom_intensity;
+    // Chromatic Aberration
+    var combined = vec3<f32>(0.0);
+    if (cinema.ca_strength > 0.0) {
+        let ca_offset = cinema.ca_strength * 0.01 * length(uv_centered);
+        combined.r = textureSample(t_hdr, s_hdr, dist_uv + vec2<f32>(ca_offset, 0.0)).r;
+        combined.g = textureSample(t_hdr, s_hdr, dist_uv).g;
+        combined.b = textureSample(t_hdr, s_hdr, dist_uv - vec2<f32>(ca_offset, 0.0)).b;
+        
+        let bloom_r = textureSample(t_bloom, s_hdr, dist_uv + vec2<f32>(ca_offset, 0.0)).r;
+        let bloom_g = textureSample(t_bloom, s_hdr, dist_uv).g;
+        let bloom_b = textureSample(t_bloom, s_hdr, dist_uv - vec2<f32>(ca_offset, 0.0)).b;
+        combined += vec3<f32>(bloom_r, bloom_g, bloom_b) * cinema.bloom_intensity;
+    } else {
+        let scene_color = textureSample(t_hdr, s_hdr, dist_uv).rgb;
+        let bloom_color = textureSample(t_bloom, s_hdr, dist_uv).rgb;
+        combined = scene_color + bloom_color * cinema.bloom_intensity;
+    }
     
     // Exposure
     let exposed = combined * cinema.exposure;
@@ -91,7 +102,11 @@ fn fs_post(in: VertexOutput) -> @location(0) vec4<f32> {
     let final_color = grainy * vign;
 
     // Gamma Correction
-    let out_color = pow(final_color, vec3<f32>(1.0 / 2.2));
+    var out_color = pow(final_color, vec3<f32>(1.0 / 2.2));
     
+    // Dithering to prevent banding
+    let dither_noise = fract(sin(dot(in.uv, vec2<f32>(12.9898, 78.233))) * 43758.5453) / 255.0;
+    out_color += dither_noise;
+
     return vec4<f32>(out_color, 1.0);
 }

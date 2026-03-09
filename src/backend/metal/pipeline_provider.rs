@@ -91,7 +91,7 @@ impl MetalPipelineProvider {
         let color_attachment = desc.color_attachments().object_at(0).unwrap();
         
         // HEURISTIC: Use RGBA16Float for offscreen/HDR passes, BGRA8Unorm for final ones
-        if label.contains("Main") || label.contains("Bright") || label.contains("Blur") || label.contains("Instanced") || label.contains("Particle") {
+        if label.contains("Main") || label.contains("Bright") || label.contains("Blur") || label.contains("Instanced") || label.contains("Particle") || label.contains("Pass") || label.contains("Flare") {
              color_attachment.set_pixel_format(MTLPixelFormat::RGBA16Float);
         } else {
              color_attachment.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
@@ -118,41 +118,26 @@ impl MetalPipelineProvider {
             let attr0 = vertex_desc.attributes().object_at(0).unwrap();
             attr0.set_format(MTLVertexFormat::Float2);
             attr0.set_offset(0);
-            attr0.set_buffer_index(1); // Use slot 1 for vertices
+            attr0.set_buffer_index(10); // Use slot 10 for vertices
             
             // Attribute 1: uv (float2)
             let attr1 = vertex_desc.attributes().object_at(1).unwrap();
             attr1.set_format(MTLVertexFormat::Float2);
             attr1.set_offset(8);
-            attr1.set_buffer_index(1);
+            attr1.set_buffer_index(10);
             
             // Attribute 2: color (float4)
             let attr2 = vertex_desc.attributes().object_at(2).unwrap();
             attr2.set_format(MTLVertexFormat::Float4);
             attr2.set_offset(16);
-            attr2.set_buffer_index(1);
+            attr2.set_buffer_index(10);
             
-            let layout1 = vertex_desc.layouts().object_at(1).unwrap(); // Use layout 1
+            let layout1 = vertex_desc.layouts().object_at(10).unwrap(); // Use layout 10
             layout1.set_stride(32);
             
             desc.set_vertex_descriptor(Some(&vertex_desc));
-        } else if vs_n_lower.contains("ssr") || vs_n_lower.contains("post") || vs_n_lower.contains("resolve") {
-            // Vertex attributes for SSR fullscreen pass (or other fullscreen passes)
-            let vertex_desc = VertexDescriptor::new();
-            let attr0 = vertex_desc.attributes().object_at(0).unwrap();
-            attr0.set_format(MTLVertexFormat::Float2);
-            attr0.set_offset(0);
-            attr0.set_buffer_index(0); // Use slot 0 for fullscreen vertices
-            
-            let attr1 = vertex_desc.attributes().object_at(1).unwrap();
-            attr1.set_format(MTLVertexFormat::Float2);
-            attr1.set_offset(8);
-            attr1.set_buffer_index(0); // Use slot 0 for fullscreen vertices
-            
-            let layout0 = vertex_desc.layouts().object_at(0).unwrap();
-            layout0.set_stride(16); // float2 pos + float2 uv = 16 bytes
-            desc.set_vertex_descriptor(Some(&vertex_desc));
         }
+        desc.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
         self.device.new_render_pipeline_state(&desc).map_err(|e| e.to_string())
     }
 
@@ -198,17 +183,17 @@ impl MetalPipelineProvider {
         
         // Attribute 0: pos (float2)
         let attr0 = vertex_desc.attributes().object_at(0).unwrap();
-        attr0.set_format(MTLVertexFormat::Float2); attr0.set_offset(0); attr0.set_buffer_index(0);
+        attr0.set_format(MTLVertexFormat::Float2); attr0.set_offset(0); attr0.set_buffer_index(10);
         
         // Attribute 1: uv (float2)
         let attr1 = vertex_desc.attributes().object_at(1).unwrap();
-        attr1.set_format(MTLVertexFormat::Float2); attr1.set_offset(8); attr1.set_buffer_index(0);
+        attr1.set_format(MTLVertexFormat::Float2); attr1.set_offset(8); attr1.set_buffer_index(10);
         
         // Attribute 2: color (float4)
         let attr2 = vertex_desc.attributes().object_at(2).unwrap();
-        attr2.set_format(MTLVertexFormat::Float4); attr2.set_offset(16); attr2.set_buffer_index(0);
+        attr2.set_format(MTLVertexFormat::Float4); attr2.set_offset(16); attr2.set_buffer_index(10);
         
-        let layout0 = vertex_desc.layouts().object_at(0).unwrap();
+        let layout0 = vertex_desc.layouts().object_at(10).unwrap();
         layout0.set_stride(32);
         
         desc.set_vertex_descriptor(Some(&vertex_desc));
@@ -246,6 +231,7 @@ impl MetalPipelineProvider {
         color0.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
         color0.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
 
+        desc.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
         self.device.new_render_pipeline_state(&desc).map_err(|e| e.to_string())
     }
 

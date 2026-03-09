@@ -37,6 +37,7 @@ pub enum TextureFormat {
     Bgra8Unorm,
     Depth32Float,
     Rgba16Float,
+    Rg16Float,
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
@@ -141,6 +142,17 @@ pub trait GpuExecutor: Send + Sync {
         instance_count: u32,
     ) -> Result<(), String>;
 
+    /// Perform an instanced draw call using an indirect buffer
+    fn draw_instanced_indirect(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
+    ) -> Result<(), String>;
+
     /// Perform an instanced draw call with MRT (Main + Aux/Normal)
     fn draw_instanced_gbuffer(
         &mut self,
@@ -150,6 +162,20 @@ pub trait GpuExecutor: Send + Sync {
         instance_buffer: &Self::Buffer,
         vertex_count: u32,
         instance_count: u32,
+        aux_view: &Self::TextureView,
+        velocity_view: &Self::TextureView,
+        depth_view: &Self::TextureView,
+    ) -> Result<(), String>;
+
+    /// Perform an indirect instanced draw call with MRT
+    fn draw_instanced_gbuffer_indirect(
+        &mut self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
         aux_view: &Self::TextureView,
         velocity_view: &Self::TextureView,
         depth_view: &Self::TextureView,
@@ -208,15 +234,6 @@ pub trait GpuExecutor: Send + Sync {
         draw_commands: &Self::Buffer,
     ) -> Result<(), String>;
 
-    /// Perform an instanced draw call with indirect parameters
-    fn draw_instanced_indirect(
-        &self,
-        pipeline: &Self::RenderPipeline,
-        bind_group: Option<&Self::BindGroup>,
-        vertex_buffer: &Self::Buffer,
-        indirect_buffer: &Self::Buffer,
-        indirect_offset: u64,
-    ) -> Result<(), String>;
 
     /// Copy texture content
     fn copy_texture(
@@ -324,18 +341,20 @@ pub trait GpuExecutor: Send + Sync {
     fn get_velocity_texture(&self) -> Option<Self::Texture>;
     fn get_depth_texture(&self) -> Option<Self::Texture>;
 
-    /// Get the default bind group layout (for standard draw commands)
+    /// Get the default bind group layout    /// Get default bind group layout
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout;
-    
-    /// Get the instanced bind group layout.
+    /// Get instanced bind group layout
     fn get_instanced_bind_group_layout(&self) -> &Self::BindGroupLayout;
+    /// Get culling compute bind group layout
+    fn get_culling_bind_group_layout(&self) -> &Self::BindGroupLayout;
 
-    /// Get the default render pipeline
+    /// Get default sampler pipeline
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline;
 
     /// Get the instanced render pipeline (for batched shapes)
     fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline;
     fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline;
+    fn get_culling_pipeline(&self) -> &Self::ComputePipeline;
     /// Get a dummy storage buffer (e.g. for empty instance lists)
     fn get_dummy_storage_buffer(&self) -> &Self::Buffer;
 
@@ -362,6 +381,18 @@ pub trait GpuExecutor: Send + Sync {
     fn draw_post_process_pass(&mut self, input_view: &Self::TextureView, output_view: Option<&Self::TextureView>) -> Result<(), String>;
     fn draw_fxaa_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String>;
     fn upscale(&mut self, input: &Self::TextureView, output: &Self::TextureView, params: UpscaleParams) -> Result<(), String>;
+
+    fn draw_bloom_pass(&mut self, _input_view: &Self::TextureView) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn draw_dof_pass(&mut self, _hdr_view: &Self::TextureView, _depth_view: &Self::TextureView, _output_view: &Self::TextureView) -> Result<(), String> {
+        Err("DoF not implemented for this backend".to_string())
+    }
+
+    fn draw_flare_pass(&mut self, _hdr_view: &Self::TextureView, _output_view: &Self::TextureView) -> Result<(), String> {
+        Err("Lens Flare not implemented for this backend".to_string())
+    }
 
     /// Get the default sampler
     fn get_default_sampler(&self) -> &Self::Sampler;

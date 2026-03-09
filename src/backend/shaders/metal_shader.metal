@@ -65,18 +65,22 @@ vertex VertexOut vs_main(Vertex v [[stage_in]],
 // Instanced vertex shader
 vertex VertexOut vs_instanced(Vertex v [[stage_in]],
                              constant GlobalUniforms &glob [[buffer(0)]],
-                             constant ShapeInstance *instances [[buffer(2)]],
-                             uint instance_id [[instance_id]]) {
-    constant ShapeInstance &inst = instances[instance_id];
+                             constant ShapeInstance *instances [[buffer(1)]],
+                             uint instance_id [[instance_id]],
+                             uint vertex_id [[vertex_id]]) {
     VertexOut out;
-    
-    float2 pos = inst.rect.xy + v.uv * inst.rect.zw;
-    out.position = glob.projection * float4(pos, 0.0, 1.0);
-    out.uv = v.uv;
-    out.color = float4(pow(v.color.rgb, 2.2), v.color.a);
-    out.world_pos = pos;
+    // Full screen triangle
+    float2 grid[3] = {
+        float2(-1.0, -1.0),
+        float2( 3.0, -1.0),
+        float2(-1.0,  3.0)
+    };
+    out.position = float4(grid[vertex_id % 3], 0.0, 1.0);
+    out.uv = grid[vertex_id % 3] * 0.5 + 0.5;
+    out.color = float4(1.0);
+    out.world_pos = out.position.xy * 1000.0;
     out.iid = instance_id;
-    out.velocity = inst.material.xy;
+    out.velocity = float2(0.0);
     return out;
 }
 
@@ -289,10 +293,10 @@ fragment float4 fs_main(VertexOut in [[stage_in]],
 
 fragment float4 fs_instanced(VertexOut in [[stage_in]],
                             constant GlobalUniforms &glob [[buffer(0)]],
-                            constant ShapeInstance *instances [[buffer(2)]],
-                            texture2d<float> tex [[texture(0)]],
-                            texture2d<float> tex2 [[texture(1)]],
-                            sampler s [[sampler(0)]]) {
+                            constant ShapeInstance *instances [[buffer(1)]],
+                            texture2d<float> tex [[texture(2)]],
+                            texture2d<float> tex2 [[texture(3)]],
+                            sampler s [[sampler(4)]]) {
     constant ShapeInstance &inst = instances[in.iid];
     ShapeData d;
     d.rect = inst.rect; d.radii = inst.radii; d.color = inst.color;
@@ -316,40 +320,19 @@ struct FragmentOutput {
     float4 color [[color(0)]];
     float4 aux [[color(1)]];
     float2 velocity [[color(2)]];
-    float4 extra [[color(3)]];
 };
 
 fragment FragmentOutput fs_instanced_gbuffer(VertexOut in [[stage_in]],
-                            constant GlobalUniforms &glob [[buffer(1)]],
-                            constant ShapeInstance *instances [[buffer(2)]],
-                            texture2d<float> tex [[texture(0)]],
-                            texture2d<float> tex2 [[texture(1)]],
-                            sampler s [[sampler(0)]]) {
-    constant ShapeInstance &inst = instances[in.iid];
-    ShapeData d;
-    d.rect = inst.rect; d.radii = inst.radii; d.color = inst.color;
-    d.border_color = inst.border_color;
-    d.glow_color = inst.glow_color; 
-    d.border_width = inst.params1.x; d.elevation = inst.params1.y;
-    d.glow_strength = inst.params1.z; d.lut_intensity = inst.params1.w;
-    d.mode = inst.params2.x; d.is_squircle = inst.params2.y;
-    
-    float4 color = resolve_shape(in, d, tex, tex2, s, glob.time);
-    
-    // Aux: Normal(xy), Roughness, Reflectivity
-    float3 normal = float3(0.5, 0.5, 1.0);
-    // If we had a normal map in slot 2...
-    // normal = tex3.sample(s, in.uv).rgb;
-    
-    float4 aux = float4(normal.xy, inst.material.w, inst.material.z);
-    
+                            constant GlobalUniforms &glob [[buffer(0)]],
+                            constant ShapeInstance *instances [[buffer(1)]],
+                            texture2d<float> tex [[texture(2)]],
+                            texture2d<float> tex2 [[texture(3)]],
+                            sampler s [[sampler(4)]]) {
+
     FragmentOutput out;
-    out.color = color;
-    // Add emissive boost to aux.w or similar? 
-    // Let's use glow_layer logic...
-    out.aux = aux;
-    out.velocity = inst.material.xy;
-    out.extra = inst.pbr_params;
+    out.color = float4(in.color.rgb, 1.0);
+    out.aux = float4(0.0, 0.0, 0.0, 1.0); 
+    out.velocity = float2(0.0, 0.0);
     return out;
 }
 
@@ -370,7 +353,15 @@ struct CinematicParams {
     float gi_intensity;
     float volumetric_intensity;
     float4 light_color;
+    float2 jitter;      // Jitter offset for TAA parity
+    float2 render_size; // Native resolution for effects
 };
+
+// Helper for 3D LUT sampling
+float3 sample_lut_metal(float3 color, texture3d<float> lut, sampler s) {
+    // Standard 3D LUT assumes 0-1 range
+    return lut.sample(s, max(color, 0.0)).rgb;
+}
 
 float3 reinhard(float3 v) {
     return v / (1.0 + v);
@@ -578,8 +569,23 @@ fragment float4 fs_blur(ResolveVertexOut in [[stage_in]],
 
 // Update resolve to composite bloom
 fragment float4 fs_resolve_bloom(ResolveVertexOut in [[stage_in]],
-                                texture2d<float> t_hdr [[texture(0)]],
-                                texture2d<float> t_bloom [[texture(1)]],
-                                sampler s [[sampler(0)]]) {
-    return t_hdr.sample(s, in.uv);
+                                 texture2d<float> hdr_tex [[texture(0)]],
+                                 texture2d<float> bloom_tex [[texture(1)]],
+                                 texture3d<float> t_lut [[texture(2)]],
+                                 texture2d<float> t_velocity [[texture(3)]],
+                                 texture2d<float> t_reflection [[texture(4)]],
+                                 texture2d<float> t_aux [[texture(5)]],
+                                 texture2d<float> t_extra [[texture(6)]],
+                                 texture2d<float> t_sdf [[texture(7)]],
+                                 constant CinematicParams &cinema [[buffer(2)]],
+                                 sampler s [[sampler(0)]]) {
+    // Standard resolve logic
+    float4 bloom = bloom_tex.sample(s, in.uv);
+    float4 hdr = hdr_tex.sample(s, in.uv);
+
+    // Apply bloom
+    hdr += bloom * cinema.bloom_intensity;
+
+    // Output
+    return float4(hdr.rgb, 1.0);
 }

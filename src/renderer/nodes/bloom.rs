@@ -6,20 +6,19 @@ pub struct BloomNode;
 impl<E: GpuExecutor> RenderNode<E> for BloomNode {
     fn name(&self) -> &str { "BloomPass" }
     fn execute(&mut self, ctx: &mut RenderContext<'_, E>) -> Result<(), String> {
-        // Logically we just tell the backend to run its internal bloom extraction/blur.
-        // This is usually part of resolve, but we split it for upscaling.
-        // We reuse backend.resolve() internal logic but maybe better expose a clear method.
-        // WgpuBackend::resolve already does bloom extraction.
+        use crate::renderer::graph::{DOF_HANDLE, GraphResource};
         
-        // However, in upscale path, we want bloom on the HIGH RES frame? 
-        // Or LOW RES?
-        // Usually, bright extraction on HIGH RES is better.
-        
-        // For now, let's assume we just trigger the backend's bloom logic.
-        // Since resolve() is called in normal path, we need a way to call just the bloom part.
-        
-        // Let's add `extract_bloom` to HAL? 
-        // WgpuBackend already has code for it inside resolve().
+        if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&DOF_HANDLE) {
+            let view = ctx.executor.create_texture_view(tex)?;
+            ctx.executor.draw_bloom_pass(&view)?;
+        } else {
+             // Fallback to HDR_HIGH_RES if DOF is missing
+             use crate::renderer::graph::HDR_HIGH_RES_HANDLE;
+             if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&HDR_HIGH_RES_HANDLE) {
+                 let view = ctx.executor.create_texture_view(tex)?;
+                 ctx.executor.draw_bloom_pass(&view)?;
+             }
+        }
         
         Ok(())
     }

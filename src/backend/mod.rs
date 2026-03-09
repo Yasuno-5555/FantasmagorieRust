@@ -17,6 +17,11 @@ pub mod hal;
 /// This is "The Muscle" - no optimization logic allowed here.
 /// Tracea is the coordinator that prepares work for GraphicsBackend.
 pub trait GraphicsBackend {
+    /// Get the backend as Any for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
+    /// Get the backend as Any mut for downcasting
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
     /// Get the name of the backend (e.g., "OpenGL", "Vulkan")
     fn name(&self) -> &str;
 

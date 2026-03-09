@@ -179,7 +179,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     backend.render(&dl, current_width, current_height);
                 }
-                }
             }
             Event::AboutToWait => {
                 window.request_redraw();

@@ -16,10 +16,11 @@ pub const SDF_TEMP_A_HANDLE: ResourceHandle = 100;
 pub const SDF_TEMP_B_HANDLE: ResourceHandle = 101;
 pub const LUT_HANDLE: ResourceHandle = 20;
 
-// Phase 6 Handles
 pub const HDR_LOW_RES_HANDLE: ResourceHandle = 30;
 pub const HDR_HIGH_RES_HANDLE: ResourceHandle = 31;
 pub const LDR_HANDLE: ResourceHandle = 32; // Input to FXAA
+pub const DOF_HANDLE: ResourceHandle = 33;
+pub const FLARE_HANDLE: ResourceHandle = 34;
 
 #[derive(Clone, Debug)]
 pub enum GraphResourceDesc {
@@ -102,7 +103,9 @@ impl<E: GpuExecutor> RenderGraph<E> {
         }
 
         for node in &mut self.nodes {
+            println!("DEBUG: Executing node: {}", node.name());
             node.execute(&mut ctx)?;
+            println!("DEBUG: Finished node: {}", node.name());
         }
 
         Ok(())

@@ -52,6 +52,7 @@ pub struct MetalBackend {
     main_pipeline: RenderPipelineState,
     instanced_pipeline: RenderPipelineState,
     instanced_gbuffer_pipeline: RenderPipelineState,
+    culling_pipeline: ComputePipelineState,
     uniform_buffer: Buffer,
     vertex_buffer: Buffer,
     
@@ -66,6 +67,7 @@ pub struct MetalBackend {
     // Resolve Pipeline (Post-process)
     pub resolve_pipeline: RenderPipelineState,
     pub hdr_texture: Option<Texture>,
+    pub aux_texture: Option<Texture>,
     pub backdrop_texture: Option<Texture>,
     pub reflection_texture: Option<Texture>,
     pub velocity_texture: Option<Texture>,
@@ -92,6 +94,8 @@ pub struct MetalBackend {
     // Effect specific
     pub ssr_resolve_pipeline: RenderPipelineState,
     pub motion_blur_pipeline: RenderPipelineState,
+    pub dof_pipeline: RenderPipelineState,
+    pub flare_pipeline: RenderPipelineState,
 
     // Command Recording State
     pub current_command_buffer: Mutex<Option<MetalIdWrapper<CommandBuffer>>>,
@@ -100,6 +104,7 @@ pub struct MetalBackend {
     pub dummy_storage_buffer: Buffer,
     pub is_first_draw: Mutex<bool>,
     pub frame_resources: Arc<Mutex<Vec<MetalResource>>>,
+    pub depth_stencil_state: DepthStencilState,
 }
 
 #[derive(Clone, Debug)]
@@ -155,10 +160,12 @@ impl MetalBackend {
         // We will store the config if needed or just use it for initial setup.
 
         
-        let shader_src = format!("{}\n{}\n{}", 
+        let shader_src = format!("{}\n{}\n{}\n{}\n{}", 
             include_str!("../shaders/metal_shader.metal"),
             include_str!("../shaders/motion_blur.metal"),
-            include_str!("../shaders/ssr.metal")
+            include_str!("../shaders/ssr.metal"),
+            include_str!("../shaders/dof.metal"),
+            include_str!("../shaders/flare.metal")
         );
         let pipelines = MetalPipelineProvider::new(device.clone(), &shader_src)?;
         
@@ -196,6 +203,21 @@ impl MetalBackend {
             (1024 * std::mem::size_of::<Vertex>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
+
+        // Initialize unit quad (6 vertices for TriangleList)
+        // vs_instanced uses v.uv to scale the rect, so UVs must be 0..1
+        let unit_quad = [
+            Vertex { pos: [0.0, 0.0], uv: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+            Vertex { pos: [1.0, 0.0], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+            Vertex { pos: [0.0, 1.0], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+            Vertex { pos: [1.0, 0.0], uv: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+            Vertex { pos: [1.0, 1.0], uv: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+            Vertex { pos: [0.0, 1.0], uv: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+        ];
+        unsafe {
+            let ptr = vertex_buffer.contents() as *mut Vertex;
+            std::ptr::copy_nonoverlapping(unit_quad.as_ptr(), ptr, 6);
+        }
 
         let sampler_desc = SamplerDescriptor::new();
         sampler_desc.set_min_filter(MTLSamplerMinMagFilter::Linear);
@@ -265,11 +287,20 @@ impl MetalBackend {
             *ptr = cinematic_params;
         }
 
-        let ssr_pipeline = pipelines.create_ssr_pipeline("Fantasmagorie SSR", "vs_ssr fs_ssr")?;
+        let ssr_pipeline = pipelines.create_ssr_pipeline("Fantasmagorie SSR", "vs_resolve fs_ssr")?;
         let ssr_resolve_pipeline = pipelines.create_render_pipeline("SSR Resolve", "vs_resolve fs_ssr", None)?;
-        let motion_blur_pipeline = pipelines.create_render_pipeline("MotionBlur", "vs_main fs_motion_blur", None)?;
+        let motion_blur_pipeline = pipelines.create_render_pipeline("MotionBlur", "vs_resolve fs_motion_blur", None)?;
+        let dof_pipeline = pipelines.create_render_pipeline("DoF Pass", "vs_resolve fs_dof", None)?;
+        let flare_pipeline = pipelines.create_render_pipeline("Flare Pass", "vs_resolve fs_flare", None)?;
+
+        let culling_pipeline = pipelines.create_compute_pipeline("Culling", include_str!("../shaders/culling.metal"), Some("cull_instances"))?;
 
         let dummy_storage_buffer = device.new_buffer(4, MTLResourceOptions::StorageModeShared);
+
+        let ds_desc = metal::DepthStencilDescriptor::new();
+        ds_desc.set_depth_compare_function(metal::MTLCompareFunction::LessEqual);
+        ds_desc.set_depth_write_enabled(true);
+        let depth_stencil_state = device.new_depth_stencil_state(&ds_desc);
 
         Ok(Self {
             device: device.clone(), command_queue, resources, pipelines,
@@ -278,6 +309,7 @@ impl MetalBackend {
             tracea_particle_cache: Mutex::new(None),
             tracea_fft_kernel: Mutex::new(None),
             main_pipeline, instanced_pipeline, instanced_gbuffer_pipeline,
+            culling_pipeline,
             uniform_buffer, vertex_buffer,
             transient_pool: Mutex::new(TransientPool::new()),
             font_texture: Some(dummy_font_texture), backdrop_texture: Some(dummy_backdrop_texture), sampler,
@@ -285,9 +317,11 @@ impl MetalBackend {
             sdf_texture: None,
             layer: None, start_time: std::time::Instant::now(),
             audio_data: vec![0.0; 4], screenshot_requested: Arc::new(Mutex::new(None)),
-            resolve_pipeline, hdr_texture, reflection_texture: None, velocity_texture: None,
+            resolve_pipeline, hdr_texture, aux_texture: None, reflection_texture: None, velocity_texture: None,
             dummy_velocity_texture, bright_pipeline, blur_pipeline, resolve_bloom_pipeline,
-            ssr_pipeline, ssr_resolve_pipeline, motion_blur_pipeline, bloom_textures,
+            ssr_pipeline, ssr_resolve_pipeline, motion_blur_pipeline,
+            dof_pipeline, flare_pipeline,
+            bloom_textures,
             ssr_history_texture: None, blur_uniform_buffer, cinematic_buffer,
             current_cinematic: Mutex::new(cinematic_params),
             current_command_buffer: Mutex::new(None), current_drawable: Mutex::new(None),
@@ -301,6 +335,7 @@ impl MetalBackend {
             depth_texture: None,
             frame_count: 0,
             frame_resources: Arc::new(Mutex::new(Vec::new())),
+            depth_stencil_state,
         })
     }
 
@@ -321,14 +356,15 @@ impl MetalBackend {
         ]
     }
 
-    pub fn ensure_encoder(&self) -> Result<MetalIdWrapper<RenderCommandEncoder>, String> {
+     fn ensure_encoder(&self) -> Result<MetalIdWrapper<metal::RenderCommandEncoder>, String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
-        if let Some(enc) = &*encoder_guard {
-            return Ok(MetalIdWrapper(enc.0.to_owned()));
+        if let Some(encoder) = &*encoder_guard {
+            return Ok(encoder.clone());
         }
 
         let d_wrapper = self.current_drawable.lock().unwrap();
         let drawable = d_wrapper.as_ref().ok_or("No drawable for encoder")?.0;
+        
         let command_buffer_guard = self.current_command_buffer.lock().unwrap();
         let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
         
@@ -338,17 +374,29 @@ impl MetalBackend {
         let color_attachment = render_pass_descriptor.color_attachments().object_at(0).unwrap();
         
         if let Some(ref hdr) = self.hdr_texture {
-            color_attachment.set_texture(Some(hdr));
+             color_attachment.set_texture(Some(hdr));
         } else {
-            unsafe {
+             unsafe {
                 let tex_ptr: id = msg_send![drawable, texture];
                 let _: () = msg_send![color_attachment, setTexture: tex_ptr];
+             }
+        }
+
+        if let Some(ref depth) = self.depth_texture {
+            let depth_attachment = render_pass_descriptor.depth_attachment().unwrap();
+            depth_attachment.set_texture(Some(depth));
+            if *is_first {
+                depth_attachment.set_load_action(MTLLoadAction::Clear);
+                depth_attachment.set_clear_depth(1.0);
+            } else {
+                depth_attachment.set_load_action(MTLLoadAction::Load);
             }
+            depth_attachment.set_store_action(MTLStoreAction::Store);
         }
         
         if *is_first {
             color_attachment.set_load_action(MTLLoadAction::Clear);
-            color_attachment.set_clear_color(MTLClearColor::new(0.01, 0.01, 0.02, 1.0));
+            color_attachment.set_clear_color(MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
             *is_first = false;
         } else {
             color_attachment.set_load_action(MTLLoadAction::Load);
@@ -356,35 +404,63 @@ impl MetalBackend {
         color_attachment.set_store_action(MTLStoreAction::Store);
 
         let encoder = command_buffer.new_render_command_encoder(render_pass_descriptor).to_owned();
+        encoder.set_cull_mode(MTLCullMode::None);
+        encoder.set_front_facing_winding(MTLWinding::CounterClockwise);
+        encoder.set_depth_stencil_state(&self.depth_stencil_state);
         
-        unsafe {
-            let tex_ptr: id = msg_send![drawable, texture];
-            let tex: &TextureRef = &*(tex_ptr as *mut TextureRef);
-            let viewport = MTLViewport {
-                originX: 0.0, originY: 0.0,
-                width: tex.width() as f64, height: tex.height() as f64,
-                znear: 0.0, zfar: 1.0,
-            };
-            encoder.set_viewport(viewport);
-        }
+        let (vp_w, vp_h) = if let Some(ref hdr) = self.hdr_texture {
+            (hdr.width(), hdr.height())
+        } else {
+            unsafe {
+                let drawable_texture_id: id = msg_send![drawable, texture];
+                if drawable_texture_id != cocoa::base::nil {
+                    let drawable_texture = metal::Texture::from_ptr(drawable_texture_id as *mut _);
+                    (drawable_texture.width(), drawable_texture.height())
+                } else {
+                    (self.cached_width as u64, self.cached_height as u64)
+                }
+            }
+        };
+
+        let viewport = MTLViewport {
+            originX: 0.0, originY: 0.0,
+            width: vp_w as f64, height: vp_h as f64,
+            znear: 0.0, zfar: 1.0,
+        };
+        encoder.set_viewport(viewport);
+        encoder.set_scissor_rect(MTLScissorRect {
+            x: 0, y: 0,
+            width: vp_w as u64, height: vp_h as u64,
+        });
+
+        // Always bind global uniform buffer to Slot 0 for projection data
+        encoder.set_vertex_buffer(0, Some(&self.uniform_buffer), 0);
+        encoder.set_fragment_buffer(0, Some(&self.uniform_buffer), 0);
 
         let wrapper = MetalIdWrapper(encoder);
-        *encoder_guard = Some(MetalIdWrapper(wrapper.0.to_owned()));
+        *encoder_guard = Some(wrapper.clone());
         Ok(wrapper)
     }
 
     fn end_current_encoder(&self) {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
-        if let Some(enc) = encoder_guard.take() {
-            enc.0.end_encoding();
+        if let Some(encoder) = encoder_guard.take() {
+            encoder.0.end_encoding();
         }
     }
 }
 
 impl GraphicsBackend for MetalBackend {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+
     fn name(&self) -> &str { "Metal" }
     fn set_resolution_scale(&mut self, scale: f32) {
         self.internal_resolution_scale = scale;
+    }
+
+    fn capture_screenshot(&mut self, path: &str) {
+        *self.screenshot_requested.lock().unwrap() = Some(path.to_string());
     }
 
     fn update_audio_data(&mut self, data: &[f32]) {
@@ -459,6 +535,20 @@ impl GraphicsBackend for MetalBackend {
 
         orchestrator.plan(dl, width, height, self.internal_resolution_scale);
         
+        // Sync Global Uniforms
+        let projection = crate::backend::shaders::types::create_projection(width as f32, height as f32, false, (0.0, 1.0));
+        let global_uniforms = crate::backend::shaders::types::GlobalUniforms {
+            projection,
+            time,
+            _pad0: 0.0,
+            viewport_size: [width as f32, height as f32],
+        };
+
+        unsafe {
+            let ptr = self.uniform_buffer.contents() as *mut crate::backend::shaders::types::GlobalUniforms;
+            *ptr = global_uniforms;
+        }
+        
         // 1. Begin Frame (acquire drawable, create command buffer)
         if let Err(e) = self.begin_execute() {
              eprintln!("Failed to begin Metal frame: {}", e);
@@ -469,9 +559,9 @@ impl GraphicsBackend for MetalBackend {
             eprintln!("Metal render error: {}", e);
         }
 
-        // 2. Resolve (Final compositing to backbuffer)
+        // 2. Resolve HDR to Drawable
         if let Err(e) = self.resolve() {
-            eprintln!("Failed to resolve Metal frame: {}", e);
+             eprintln!("Failed to resolve Metal frame: {}", e);
         }
 
         // 3. End Frame (commit command buffer, handle screenshots)
@@ -498,9 +588,6 @@ impl GraphicsBackend for MetalBackend {
         self.font_texture = Some(tex);
     }
 
-    fn capture_screenshot(&mut self, path: &str) {
-        *self.screenshot_requested.lock().unwrap() = Some(path.to_string());
-    }
 
     fn set_cinematic_config(&mut self, config: crate::config::CinematicConfig) {
         use crate::backend::shaders::types::CinematicParams;
@@ -510,7 +597,11 @@ impl GraphicsBackend for MetalBackend {
             exposure: config.exposure,
             ca_strength: config.chromatic_aberration,
             vignette_intensity: config.vignette,
-            bloom_intensity: 0.4,
+            bloom_intensity: match config.bloom {
+                Bloom::None => 0.0,
+                Bloom::Soft => 0.4,
+                Bloom::Cinematic => 1.2,
+            },
             tonemap_mode: match config.tonemap { Tonemap::None => 0, Tonemap::Aces => 1, Tonemap::Reinhard => 2 },
             bloom_mode: match config.bloom { Bloom::None => 0, Bloom::Soft => 1, Bloom::Cinematic => 2 },
             grain_strength: config.grain_strength,
@@ -519,10 +610,10 @@ impl GraphicsBackend for MetalBackend {
             blur_radius: config.blur_radius,
             motion_blur_strength: config.motion_blur_strength,
             debug_mode: config.debug_mode,
-            light_pos: [500.0, 300.0],
+            light_pos: config.light_pos,
             gi_intensity: config.gi_intensity,
             volumetric_intensity: config.volumetric_intensity,
-            light_color: [1.0, 0.9, 0.7, 1.0],
+            light_color: config.light_color,
             jitter: [0.0, 0.0],
             render_size: [self.cached_width as f32, self.cached_height as f32],
         };
@@ -552,6 +643,7 @@ impl MetalBackend {
         desc.set_height(height as u64);
         desc.set_pixel_format(MTLPixelFormat::RGBA16Float);
         desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead | MTLTextureUsage::ShaderWrite);
+        desc.set_storage_mode(MTLStorageMode::Private);
         self.hdr_texture = Some(self.device.new_texture(&desc));
 
         // Recreate Depth Texture (Native resolution for post/UI, or needed for scaling?)
@@ -568,6 +660,24 @@ impl MetalBackend {
         depth_desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
         depth_desc.set_storage_mode(MTLStorageMode::Private);
         self.depth_texture = Some(self.device.new_texture(&depth_desc));
+
+        // Recreate Aux Texture
+        let aux_desc = metal::TextureDescriptor::new();
+        aux_desc.set_width(width as u64);
+        aux_desc.set_height(height as u64);
+        aux_desc.set_pixel_format(MTLPixelFormat::RGBA16Float);
+        aux_desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        aux_desc.set_storage_mode(MTLStorageMode::Private);
+        self.aux_texture = Some(self.device.new_texture(&aux_desc));
+
+        // Recreate Velocity Texture
+        let vel_desc = metal::TextureDescriptor::new();
+        vel_desc.set_width(width as u64);
+        vel_desc.set_height(height as u64);
+        vel_desc.set_pixel_format(MTLPixelFormat::RG16Float);
+        vel_desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+        vel_desc.set_storage_mode(MTLStorageMode::Private);
+        self.velocity_texture = Some(self.device.new_texture(&vel_desc));
 
         // Initialize MetalFX if needed
         let scale = self.internal_resolution_scale;
@@ -673,45 +783,81 @@ impl GpuExecutor for MetalBackend {
     fn destroy_bind_group(&self, _bind_group: Self::BindGroup) {}
 
     fn begin_execute(&self) -> Result<(), String> {
+        self.end_current_encoder();
+
         let wrapper = self.layer.ok_or("No CALayer set")?;
         let layer = wrapper.0;
-        autoreleasepool(|| unsafe {
-            let drawable: id = msg_send![layer, nextDrawable];
-            if drawable == cocoa::base::nil { return Err("Failed to get next drawable".into()); }
-            let _: () = msg_send![drawable, retain];
-            *self.current_drawable.lock().unwrap() = Some(MetalIdWrapper(drawable));
-            *self.is_first_draw.lock().unwrap() = true;
-            let command_buffer = self.command_queue.new_command_buffer().to_owned();
-            *self.current_command_buffer.lock().unwrap() = Some(MetalIdWrapper(command_buffer));
-            Ok(())
-        })
+        let drawable = unsafe {
+            let d: id = msg_send![layer, nextDrawable];
+            if d == cocoa::base::nil { return Err("Failed to get next drawable".into()); }
+            let _: () = msg_send![d, retain];
+            d
+        };
+        *self.current_drawable.lock().unwrap() = Some(MetalIdWrapper(drawable));
+        println!("DEBUG: begin_execute SET drawable");
+        
+        // Reset for new frame
+        *self.is_first_draw.lock().unwrap() = true;
+
+        let mut cb_guard = self.current_command_buffer.lock().unwrap();
+        println!("DEBUG: begin_execute got cb_guard");
+        let command_buffer = self.command_queue.new_command_buffer();
+        *cb_guard = Some(MetalIdWrapper(command_buffer.to_owned()));
+        println!("DEBUG: begin_execute FINISHED");
+        Ok(())
     }
 
     fn end_execute(&self) -> Result<(), String> {
         if let Some(wrapper) = self.current_encoder.lock().unwrap().take() {
             wrapper.0.end_encoding();
         }
-        if let Some(cb_wrapper) = self.current_command_buffer.lock().unwrap().take() {
+        let mut cb_guard = self.current_command_buffer.lock().unwrap();
+        if let Some(cb_wrapper) = cb_guard.take() {
             let command_buffer = cb_wrapper.0;
-            let mut req_guard = self.screenshot_requested.lock().unwrap();
-            if let Some(path) = req_guard.take() {
-                if let Some(d_wrapper) = *self.current_drawable.lock().unwrap() {
-                    let drawable = d_wrapper.0;
-                    unsafe {
-                        let tex_ptr: id = msg_send![drawable, texture];
-                        let src_tex: &TextureRef = &*(tex_ptr as *mut TextureRef);
-                        self.perform_screenshot(src_tex, &path, &command_buffer)?;
-                    }
-                }
-            }
-            if let Some(d_wrapper) = self.current_drawable.lock().unwrap().take() {
+            
+            // Present drawable first
+            // 1. Take drawable and schedule presentation
+            let drawable_opt = self.current_drawable.lock().unwrap().take();
+            if let Some(d_wrapper) = &drawable_opt {
                 let drawable = d_wrapper.0;
                 unsafe {
                     let _: () = msg_send![command_buffer, presentDrawable: drawable];
+                }
+            }
+
+            // 2. Check for screenshot
+            let mut req_guard = self.screenshot_requested.lock().unwrap();
+            
+            let mut committed = false;
+            if let Some(path) = req_guard.take() {
+                if let Some(d_wrapper) = &drawable_opt {
+                     let drawable = d_wrapper.0;
+                     unsafe { 
+                        let tex_ptr: id = msg_send![drawable, texture];
+                        let src_tex = metal::Texture::from_ptr(tex_ptr as *mut _);
+                        // perform_screenshot commits and waits
+                        if let Err(e) = self.perform_screenshot(&src_tex, &path, &command_buffer) {
+                             eprintln!("Screenshot failed: {}", e);
+                        }
+                        committed = true;
+                     }
+                } else {
+                    eprintln!("No drawable for screenshot");
+                }
+            }
+            
+            // 3. Commit if not already committed
+            if !committed {
+                command_buffer.commit();
+            }
+            
+            // 4. Release drawable
+            if let Some(d_wrapper) = drawable_opt {
+                let drawable = d_wrapper.0;
+                unsafe {
                     let _: () = msg_send![drawable, release];
                 }
             }
-            command_buffer.commit();
         }
         Ok(())
     }
@@ -720,7 +866,7 @@ impl GpuExecutor for MetalBackend {
         let wrapper = self.ensure_encoder()?;
         let encoder = &wrapper.0;
         encoder.set_render_pipeline_state(pipeline);
-        encoder.set_vertex_buffer(1, Some(vertex_buffer), 0); // Slot 1 for vertices
+        encoder.set_vertex_buffer(10, Some(vertex_buffer), 0); // Slot 10 for vertices
         
         // Use set_vertex_bytes for small uniform data - zero overhead, no buffer management needed
         if !uniform_data.is_empty() {
@@ -781,9 +927,13 @@ impl GpuExecutor for MetalBackend {
         let wrapper = self.ensure_encoder()?;
         let encoder = &wrapper.0;
         encoder.set_render_pipeline_state(pipeline);
-        encoder.set_vertex_buffer(1, Some(vertex_buffer), 0); // Slot 1 for vertices
-        encoder.set_vertex_buffer(2, Some(instance_buffer), 0); // Slot 2 for instances
-        encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+        
+        // Bind Vertex Buffer (Slot 10) - Matches Vertex Descriptor in create_render_pipeline
+        encoder.set_vertex_buffer(10, Some(vertex_buffer), 0);
+        encoder.set_vertex_buffer(1, Some(instance_buffer), 0); // Slot 1 for instances
+        encoder.set_fragment_buffer(1, Some(instance_buffer), 0); // ALSO bind to fragment stage!
+        // STANDARD: Sampler 4
+        encoder.set_fragment_sampler_state(4, Some(&self.sampler));
         
         // Keep buffers alive
         let mut resources = self.frame_resources.lock().unwrap();
@@ -817,6 +967,7 @@ impl GpuExecutor for MetalBackend {
         let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
         let encoder = command_buffer.new_compute_command_encoder();
         encoder.set_compute_pipeline_state(pipeline);
+
         if let Some(bg) = bind_group {
             for entry in &bg.entries {
                 match &entry.resource {
@@ -844,9 +995,48 @@ impl GpuExecutor for MetalBackend {
         Ok(())
     }
 
-    fn draw_instanced_indirect(&self, _pipeline: &Self::RenderPipeline, _bind_group: Option<&Self::BindGroup>, _vertex_buffer: &Self::Buffer, _indirect_buffer: &Self::Buffer, _indirect_offset: u64) -> Result<(), String> {
-        // TODO: Metal drawIndexedPrimitivesWithOptions:indirectBuffer:indirectBufferOffset:
-        Err("Metal draw_instanced_indirect not implemented".into())
+    fn draw_instanced_indirect(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
+    ) -> Result<(), String> {
+        let wrapper = self.ensure_encoder()?;
+        let encoder = &wrapper.0;
+        encoder.set_render_pipeline_state(pipeline);
+        
+        encoder.set_vertex_buffer(10, Some(vertex_buffer), 0);
+        encoder.set_vertex_buffer(1, Some(instance_buffer), 0);
+        encoder.set_fragment_buffer(1, Some(instance_buffer), 0);
+        encoder.set_fragment_sampler_state(4, Some(&self.sampler));
+        
+        let mut resources = self.frame_resources.lock().unwrap();
+        resources.push(MetalResource::Buffer(vertex_buffer.clone()));
+        resources.push(MetalResource::Buffer(instance_buffer.clone()));
+        resources.push(MetalResource::Buffer(indirect_buffer.clone()));
+
+        if let Some(bg) = bind_group {
+            for entry in &bg.entries {
+                match &entry.resource {
+                    pipeline_provider::MetalResource::Buffer(buf) => {
+                        encoder.set_vertex_buffer(entry.binding as u64, Some(buf), 0);
+                        encoder.set_fragment_buffer(entry.binding as u64, Some(buf), 0);
+                        resources.push(MetalResource::Buffer(buf.clone()));
+                    },
+                    pipeline_provider::MetalResource::Texture(tex) => {
+                        encoder.set_fragment_texture(entry.binding as u64, Some(tex));
+                        resources.push(MetalResource::Texture(tex.clone()));
+                    },
+                    pipeline_provider::MetalResource::Sampler(samp) => encoder.set_fragment_sampler_state(entry.binding as u64, Some(samp)),
+                }
+            }
+        }
+
+        encoder.draw_primitives_indirect(MTLPrimitiveType::Triangle, indirect_buffer, indirect_offset);
+        Ok(())
     }
 
     fn dispatch_visibility(
@@ -868,32 +1058,81 @@ impl GpuExecutor for MetalBackend {
     ) -> Result<(), String> {
         Err("Metal indirect kernel not implemented".into())
     }
-
     fn draw_instanced_gbuffer(&mut self, pipeline: &Self::RenderPipeline, bind_group: Option<&Self::BindGroup>, vertex_buffer: &Self::Buffer, instance_buffer: &Self::Buffer, vertex_count: u32, instance_count: u32, aux_view: &Self::TextureView, velocity_view: &Self::TextureView, depth_view: &Self::TextureView) -> Result<(), String> {
+        println!("DEBUG: draw_instanced_gbuffer START");
         self.end_current_encoder();
         let d_wrapper = self.current_drawable.lock().unwrap();
+        println!("DEBUG: draw_instanced_gbuffer drawable is_some: {}", d_wrapper.is_some());
         let drawable = d_wrapper.as_ref().ok_or("No drawable")?.0;
         let descriptor = RenderPassDescriptor::new();
         let color0 = descriptor.color_attachments().object_at(0).unwrap();
-        if let Some(tex) = &self.hdr_texture { color0.set_texture(Some(tex)); }
-        else { unsafe { let tex_ptr: id = msg_send![drawable, texture]; color0.set_texture(Some(&*(tex_ptr as *mut TextureRef))); } }
-        color0.set_load_action(MTLLoadAction::Load); color0.set_store_action(MTLStoreAction::Store);
+        let is_first = {
+            let mut guard = self.is_first_draw.lock().unwrap();
+            let val = *guard;
+            if val { *guard = false; }
+            val
+        };
+        if let Some(tex) = &self.hdr_texture {
+            color0.set_texture(Some(tex));
+            color0.set_load_action(MTLLoadAction::Clear);
+            color0.set_clear_color(MTLClearColor::new(0.0, 1.0, 0.0, 1.0)); // GREEN
+            color0.set_store_action(MTLStoreAction::Store);
+        }
+        
         let color1 = descriptor.color_attachments().object_at(1).unwrap();
-        color1.set_texture(Some(aux_view)); color1.set_load_action(MTLLoadAction::Load); color1.set_store_action(MTLStoreAction::Store);
+        color1.set_texture(Some(aux_view));
         let color2 = descriptor.color_attachments().object_at(2).unwrap();
-        color2.set_texture(Some(velocity_view)); color2.set_load_action(MTLLoadAction::Load); color2.set_store_action(MTLStoreAction::Store);
+        color2.set_texture(Some(velocity_view));
         let depth = descriptor.depth_attachment().unwrap();
-        depth.set_texture(Some(depth_view)); depth.set_load_action(MTLLoadAction::Load); depth.set_store_action(MTLStoreAction::Store);
+        depth.set_texture(Some(depth_view));
+
+        if is_first {
+            color0.set_load_action(MTLLoadAction::Clear);
+            color0.set_clear_color(MTLClearColor::new(1.0, 0.0, 1.0, 1.0)); // FORCE MAGENTA CLEAR
+            color1.set_load_action(MTLLoadAction::Clear);
+            color1.set_clear_color(MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
+            color2.set_load_action(MTLLoadAction::Clear);
+            color2.set_clear_color(MTLClearColor::new(0.0, 0.0, 0.0, 0.0)); // Velocity clear to zero
+            depth.set_load_action(MTLLoadAction::Clear);
+            depth.set_clear_depth(1.0);
+        } else {
+            color0.set_load_action(MTLLoadAction::Load);
+            color1.set_load_action(MTLLoadAction::Load);
+            color2.set_load_action(MTLLoadAction::Load);
+            depth.set_load_action(MTLLoadAction::Load);
+        }
+        color0.set_store_action(MTLStoreAction::Store);
+        color1.set_store_action(MTLStoreAction::Store);
+        color2.set_store_action(MTLStoreAction::Store);
+        depth.set_store_action(MTLStoreAction::Store);
+        
         let cb_guard = self.current_command_buffer.lock().unwrap();
         let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
         let encoder = cb.new_render_command_encoder(descriptor);
+        
+        if let Some(tex) = &self.hdr_texture {
+            let viewport = MTLViewport { originX: 0.0, originY: 0.0, width: tex.width() as f64, height: tex.height() as f64, znear: 0.0, zfar: 1.0 };
+            encoder.set_viewport(viewport);
+        }
+
+        encoder.set_cull_mode(MTLCullMode::None);
+        encoder.set_front_facing_winding(MTLWinding::CounterClockwise);
+
         encoder.set_render_pipeline_state(pipeline);
-        let ds_desc = DepthStencilDescriptor::new();
-        ds_desc.set_depth_compare_function(MTLCompareFunction::LessEqual);
-        ds_desc.set_depth_write_enabled(true);
-        encoder.set_depth_stencil_state(&self.device.new_depth_stencil_state(&ds_desc));
-        encoder.set_vertex_buffer(1, Some(vertex_buffer), 0); // Slot 1 for vertices
-        encoder.set_vertex_buffer(2, Some(instance_buffer), 0); // Slot 2 for instances
+        // DIAGNOSTIC: Always pass depth test
+        let depth_stencil_desc = metal::DepthStencilDescriptor::new();
+        depth_stencil_desc.set_depth_compare_function(MTLCompareFunction::Always);
+        depth_stencil_desc.set_depth_write_enabled(false);
+        let diagnostic_depth_state = self.device.new_depth_stencil_state(&depth_stencil_desc);
+        encoder.set_depth_stencil_state(&diagnostic_depth_state);
+        
+        // Always bind global uniform buffer to Slot 0 for projection data
+        encoder.set_vertex_buffer(0, Some(&self.uniform_buffer), 0);
+        encoder.set_fragment_buffer(0, Some(&self.uniform_buffer), 0);
+
+        encoder.set_vertex_buffer(10, Some(vertex_buffer), 0); // Slot 10 for vertices
+        encoder.set_vertex_buffer(1, Some(instance_buffer), 0); // Slot 1 for instances
+        encoder.set_fragment_buffer(1, Some(instance_buffer), 0); // ALSO bind to fragment stage!
         
         // Keep buffers alive
         let mut resources = self.frame_resources.lock().unwrap();
@@ -924,7 +1163,136 @@ impl GpuExecutor for MetalBackend {
         Ok(())
     }
 
-    fn dispatch(&self, _p: &Self::ComputePipeline, _bg: Option<&Self::BindGroup>, _g: [u32; 3], _pc: &[u8]) -> Result<(), String> { Ok(()) }
+    fn draw_instanced_gbuffer_indirect(
+        &mut self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        instance_buffer: &Self::Buffer,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
+        aux_view: &Self::TextureView,
+        velocity_view: &Self::TextureView,
+        depth_view: &Self::TextureView
+    ) -> Result<(), String> {
+        self.end_current_encoder();
+        
+        let d_wrapper = self.current_drawable.lock().unwrap();
+        let drawable = d_wrapper.as_ref().ok_or("No drawable")?.0;
+        
+        let render_pass_descriptor = RenderPassDescriptor::new();
+        
+        // Output 0: HDR/Color
+        let color_attachment0 = render_pass_descriptor.color_attachments().object_at(0).unwrap();
+        if let Some(ref hdr) = self.hdr_texture {
+             color_attachment0.set_texture(Some(hdr));
+        } else {
+             unsafe {
+                let tex_ptr: cocoa::base::id = objc::msg_send![drawable, texture];
+                let _: () = objc::msg_send![color_attachment0, setTexture: tex_ptr];
+             }
+        }
+        color_attachment0.set_load_action(MTLLoadAction::Load);
+        color_attachment0.set_store_action(MTLStoreAction::Store);
+
+        // Output 1: Aux/Normal
+        let color_attachment1 = render_pass_descriptor.color_attachments().object_at(1).unwrap();
+        color_attachment1.set_texture(Some(aux_view));
+        color_attachment1.set_load_action(MTLLoadAction::Load);
+        color_attachment1.set_store_action(MTLStoreAction::Store);
+
+        // Output 2: Velocity
+        let color_attachment2 = render_pass_descriptor.color_attachments().object_at(2).unwrap();
+        color_attachment2.set_texture(Some(velocity_view));
+        color_attachment2.set_load_action(MTLLoadAction::Load);
+        color_attachment2.set_store_action(MTLStoreAction::Store);
+
+        // Output 3: Extra (PBR params)
+        let color_attachment3 = render_pass_descriptor.color_attachments().object_at(3).unwrap();
+        color_attachment3.set_texture(Some(&self.dummy_velocity_texture));
+        color_attachment3.set_load_action(MTLLoadAction::Load);
+        color_attachment3.set_store_action(MTLStoreAction::Store);
+
+        // Depth Attachment
+        let depth_attachment = render_pass_descriptor.depth_attachment().unwrap();
+        depth_attachment.set_texture(Some(depth_view));
+        depth_attachment.set_load_action(MTLLoadAction::Load);
+        depth_attachment.set_store_action(MTLStoreAction::Store);
+
+        let command_buffer_guard = self.current_command_buffer.lock().unwrap();
+        let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
+        let encoder = command_buffer.new_render_command_encoder(render_pass_descriptor).to_owned();
+        
+        encoder.set_cull_mode(MTLCullMode::None);
+        encoder.set_front_facing_winding(MTLWinding::CounterClockwise);
+        encoder.set_depth_stencil_state(&self.depth_stencil_state);
+        encoder.set_render_pipeline_state(pipeline);
+        
+        encoder.set_vertex_buffer(10, Some(vertex_buffer), 0);
+        encoder.set_vertex_buffer(1, Some(instance_buffer), 0);
+        encoder.set_fragment_buffer(1, Some(instance_buffer), 0);
+        encoder.set_fragment_sampler_state(4, Some(&self.sampler));
+        
+        let mut resources = self.frame_resources.lock().unwrap();
+        resources.push(MetalResource::Buffer(vertex_buffer.clone()));
+        resources.push(MetalResource::Buffer(instance_buffer.clone()));
+        resources.push(MetalResource::Buffer(indirect_buffer.clone()));
+
+        if let Some(bg) = bind_group {
+            for entry in &bg.entries {
+                match &entry.resource {
+                    pipeline_provider::MetalResource::Buffer(buf) => {
+                        encoder.set_vertex_buffer(entry.binding as u64, Some(buf), 0);
+                        encoder.set_fragment_buffer(entry.binding as u64, Some(buf), 0);
+                        resources.push(MetalResource::Buffer(buf.clone()));
+                    },
+                    pipeline_provider::MetalResource::Texture(tex) => {
+                        encoder.set_fragment_texture(entry.binding as u64, Some(tex));
+                        resources.push(MetalResource::Texture(tex.clone()));
+                    },
+                    pipeline_provider::MetalResource::Sampler(samp) => encoder.set_fragment_sampler_state(entry.binding as u64, Some(samp)),
+                }
+            }
+        }
+
+        encoder.draw_primitives_indirect(MTLPrimitiveType::Triangle, indirect_buffer, indirect_offset);
+        encoder.end_encoding();
+        Ok(())
+    }
+
+    fn dispatch(&self, pipeline: &Self::ComputePipeline, bind_group: Option<&Self::BindGroup>, groups: [u32; 3], _push_constants: &[u8]) -> Result<(), String> { 
+        self.end_current_encoder();
+        let cb_guard = self.current_command_buffer.lock().unwrap();
+        let command_buffer = &cb_guard.as_ref().ok_or("No command buffer")?.0;
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        
+        let mut resources = self.frame_resources.lock().unwrap();
+        if let Some(bg) = bind_group {
+            for entry in &bg.entries {
+                match &entry.resource {
+                    pipeline_provider::MetalResource::Buffer(buf) => {
+                        encoder.set_buffer(entry.binding as u64, Some(buf), 0);
+                        resources.push(MetalResource::Buffer(buf.clone()));
+                    },
+                    pipeline_provider::MetalResource::Texture(tex) => {
+                        encoder.set_texture(entry.binding as u64, Some(tex));
+                        resources.push(MetalResource::Texture(tex.clone()));
+                    },
+                    pipeline_provider::MetalResource::Sampler(samp) => {
+                        encoder.set_sampler_state(entry.binding as u64, Some(samp));
+                    }
+                }
+            }
+        }
+        
+        let grid_size = MTLSize { width: groups[0] as u64, height: groups[1] as u64, depth: groups[2] as u64 };
+        let threadgroup_size = MTLSize { width: 64, height: 1, depth: 1 };
+        
+        encoder.dispatch_thread_groups(grid_size, threadgroup_size);
+        encoder.end_encoding();
+        Ok(())
+    }
 
     fn draw_particles(&mut self, pipeline: &Self::RenderPipeline, bind_group: &Self::BindGroup, particle_count: u32) -> Result<(), String> {
         self.end_current_encoder();
@@ -1152,36 +1520,42 @@ impl GpuExecutor for MetalBackend {
     fn get_velocity_texture(&self) -> Option<Self::Texture> { self.velocity_texture.clone() }
     fn get_depth_texture(&self) -> Option<Self::Texture> { self.depth_texture.clone() }
     fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout { 
-        static DUMMY: MetalBindGroupLayout = MetalBindGroupLayout { entries: Vec::new() };
+        static DUMMY: pipeline_provider::MetalBindGroupLayout = pipeline_provider::MetalBindGroupLayout { entries: Vec::new() };
         &DUMMY
     }
     fn get_instanced_bind_group_layout(&self) -> &Self::BindGroupLayout { 
-        static DUMMY: MetalBindGroupLayout = MetalBindGroupLayout { entries: Vec::new() };
+        static DUMMY: pipeline_provider::MetalBindGroupLayout = pipeline_provider::MetalBindGroupLayout { entries: Vec::new() };
         &DUMMY
     }
+    fn get_culling_bind_group_layout(&self) -> &Self::BindGroupLayout { 
+        static DUMMY: pipeline_provider::MetalBindGroupLayout = pipeline_provider::MetalBindGroupLayout { entries: Vec::new() };
+        &DUMMY
+    }
+    fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
     fn get_default_render_pipeline(&self) -> &Self::RenderPipeline { &self.main_pipeline }
     fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline { &self.instanced_pipeline }
     fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline { &self.instanced_gbuffer_pipeline }
+    fn get_culling_pipeline(&self) -> &Self::ComputePipeline { &self.culling_pipeline }
     fn set_reflection_texture(&mut self, t: &Self::TextureView) -> Result<(), String> { self.reflection_texture = Some(t.clone()); Ok(()) }
     fn set_velocity_view(&mut self, v: &Self::TextureView) -> Result<(), String> { self.velocity_texture = Some(v.clone()); Ok(()) }
     fn set_sdf_view(&mut self, v: &Self::TextureView) -> Result<(), String> { self.sdf_texture = Some(v.clone()); Ok(()) }
-    fn get_default_sampler(&self) -> &Self::Sampler { &self.sampler }
     fn get_dummy_storage_buffer(&self) -> &Self::Buffer { &self.dummy_storage_buffer }
     fn resolve(&mut self) -> Result<(), String> {
-        // Now delegating to draw_post_process_pass if called via old HAL flow
         let hdr = self.hdr_texture.clone();
         if let Some(tex) = hdr {
-             self.draw_post_process_pass(&tex, None)
-        } else {
-             Ok(())
+             self.draw_post_process_pass(&tex, None)?;
         }
+        Ok(())
     }
 
     fn draw_post_process_pass(&mut self, input_view: &Self::TextureView, output_view: Option<&Self::TextureView>) -> Result<(), String> {
         self.end_current_encoder();
-        
         let cb_guard = self.current_command_buffer.lock().unwrap();
-        let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
+        let cb_wrapper = cb_guard.as_ref().ok_or("No active command buffer")?;
+        let _cb: id = cb_wrapper.0.as_ptr() as id;
+        let cb_ref = &cb_wrapper.0;
+
+        // 1. Bloom Setup
 
         // 1. Bloom Bright Pass
         if let Some(bright_tex) = &self.bloom_textures[0] {
@@ -1191,7 +1565,9 @@ impl GpuExecutor for MetalBackend {
             ca.set_load_action(MTLLoadAction::Clear);
             ca.set_store_action(MTLStoreAction::Store);
             
-            let encoder = cb.new_render_command_encoder(desc);
+            let encoder = cb_ref.new_render_command_encoder(desc);
+            let viewport = MTLViewport { originX: 0.0, originY: 0.0, width: bright_tex.width() as f64, height: bright_tex.height() as f64, znear: 0.0, zfar: 1.0 };
+            encoder.set_viewport(viewport);
             encoder.set_render_pipeline_state(&self.bright_pipeline);
             encoder.set_fragment_texture(0, Some(input_view));
             encoder.set_fragment_sampler_state(0, Some(&self.sampler));
@@ -1208,7 +1584,9 @@ impl GpuExecutor for MetalBackend {
                 ca.set_load_action(MTLLoadAction::Clear);
                 ca.set_store_action(MTLStoreAction::Store);
                 
-                let encoder = cb.new_render_command_encoder(desc);
+                let encoder = cb_ref.new_render_command_encoder(desc);
+                let viewport = MTLViewport { originX: 0.0, originY: 0.0, width: blur_h_tex.width() as f64, height: blur_h_tex.height() as f64, znear: 0.0, zfar: 1.0 };
+                encoder.set_viewport(viewport);
                 encoder.set_render_pipeline_state(&self.blur_pipeline);
                 encoder.set_fragment_texture(0, Some(bright_tex));
                 encoder.set_fragment_sampler_state(0, Some(&self.sampler));
@@ -1233,7 +1611,7 @@ impl GpuExecutor for MetalBackend {
                 ca.set_load_action(MTLLoadAction::Clear);
                 ca.set_store_action(MTLStoreAction::Store);
                 
-                let encoder = cb.new_render_command_encoder(desc);
+                let encoder = cb_ref.new_render_command_encoder(desc);
                 encoder.set_render_pipeline_state(&self.blur_pipeline);
                 encoder.set_fragment_texture(0, Some(blur_h_tex));
                 encoder.set_fragment_sampler_state(0, Some(&self.sampler));
@@ -1256,11 +1634,18 @@ impl GpuExecutor for MetalBackend {
         if let Some(out) = output_view {
             color.set_texture(Some(out));
         } else {
-            let d_wrapper = self.current_drawable.lock().unwrap();
-            let drawable = d_wrapper.as_ref().ok_or("No drawable")?.0;
-            unsafe {
-                let tex_ptr: id = msg_send![drawable, texture];
-                color.set_texture(Some(&*(tex_ptr as *mut TextureRef)));
+            let d_wrapper_opt = self.current_drawable.lock().unwrap();
+            if let Some(d_wrapper) = &*d_wrapper_opt {
+                let drawable = d_wrapper.0;
+                unsafe {
+                    let tex_id: id = msg_send![drawable, texture];
+                    if tex_id != std::ptr::null_mut() {
+                        let texture = metal::Texture::from_ptr(tex_id as *mut _);
+                        color.set_texture(Some(&texture));
+                    } else {
+                        eprintln!("Resolve Drawable Texture is NIL");
+                    }
+                }
             }
         }
         
@@ -1268,38 +1653,17 @@ impl GpuExecutor for MetalBackend {
         color.set_clear_color(MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
         color.set_store_action(MTLStoreAction::Store);
 
-        let encoder = cb.new_render_command_encoder(descriptor);
-        encoder.set_render_pipeline_state(&self.resolve_bloom_pipeline);
-        
+        // BYPASS RESOLVE WITH BLIT
+        let encoder = cb_ref.new_render_command_encoder(descriptor);
+        let viewport = MTLViewport { originX: 0.0, originY: 0.0, width: input_view.width() as f64, height: input_view.height() as f64, znear: 0.0, zfar: 1.0 };
+        encoder.set_viewport(viewport);
+        encoder.set_render_pipeline_state(&self.resolve_pipeline);
         encoder.set_fragment_texture(0, Some(input_view));
-        if let Some(bloom) = &self.bloom_textures[2] {
-            encoder.set_fragment_texture(1, Some(bloom));
-        }
-        if let Some(lut) = &self.lut_texture {
-             // In MSL, slot 2 is for LUT (texture3d)
-             encoder.set_fragment_texture(2, Some(lut));
-        }
-        
-        // Pass extra textures (velocity, reflection, aux, extra, sdf)
-        if let Some(tex) = &self.velocity_texture { encoder.set_fragment_texture(3, Some(tex)); }
-        else { encoder.set_fragment_texture(3, Some(&self.dummy_velocity_texture)); }
-        
-        if let Some(tex) = &self.reflection_texture { encoder.set_fragment_texture(4, Some(tex)); }
-        else { encoder.set_fragment_texture(4, Some(&self.dummy_velocity_texture)); }
-        
-        encoder.set_fragment_texture(5, Some(&self.dummy_velocity_texture)); // Aux dummy
-        encoder.set_fragment_texture(6, Some(&self.dummy_velocity_texture)); // Extra dummy
-        
-        if let Some(tex) = &self.sdf_texture { encoder.set_fragment_texture(7, Some(tex)); }
-        else { encoder.set_fragment_texture(7, Some(&self.dummy_velocity_texture)); }
-
         encoder.set_fragment_sampler_state(0, Some(&self.sampler));
         encoder.set_fragment_buffer(2, Some(&self.cinematic_buffer), 0);
-        
         encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
         encoder.end_encoding();
-        
-        Ok(())
+        return Ok(());
     }
     fn present(&self) -> Result<(), String> { Ok(()) }
     fn y_flip(&self) -> bool { false }
@@ -1312,24 +1676,30 @@ impl GpuExecutor for MetalBackend {
         if let Some(src_tex) = &self.hdr_texture {
              self.end_current_encoder();
              unsafe {
+                println!("DEBUG: draw_lighting_pass requesting cb lock");
                 let cb_guard = self.current_command_buffer.lock().unwrap();
+                println!("DEBUG: draw_lighting_pass got cb lock");
                 let cb_wrapper = cb_guard.as_ref().ok_or("No active command buffer")?;
+                println!("DEBUG: draw_lighting_pass got cb wrapper");
                 let cb: id = cb_wrapper.0.as_ptr() as id;
                 
+                println!("DEBUG: draw_lighting_pass calling blitCreation");
                 let blit: id = msg_send![cb, blitCommandEncoder];
+                println!("DEBUG: draw_lighting_pass created blit: {:?}", blit as *mut std::ffi::c_void);
                 
                 let origin = MTLOrigin { x: 0, y: 0, z: 0 };
                 let size = MTLSize { width: src_tex.width(), height: src_tex.height(), depth: 1 };
                 
                 let _: () = msg_send![blit, copyFromTexture: src_tex.as_ptr() as id
-                                          sourceSlice: 0
-                                          sourceLevel: 0
+                                          sourceSlice: 0 as usize
+                                          sourceLevel: 0 as usize
                                           sourceOrigin: origin
                                           sourceSize: size
                                           toTexture: output_view.as_ptr() as id
-                                          destinationSlice: 0
-                                          destinationLevel: 0
+                                          destinationSlice: 0 as usize
+                                          destinationLevel: 0 as usize
                                           destinationOrigin: origin];
+                println!("DEBUG: blit copy successful");
                 
                 let _: () = msg_send![blit, endEncoding];
              }
@@ -1377,19 +1747,70 @@ impl GpuExecutor for MetalBackend {
                 let size = MTLSize { width: input.width(), height: input.height(), depth: 1 };
                 
                 let _: () = msg_send![blit, copyFromTexture: input.as_ptr() as id
-                                          sourceSlice: 0
-                                          sourceLevel: 0
+                                          sourceSlice: 0 as usize
+                                          sourceLevel: 0 as usize
                                           sourceOrigin: origin
                                           sourceSize: size
                                           toTexture: output.as_ptr() as id
-                                          destinationSlice: 0
-                                          destinationLevel: 0
+                                          destinationSlice: 0 as usize
+                                          destinationLevel: 0 as usize
                                           destinationOrigin: origin];
                 
                 let _: () = msg_send![blit, endEncoding];
              }
              Ok(())
         }
+    }
+
+    fn draw_bloom_pass(&mut self, _input_view: &Self::TextureView) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn draw_dof_pass(&mut self, hdr_view: &Self::TextureView, depth_view: &Self::TextureView, output_view: &Self::TextureView) -> Result<(), String> {
+        self.end_current_encoder();
+        let cb_guard = self.current_command_buffer.lock().unwrap();
+        let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
+
+        let descriptor = RenderPassDescriptor::new();
+        let color = descriptor.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(output_view));
+        color.set_load_action(MTLLoadAction::Clear);
+        color.set_store_action(MTLStoreAction::Store);
+
+        let encoder = cb.new_render_command_encoder(descriptor);
+        let viewport = MTLViewport { originX: 0.0, originY: 0.0, width: output_view.width() as f64, height: output_view.height() as f64, znear: 0.0, zfar: 1.0 };
+        encoder.set_viewport(viewport);
+        encoder.set_render_pipeline_state(&self.dof_pipeline);
+        encoder.set_fragment_texture(0, Some(hdr_view));
+        encoder.set_fragment_texture(1, Some(depth_view));
+        encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+        encoder.set_fragment_buffer(0, Some(&self.cinematic_buffer), 0);
+        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+        encoder.end_encoding();
+        Ok(())
+    }
+
+    fn draw_flare_pass(&mut self, hdr_view: &Self::TextureView, output_view: &Self::TextureView) -> Result<(), String> {
+        self.end_current_encoder();
+        let cb_guard = self.current_command_buffer.lock().unwrap();
+        let cb = &cb_guard.as_ref().ok_or("No command buffer")?.0;
+
+        let descriptor = RenderPassDescriptor::new();
+        let color = descriptor.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(output_view));
+        color.set_load_action(MTLLoadAction::Clear);
+        color.set_store_action(MTLStoreAction::Store);
+
+        let encoder = cb.new_render_command_encoder(descriptor);
+        let viewport = MTLViewport { originX: 0.0, originY: 0.0, width: output_view.width() as f64, height: output_view.height() as f64, znear: 0.0, zfar: 1.0 };
+        encoder.set_viewport(viewport);
+        encoder.set_render_pipeline_state(&self.flare_pipeline);
+        encoder.set_fragment_texture(0, Some(hdr_view));
+        encoder.set_fragment_sampler_state(0, Some(&self.sampler));
+        encoder.set_fragment_buffer(0, Some(&self.cinematic_buffer), 0);
+        encoder.draw_primitives(MTLPrimitiveType::Triangle, 0, 3);
+        encoder.end_encoding();
+        Ok(())
     }
 }
 
@@ -1400,10 +1821,12 @@ impl MetalBackend {
         let bytes_per_pixel = 4;
         let bytes_per_row = width * bytes_per_pixel;
         let data_size = bytes_per_row * height;
+        
+        // println!("DEBUG: perform_screenshot capturing texture {}x{}", width, height);
 
-        println!("DEBUG: perform_screenshot called for {} ({}x{})", path, width, height);
         let cpu_buffer = self.device.new_buffer(data_size, MTLResourceOptions::StorageModeShared);
         let blit_encoder = command_buffer.new_blit_command_encoder();
+        
         blit_encoder.copy_from_texture_to_buffer(
             texture, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 },
             MTLSize { width, height, depth: 1 },
@@ -1411,25 +1834,27 @@ impl MetalBackend {
             metal::MTLBlitOption::None
         );
         blit_encoder.end_encoding();
-
-        let path = path.to_string();
-        let block = ConcreteBlock::new(move |cb: &CommandBufferRef| {
-            println!("DEBUG: Screenshot CommandBuffer completed for {} with status {:?}", path, cb.status());
-            if cb.status() == MTLCommandBufferStatus::Completed {
-                let ptr = cpu_buffer.contents() as *const u8;
-                let mut data = vec![0u8; data_size as usize];
-                unsafe { std::ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), data_size as usize); }
-                let mut img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width as u32, height as u32, data).unwrap();
-                for pixel in img.pixels_mut() { pixel.0.swap(0, 2); } // BGRA to RGBA
-                match img.save(&path) {
-                    Ok(_) => println!("DEBUG: Screenshot saved successfully to {}", path),
-                    Err(e) => println!("DEBUG: Failed to save screenshot: {}", e),
-                }
-            } else {
-                println!("DEBUG: Screenshot CommandBuffer failed or cancelled.");
+        
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        
+        let ptr = cpu_buffer.contents() as *const u8;
+        let mut data = vec![0u8; data_size as usize];
+        unsafe { std::ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), data_size as usize); }
+        
+        if let Some(mut img) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width as u32, height as u32, data) {
+            // BGRA swizzle
+            for pixel in img.pixels_mut() {
+                let p = pixel.0;
+                pixel.0 = [p[2], p[1], p[0], p[3]];
             }
-        });
-        command_buffer.add_completed_handler(&block.copy());
+            match img.save(path) {
+                Ok(_) => println!("Screenshot saved to {}", path),
+                Err(e) => eprintln!("Failed to save screenshot: {}", e),
+            }
+        } else {
+            eprintln!("Failed to create ImageBuffer from raw data");
+        }
         Ok(())
     }
 }

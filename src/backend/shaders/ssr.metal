@@ -1,18 +1,8 @@
 // ssr.metal - Screen-space reflections shader
-// Note: This file is concatenated with metal_shader.metal, so GlobalUniforms, VertexOut, etc. are already defined
+// Note: This file is concatenated with metal_shader.metal, so GlobalUniforms, ResolveVertexOut, etc. are already defined
 
 
-vertex VertexOut vs_ssr(uint vid [[vertex_id]]) {
-    float x = (float)(vid / 2) * 4.0 - 1.0;
-    float y = (float)(vid % 2) * 4.0 - 1.0;
-    
-    VertexOut out;
-    out.position = float4(x, y, 0.0, 1.0);
-    out.uv = float2((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-
-fragment float4 fs_ssr(VertexOut in [[stage_in]],
+fragment float4 fs_ssr(ResolveVertexOut in [[stage_in]],
                       constant GlobalUniforms &glob [[buffer(0)]],
                       texture2d<float> t_hdr [[texture(0)]],
                       texture2d<float> t_depth [[texture(1)]],

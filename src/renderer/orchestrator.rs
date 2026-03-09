@@ -4,11 +4,13 @@ use crate::renderer::graph::{
     RenderGraph, 
     HDR_HANDLE, BACKDROP_HANDLE, VELOCITY_HANDLE, AUX_HANDLE, 
     DEPTH_HANDLE, REFLECTION_HANDLE, EXTRA_HANDLE, SDF_HANDLE,
-    SDF_TEMP_A_HANDLE, SDF_TEMP_B_HANDLE, 
+    SDF_TEMP_A_HANDLE, SDF_TEMP_B_HANDLE, DOF_HANDLE, FLARE_HANDLE,
 };
-use crate::renderer::nodes::geometry::{GeometryNode};
+use crate::renderer::nodes::geometry::GeometryNode;
 use crate::renderer::nodes::postprocess::{ResolveNode};
 use crate::renderer::nodes::ssr::SSRNode;
+use crate::renderer::nodes::dof::DoFNode;
+use crate::renderer::nodes::flare::LensFlareNode;
 use crate::renderer::nodes::particles::{ParticleNode, ParticleSystem};
 use std::sync::{Arc, Mutex};
 
@@ -88,6 +90,30 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         let internal_width = (width as f32 * scale) as u32;
         let internal_height = (height as f32 * scale) as u32;
 
+        self.graph.resources.insert(HDR_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("HDR Full Res"), width: internal_width, height: internal_height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_SRC,
+        }));
+        
+        self.graph.resources.insert(AUX_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("Aux Buffer (Normals/Roughness)"), width: internal_width, height: internal_height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+        }));
+
+        self.graph.resources.insert(VELOCITY_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("Velocity Buffer"), width: internal_width, height: internal_height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rg16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+        }));
+
+        self.graph.resources.insert(DEPTH_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("Depth Buffer"), width: internal_width, height: internal_height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Depth32Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+        }));
+
         // 5. Lighting Pass
         self.graph.resources.insert(crate::renderer::graph::HDR_LOW_RES_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
             label: Some("HDR Low Res"), width: internal_width, height: internal_height, depth: 1,
@@ -103,7 +129,25 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
 
         self.graph.add_node(crate::renderer::nodes::lighting::LightingNode);
         self.graph.add_node(crate::renderer::nodes::upscale::UpscaleNode);
+
+        // --- DoF Pass ---
+        self.graph.resources.insert(DOF_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("DoF Buffer"), width, height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+        }));
+        self.graph.add_node(DoFNode);
+
         self.graph.add_node(crate::renderer::nodes::bloom::BloomNode);
+
+        // --- Lens Flare Pass ---
+        self.graph.resources.insert(FLARE_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+            label: Some("Flare Buffer"), width, height, depth: 1,
+            format: crate::backend::hal::TextureFormat::Rgba16Float,
+            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+        }));
+        self.graph.add_node(LensFlareNode);
+
         self.graph.add_node(crate::renderer::nodes::post::PostProcessNode);
     }
 

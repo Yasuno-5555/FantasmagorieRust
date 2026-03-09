@@ -9,7 +9,7 @@ impl<E: GpuExecutor> RenderNode<E> for PostProcessNode {
         
         // Input is HDR_HIGH_RES (upscaled)
         use crate::renderer::graph::{GraphResource};
-        if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&HDR_HIGH_RES_HANDLE) {
+        if let Some(GraphResource::Texture(_, tex)) = ctx.resources.get(&crate::renderer::graph::FLARE_HANDLE) {
             let view = ctx.executor.create_texture_view(tex)?;
             // Set this as the "HDR" texture for the backend resolve
             ctx.executor.set_hdr_view(&view)?;
