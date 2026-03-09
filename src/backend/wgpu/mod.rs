@@ -1,4 +1,4 @@
-﻿use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use crate::draw::DrawList;
 use crate::backend::GraphicsBackend;
 use crate::backend::hal::{GpuExecutor, BufferUsage, TextureDescriptor, TextureUsage, TextureFormat};
@@ -173,6 +173,8 @@ pub struct WgpuBackend {
     pub tracea_context: crate::tracea_bridge::TraceaContext,
     pub tracea_particle_cache: Mutex<Option<crate::tracea_bridge::TraceaParticleKernel>>,
     pub tracea_fft_kernel: Mutex<Option<crate::tracea_bridge::TraceaFFTKernel>>,
+    pub tracea_visibility_kernel: Mutex<Option<crate::tracea_bridge::TraceaVisibilityKernel>>,
+    pub tracea_indirect_kernel: Mutex<Option<crate::tracea_bridge::TraceaIndirectKernel>>,
     pub audio_data: Vec<f32>,
     
     // Resolution & Jitter
@@ -511,6 +513,40 @@ impl GpuExecutor for WgpuBackend {
         Ok(())
     }
 
+    fn get_hzb_view(&self) -> &Self::TextureView {
+        &self.depth_view
+    }
+
+    fn supports_indirect_draw(&self) -> bool {
+        true
+    }
+
+    fn dispatch(&self, pipeline: &Self::ComputePipeline, bind_group: Option<&Self::BindGroup>, groups: [u32; 3], _push_constants: &[u8]) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Compute Dispatch"),
+            timestamp_writes: None,
+        });
+        cpass.set_pipeline(pipeline);
+        if let Some(bg) = bind_group { cpass.set_bind_group(0, bg, &[]); }
+        cpass.dispatch_workgroups(groups[0], groups[1], groups[2]);
+        Ok(())
+    }
+
+    fn dispatch_indirect(&self, pipeline: &Self::ComputePipeline, bind_group: Option<&Self::BindGroup>, indirect_buffer: &Self::Buffer, indirect_offset: u64) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Indirect Compute Dispatch"),
+            timestamp_writes: None,
+        });
+        cpass.set_pipeline(pipeline);
+        if let Some(bg) = bind_group { cpass.set_bind_group(0, bg, &[]); }
+        cpass.dispatch_workgroups_indirect(indirect_buffer, indirect_offset);
+        Ok(())
+    }
+
     fn draw(&self, pipeline: &Self::RenderPipeline, bind_group: Option<&Self::BindGroup>, vertex_buffer: &Self::Buffer, vertex_count: u32, _uniform_data: &[u8]) -> Result<(), String> {
         let mut encoder_guard = self.current_encoder.lock().unwrap();
         let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
@@ -558,6 +594,71 @@ impl GpuExecutor for WgpuBackend {
         if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
         rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
         rpass.draw(0..vertex_count, 0..instance_count);
+        Ok(())
+    }
+
+    fn dispatch_indirect_command(&self, counter_buffer: &Self::Buffer, draw_commands: &Self::Buffer) -> Result<(), String> {
+        let mut kernel_lock = self.tracea_indirect_kernel.lock().unwrap();
+        if kernel_lock.is_none() {
+            *kernel_lock = Some(crate::tracea_bridge::TraceaIndirectKernel::new_wgpu(&self.tracea_context)?);
+        }
+        
+        if let Some(kernel) = kernel_lock.as_ref() {
+            kernel.dispatch(&self.tracea_context, counter_buffer)?;
+            // Copy generated commands to the target buffer
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Indirect Copy") });
+            encoder.copy_buffer_to_buffer(kernel.draw_commands(), 0, draw_commands, 0, 16); // 16 bytes for 1 command
+            self.queue.submit(Some(encoder.finish()));
+            return Ok(());
+        }
+        Err("Indirect kernel not available".into())
+    }
+
+    fn dispatch_visibility(
+        &self,
+        projection: [[f32; 4]; 4],
+        num_instances: u32,
+        instances: &Self::Buffer,
+        hzb: &Self::TextureView,
+        visible_indices: &Self::Buffer,
+        visible_counter: &Self::Buffer,
+    ) -> Result<(), String> {
+        let mut kernel_lock = self.tracea_visibility_kernel.lock().unwrap();
+        if kernel_lock.is_none() {
+            *kernel_lock = Some(crate::tracea_bridge::TraceaVisibilityKernel::new_wgpu(&self.tracea_context)?);
+        }
+        
+        if let Some(kernel) = kernel_lock.as_ref() {
+            let uniforms = crate::tracea_bridge::visibility::CullingUniforms {
+                view_proj: projection,
+                num_instances,
+                hzb_mip_levels: 1, 
+                _pad: [0, 0],
+            };
+            kernel.dispatch(&self.tracea_context, &uniforms, instances, hzb, visible_indices, visible_counter)?;
+            return Ok(());
+        }
+        Err("Visibility kernel not available".into())
+    }
+
+    fn draw_instanced_indirect(&self, pipeline: &Self::RenderPipeline, bind_group: Option<&Self::BindGroup>, vertex_buffer: &Self::Buffer, indirect_buffer: &Self::Buffer, indirect_offset: u64) -> Result<(), String> {
+        let mut encoder_guard = self.current_encoder.lock().unwrap();
+        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Indirect Instanced Geometry Draw"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.hdr_view,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        rpass.set_pipeline(pipeline);
+        if let Some(bg) = bind_group { rpass.set_bind_group(0, bg, &[]); }
+        rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        rpass.draw_indirect(indirect_buffer, indirect_offset);
         Ok(())
     }
 
@@ -805,16 +906,6 @@ impl GpuExecutor for WgpuBackend {
         rpass.set_pipeline(pipeline);
         rpass.set_bind_group(0, bind_group, &[]);
         rpass.draw(0..4, 0..particle_count); 
-        Ok(())
-    }
-
-    fn dispatch(&self, pipeline: &Self::ComputePipeline, bind_group: Option<&Self::BindGroup>, groups: [u32; 3], _push_constants: &[u8]) -> Result<(), String> {
-        let mut encoder_guard = self.current_encoder.lock().unwrap();
-        let encoder = encoder_guard.as_mut().ok_or("No active encoder")?;
-        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("Compute Task"), timestamp_writes: None });
-        cpass.set_pipeline(pipeline);
-        if let Some(bg) = bind_group { cpass.set_bind_group(0, bg, &[]); }
-        cpass.dispatch_workgroups(groups[0], groups[1], groups[2]);
         Ok(())
     }
 
@@ -1717,6 +1808,7 @@ impl WgpuBackend {
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Font
                 wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { multisampled: false, view_dimension: wgpu::TextureViewDimension::D2, sample_type: wgpu::TextureSampleType::Float { filterable: true } }, count: None }, // Backdrop
                 wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }, // Sampler
+                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::VERTEX, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None }, // Visible Indices
             ],
         });
 
@@ -2640,6 +2732,8 @@ impl WgpuBackend {
             tracea_context,
             tracea_particle_cache: Mutex::new(None),
             tracea_fft_kernel: Mutex::new(None),
+            tracea_visibility_kernel: Mutex::new(None),
+            tracea_indirect_kernel: Mutex::new(None),
             audio_data: Vec::new(),
 
             device: device.clone(),

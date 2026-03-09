@@ -1,4 +1,4 @@
-﻿//! Hardware Abstraction Layer (HAL) for GPU Backends
+//! Hardware Abstraction Layer (HAL) for GPU Backends
 //! 
 //! This module defines the common traits and types that all Fantasmagorie backends
 //! must implement to ensure structural parity and modularity.
@@ -16,6 +16,7 @@ impl BufferUsage {
     pub const Storage: Self = Self(1 << 3);
     pub const CopySrc: Self = Self(1 << 4);
     pub const CopyDst: Self = Self(1 << 5);
+    pub const Indirect: Self = Self(1 << 6);
     
     pub fn contains(&self, other: Self) -> bool {
         (self.0 & other.0) == other.0
@@ -180,6 +181,43 @@ pub trait GpuExecutor: Send + Sync {
         push_constants: &[u8],
     ) -> Result<(), String>;
 
+    /// Dispatch a compute kernel with indirect parameters
+    fn dispatch_indirect(
+        &self,
+        pipeline: &Self::ComputePipeline,
+        bind_group: Option<&Self::BindGroup>,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
+    ) -> Result<(), String>;
+
+    /// Dispatch Tracea Visibility Kernel (GPU Culling)
+    fn dispatch_visibility(
+        &self,
+        projection: [[f32; 4]; 4],
+        num_instances: u32,
+        instances: &Self::Buffer,
+        hzb: &Self::TextureView,
+        visible_indices: &Self::Buffer,
+        visible_counter: &Self::Buffer,
+    ) -> Result<(), String>;
+
+    /// Dispatch Tracea Indirect Kernel (Command Generation)
+    fn dispatch_indirect_command(
+        &self,
+        counter_buffer: &Self::Buffer,
+        draw_commands: &Self::Buffer,
+    ) -> Result<(), String>;
+
+    /// Perform an instanced draw call with indirect parameters
+    fn draw_instanced_indirect(
+        &self,
+        pipeline: &Self::RenderPipeline,
+        bind_group: Option<&Self::BindGroup>,
+        vertex_buffer: &Self::Buffer,
+        indirect_buffer: &Self::Buffer,
+        indirect_offset: u64,
+    ) -> Result<(), String>;
+
     /// Copy texture content
     fn copy_texture(
         &self,
@@ -212,9 +250,15 @@ pub trait GpuExecutor: Send + Sync {
 
     /// Check if Tracea particles are supported
     fn supports_tracea_particles(&self) -> bool { false }
+
+    /// Get HZB (Hierarchical Z-Buffer) view for occlusion culling
+    fn get_hzb_view(&self) -> &Self::TextureView;
     
     /// Check if native tilemap rendering is supported
     fn supports_tilemap(&self) -> bool { false }
+
+    /// Check if indirect draw / GPU-driven rendering is supported
+    fn supports_indirect_draw(&self) -> bool { false }
 
     /// Draw a tilemap using native support
     fn draw_tilemap(

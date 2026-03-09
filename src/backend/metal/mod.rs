@@ -812,6 +812,63 @@ impl GpuExecutor for MetalBackend {
         Ok(())
     }
 
+    fn dispatch(&self, pipeline: &Self::ComputePipeline, bind_group: Option<&Self::BindGroup>, groups: [u32; 3], _push_constants: &[u8]) -> Result<(), String> {
+        let command_buffer_guard = self.current_command_buffer.lock().unwrap();
+        let command_buffer = &command_buffer_guard.as_ref().ok_or("No command buffer")?.0;
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        if let Some(bg) = bind_group {
+            for entry in &bg.entries {
+                match &entry.resource {
+                    pipeline_provider::MetalResource::Buffer(buf) => {
+                        encoder.set_buffer(entry.binding as u64, Some(buf), 0);
+                    },
+                    pipeline_provider::MetalResource::Texture(tex) => {
+                        encoder.set_texture(entry.binding as u64, Some(tex));
+                    },
+                    pipeline_provider::MetalResource::Sampler(samp) => {
+                        encoder.set_sampler_state(entry.binding as u64, Some(samp));
+                    },
+                }
+            }
+        }
+        let grid_size = MTLSize { width: groups[0] as u64, height: groups[1] as u64, depth: groups[2] as u64 };
+        let thread_group_size = MTLSize { width: 64, height: 1, depth: 1 }; // Default
+        encoder.dispatch_thread_groups(grid_size, thread_group_size);
+        encoder.end_encoding();
+        Ok(())
+    }
+
+    fn dispatch_indirect(&self, _pipeline: &Self::ComputePipeline, _bind_group: Option<&Self::BindGroup>, _indirect_buffer: &Self::Buffer, _indirect_offset: u64) -> Result<(), String> {
+        // TODO: Implement indirect dispatch for Metal
+        Ok(())
+    }
+
+    fn draw_instanced_indirect(&self, _pipeline: &Self::RenderPipeline, _bind_group: Option<&Self::BindGroup>, _vertex_buffer: &Self::Buffer, _indirect_buffer: &Self::Buffer, _indirect_offset: u64) -> Result<(), String> {
+        // TODO: Metal drawIndexedPrimitivesWithOptions:indirectBuffer:indirectBufferOffset:
+        Err("Metal draw_instanced_indirect not implemented".into())
+    }
+
+    fn dispatch_visibility(
+        &self,
+        _projection: [[f32; 4]; 4],
+        _num_instances: u32,
+        _instances: &Self::Buffer,
+        _hzb: &Self::TextureView,
+        _visible_indices: &Self::Buffer,
+        _visible_counter: &Self::Buffer,
+    ) -> Result<(), String> {
+        Err("Metal visibility kernel not implemented".into())
+    }
+
+    fn dispatch_indirect_command(
+        &self,
+        _counter_buffer: &Self::Buffer,
+        _draw_commands: &Self::Buffer,
+    ) -> Result<(), String> {
+        Err("Metal indirect kernel not implemented".into())
+    }
+
     fn draw_instanced_gbuffer(&mut self, pipeline: &Self::RenderPipeline, bind_group: Option<&Self::BindGroup>, vertex_buffer: &Self::Buffer, instance_buffer: &Self::Buffer, vertex_count: u32, instance_count: u32, aux_view: &Self::TextureView, velocity_view: &Self::TextureView, depth_view: &Self::TextureView) -> Result<(), String> {
         self.end_current_encoder();
         let d_wrapper = self.current_drawable.lock().unwrap();

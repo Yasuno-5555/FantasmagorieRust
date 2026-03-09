@@ -1,4 +1,4 @@
-﻿use crate::core::Vec2;
+use crate::core::Vec2;
 use crate::backend::GraphicsBackend;
 use crate::config::{EngineConfig, Profile, Pipeline};
 use super::frame::{FrameDescription, RenderCommand};
@@ -143,6 +143,7 @@ impl Renderer {
     fn transmute_to_drawlist(&mut self, frame: &FrameDescription, dl: &mut crate::draw::DrawList) {
         use crate::draw::DrawCommand;
         let mut active_camera: Option<&super::camera::Camera> = None;
+        let mut transform_stack = vec![Transform2D::identity()];
 
         for cmd in &frame.commands {
             match cmd {
@@ -152,7 +153,12 @@ impl Renderer {
                 RenderCommand::EndWorld => {
                     active_camera = None;
                 }
+                RenderCommand::SetTransform(t) => {
+                    transform_stack.push(*t);
+                    dl.push_transform(*t);
+                }
                 RenderCommand::DrawQuad { rect, color: c } => {
+                    let current_transform = transform_stack.last().unwrap();
                     let (pos, size) = if let Some(cam) = active_camera {
                         let p = cam.world_to_screen(rect.pos());
                         let s = rect.size() * cam.zoom;
@@ -234,6 +240,12 @@ impl Renderer {
                 RenderCommand::SetScissor(rect) => {
                     dl.push_clip(rect.pos(), rect.size());
                 }
+                RenderCommand::PushBlendMode(mode) => {
+                    dl.push_blend_mode(*mode);
+                }
+                RenderCommand::PopBlendMode => {
+                    dl.pop_blend_mode();
+                }
                 // ... handle other commands like transformations or mesh draws ...
                 _ => {}
             }
@@ -273,7 +285,7 @@ impl Renderer {
 
 pub struct FrameContext {
     description: FrameDescription,
-    current_transform: Transform2D,
+    transform_stack: Vec<Transform2D>,
     current_scissor: Rect,
 }
 
@@ -281,7 +293,7 @@ impl FrameContext {
     fn new() -> Self {
         Self {
             description: FrameDescription::new(),
-            current_transform: Transform2D::identity(),
+            transform_stack: vec![Transform2D::identity()],
             current_scissor: Rect::new(0.0, 0.0, 8192.0, 8192.0),
         }
     }
@@ -321,8 +333,24 @@ impl FrameContext {
     }
 
     pub fn set_transform(&mut self, transform: Transform2D) {
-        self.current_transform = transform;
+        self.transform_stack.push(transform);
         self.description.commands.push(RenderCommand::SetTransform(transform));
+    }
+
+    pub fn pop_transform(&mut self) {
+        if self.transform_stack.len() > 1 {
+            self.transform_stack.pop();
+            let last = *self.transform_stack.last().unwrap();
+            self.description.commands.push(RenderCommand::SetTransform(last));
+        }
+    }
+
+    pub fn set_blend_mode(&mut self, mode: crate::draw::blend::BlendMode) {
+        self.description.commands.push(RenderCommand::PushBlendMode(mode));
+    }
+
+    pub fn pop_blend_mode(&mut self) {
+        self.description.commands.push(RenderCommand::PopBlendMode);
     }
 
     pub fn set_scissor(&mut self, rect: Rect) {

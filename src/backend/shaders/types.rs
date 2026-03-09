@@ -1,4 +1,4 @@
-﻿//! Shared shader types and uniform structures
+//! Shared shader types and uniform structures
 //! 
 //! Design principles:
 //! - Uniform structures split to respect Push Constants 128B limit
@@ -110,6 +110,8 @@ pub struct ShapeInstance {
     pub material: [f32; 4],
     /// normal_map_id (i32), distortion, emissive_intensity, parallax_factor
     pub pbr_params: [f32; 4],
+    /// 3x2 Transform Matrix (12 bytes, padded to 16 for alignment if needed, but here we use [f32; 12] for 3x3)
+    pub transform: [f32; 12],
 }
 
 /// Per-draw uniforms - legacy/fallback path
@@ -121,8 +123,7 @@ pub struct DrawUniforms {
     pub radii: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
-    pub offset: [f32; 2],
-    pub scale: f32,
+    pub transform: [f32; 12], // 3x3 matrix (column-major, padded)
     pub border_width: f32,
     pub elevation: f32,
     pub glow_strength: f32,
@@ -130,7 +131,9 @@ pub struct DrawUniforms {
     pub mode: i32,
     pub is_squircle: i32,
     pub time: f32,
+    pub blend_mode: i32,
     pub viewport_size: [f32; 2],
+    pub _pad: [f32; 2],
 }
 // Total: 16*4 + 8 + 4*7 + 4 = 104 bytes ✅ Under 128B limit
 

@@ -8,6 +8,7 @@ use bytemuck::Zeroable;
 pub struct GeometryNode {
     pub commands: Vec<DrawCommand>,
     pub batching_enabled: bool,
+    pub use_gpu_driven: bool,
     pub aux_handle: Option<crate::renderer::graph::ResourceHandle>,
     pub velocity_handle: Option<crate::renderer::graph::ResourceHandle>,
     pub depth_handle: Option<crate::renderer::graph::ResourceHandle>,
@@ -18,6 +19,7 @@ impl GeometryNode {
         Self {
             commands,
             batching_enabled: true,
+            use_gpu_driven: true, // Default to true for Phase 4
             aux_handle: None,
             velocity_handle: None,
             depth_handle: None,
@@ -171,11 +173,14 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                                     params2: [2, if *is_squircle { 1 } else { 0 }, 0, 0],
                                     material: [velocity.x, velocity.y, *reflectivity, *roughness],
                                     pbr_params: [normal_map.unwrap_or(0) as f32, *distortion_strength, *emissive_intensity, *parallax_factor],
+                                    transform: [1.0, 0.0, 0.0,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0,  0.0, 0.0, 0.0],
                                 });
                                 j += 1;
                             } else { break; }
                         }
 
+                        use crate::backend::hal::{BindGroupEntry, BindingResource};
+                        
                         let global = GlobalUniforms {
                             projection: *bytemuck::cast_ref(&proj),
                             time, _pad0: 0.0, viewport_size: [width as f32, height as f32],
@@ -187,42 +192,77 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         executor.write_buffer(&inst_buf, 0, bytemuck::cast_slice(&instances));
                         let v_buf = executor.create_buffer(ui_quad.len() as u64, BufferUsage::Vertex, "QuadV")?;
                         executor.write_buffer(&v_buf, 0, &ui_quad);
-                        
-                        use crate::backend::hal::{BindGroupEntry, BindingResource};
-                        let bg = executor.create_bind_group(&instanced_layout, &[
-                            BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&g_buf) },
-                            BindGroupEntry { binding: 1, resource: BindingResource::Buffer(&inst_buf) },
-                            BindGroupEntry { binding: 2, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
-                            BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
-                            BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&sampler) },
-                        ])?;
 
-                        let aux_view_opt = if let Some(aux_h) = self.aux_handle {
-                             if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&aux_h) {
-                                  Some(executor.create_texture_view(tex)?)
-                             } else { None }
-                        } else { None };
+                        if self.use_gpu_driven && executor.supports_indirect_draw() {
+                            // --- GPU-Driven Path (Culling + Indirect) ---
+                            let visible_indices = executor.create_buffer((instances.len() * 4) as u64, BufferUsage::Storage, "VisIdx")?;
+                            let visible_counter = executor.create_buffer(4, BufferUsage::Storage | BufferUsage::CopySrc, "VisCnt")?;
+                            executor.write_buffer(&visible_counter, 0, bytemuck::bytes_of(&0u32));
+                            
+                            let hzb = executor.get_hzb_view();
+                            executor.dispatch_visibility(proj_matrix, instances.len() as u32, &inst_buf, hzb, &visible_indices, &visible_counter)?;
+                            
+                            let indirect_buffer = executor.create_buffer(16, BufferUsage::Indirect | BufferUsage::Storage, "IndirB")?;
+                            executor.dispatch_indirect_command(&visible_counter, &indirect_buffer)?;
 
-                        let velocity_view_opt = if let Some(vel_h) = self.velocity_handle {
-                             if let Some(crate::renderer::graph::GraphResource::Texture(_, vtex)) = ctx.resources.get(&vel_h) {
-                                  Some(executor.create_texture_view(vtex)?)
-                             } else { None }
-                        } else { None };
+                            let bg = executor.create_bind_group(&instanced_layout, &[
+                                BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&g_buf) },
+                                BindGroupEntry { binding: 1, resource: BindingResource::Buffer(&inst_buf) },
+                                BindGroupEntry { binding: 2, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
+                                BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
+                                BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&sampler) },
+                                BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&visible_indices) },
+                            ])?;
 
-                        let depth_view_opt = if let Some(depth_h) = self.depth_handle {
-                             if let Some(crate::renderer::graph::GraphResource::Texture(_, dtex)) = ctx.resources.get(&depth_h) {
-                                  Some(executor.create_texture_view(dtex)?)
-                             } else { None }
-                        } else { None };
-
-                        if let (Some(aux), Some(vel), Some(depth)) = (&aux_view_opt, &velocity_view_opt, &depth_view_opt) {
-                            let gb_pipeline = executor.get_instanced_gbuffer_render_pipeline().clone();
-                            executor.draw_instanced_gbuffer(&gb_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32, aux, vel, depth)?;
+                            executor.draw_instanced_indirect(&instanced_pipeline, Some(&bg), &v_buf, &indirect_buffer, 0)?;
+                            
+                            executor.destroy_bind_group(bg);
+                            executor.destroy_buffer(visible_indices); executor.destroy_buffer(visible_counter); executor.destroy_buffer(indirect_buffer);
                         } else {
-                            executor.draw_instanced(&instanced_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32)?;
+                            // --- Traditional Instancing Path ---
+                            // We need to provide a dummy visible_indices (0, 1, 2, ...) to the shader
+                            let fallback_indices: Vec<u32> = (0..instances.len() as u32).collect();
+                            let fallback_idx_buf = executor.create_buffer((fallback_indices.len() * 4) as u64, BufferUsage::Storage, "FallIdx")?;
+                            executor.write_buffer(&fallback_idx_buf, 0, bytemuck::cast_slice(&fallback_indices));
+
+                            let bg = executor.create_bind_group(&instanced_layout, &[
+                                BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&g_buf) },
+                                BindGroupEntry { binding: 1, resource: BindingResource::Buffer(&inst_buf) },
+                                BindGroupEntry { binding: 2, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
+                                BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
+                                BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&sampler) },
+                                BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&fallback_idx_buf) },
+                            ])?;
+
+                            let aux_view_opt = if let Some(aux_h) = self.aux_handle {
+                                 if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&aux_h) {
+                                      Some(executor.create_texture_view(tex)?)
+                                 } else { None }
+                            } else { None };
+
+                            let velocity_view_opt = if let Some(vel_h) = self.velocity_handle {
+                                 if let Some(crate::renderer::graph::GraphResource::Texture(_, vtex)) = ctx.resources.get(&vel_h) {
+                                      Some(executor.create_texture_view(vtex)?)
+                                 } else { None }
+                            } else { None };
+
+                            let depth_view_opt = if let Some(depth_h) = self.depth_handle {
+                                 if let Some(crate::renderer::graph::GraphResource::Texture(_, dtex)) = ctx.resources.get(&depth_h) {
+                                      Some(executor.create_texture_view(dtex)?)
+                                 } else { None }
+                            } else { None };
+
+                            if let (Some(aux), Some(vel), Some(depth)) = (&aux_view_opt, &velocity_view_opt, &depth_view_opt) {
+                                let gb_pipeline = executor.get_instanced_gbuffer_render_pipeline().clone();
+                                executor.draw_instanced_gbuffer(&gb_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32, aux, vel, depth)?;
+                            } else {
+                                executor.draw_instanced(&instanced_pipeline, Some(&bg), &v_buf, &inst_buf, 6, instances.len() as u32)?;
+                            }
+                            executor.destroy_bind_group(bg);
+                            executor.destroy_buffer(fallback_idx_buf);
                         }
 
-                        executor.destroy_bind_group(bg); executor.destroy_buffer(g_buf); executor.destroy_buffer(inst_buf); executor.destroy_buffer(v_buf);
+                        executor.destroy_buffer(g_buf); executor.destroy_buffer(inst_buf); executor.destroy_buffer(v_buf);
                         i = j;
                     }
                 }

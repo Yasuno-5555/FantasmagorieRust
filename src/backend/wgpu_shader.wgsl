@@ -2,7 +2,7 @@ struct GlobalUniforms {
     projection: mat4x4<f32>,
     time: f32,
     _pad0: f32,
-    resolution: vec2<f32>,
+    viewport_size: vec2<f32>,
 };
 
 struct ShapeInstance {
@@ -17,12 +17,13 @@ struct ShapeInstance {
     pbr_params: vec4<f32>, // normal_map_id, distortion, emissive_intensity, parallax_factor
 };
 
-// --- Instanced Bindings (Layout: 0=Global, 1=Instances, 2=Font, 3=Backdrop, 4=Sampler) ---
+// --- Instanced Bindings (Layout: 0=Global, 1=Instances, 2=Font, 3=Backdrop, 4=Sampler, 5=VisibleIndices) ---
 @group(0) @binding(0) var<uniform> globals: GlobalUniforms;
 @group(0) @binding(1) var<storage, read> instances: array<ShapeInstance>;
 @group(0) @binding(2) var t_diffuse: texture_2d<f32>;
 @group(0) @binding(3) var t_backdrop: texture_2d<f32>;
 @group(0) @binding(4) var s_sampler: sampler;
+@group(0) @binding(5) var<storage, read> visible_indices: array<u32>;
 
 struct VertexInput {
     @location(0) position: vec2<f32>,
@@ -54,7 +55,8 @@ fn vs_instanced(
     input: VertexInput,
     @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
-    let instance = instances[instance_index];
+    let real_index = visible_indices[instance_index];
+    let instance = instances[real_index];
     var out: VertexOutput;
     let world_pos = vec2<f32>(
         instance.rect.x + input.position.x * instance.rect.z,
@@ -63,7 +65,7 @@ fn vs_instanced(
     out.clip_position = globals.projection * vec4<f32>(world_pos, 0.0, 1.0);
     out.uv = input.uv;
     out.color = instance.color;
-    out.instance_index = instance_index;
+    out.instance_index = real_index;
     return out;
 }
 

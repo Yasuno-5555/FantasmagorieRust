@@ -1,4 +1,4 @@
-﻿//! DrawList - Rendering command buffer
+//! DrawList - Rendering command buffer
 //! Ported from drawlist.hpp
 //!
 //! All rendering goes through DrawList commands.
@@ -85,11 +85,17 @@ pub enum DrawCommand {
     /// Pop clip rectangle
     PopClip,
 
-    /// Push transform (for scroll offset)
-    PushTransform { offset: Vec2, scale: f32 },
+    /// Push transform
+    PushTransform(crate::renderer::types::Transform2D),
 
     /// Pop transform
     PopTransform,
+
+    /// Push blend mode
+    PushBlendMode(crate::draw::blend::BlendMode),
+
+    /// Pop blend mode
+    PopBlendMode,
 
     /// Circle
     Circle {
@@ -216,7 +222,8 @@ pub enum DrawCommand {
 pub struct DrawList {
     commands: Vec<DrawCommand>,
     clip_stack: Vec<(Vec2, Vec2)>,
-    transform_stack: Vec<(Vec2, f32)>,
+    transform_stack: Vec<crate::renderer::types::Transform2D>,
+    blend_stack: Vec<crate::draw::blend::BlendMode>,
 }
 
 impl DrawList {
@@ -776,10 +783,11 @@ impl DrawList {
     }
 
     /// Push transform
-    pub fn push_transform(&mut self, offset: Vec2, scale: f32) {
-        self.transform_stack.push((offset, scale));
-        self.commands
-            .push(DrawCommand::PushTransform { offset, scale });
+    pub fn push_transform(&mut self, transform: crate::renderer::types::Transform2D) {
+        let current = self.current_transform();
+        let new_transform = current.multiply(&transform);
+        self.transform_stack.push(new_transform);
+        self.commands.push(DrawCommand::PushTransform(new_transform));
     }
 
     /// Pop transform
@@ -788,12 +796,30 @@ impl DrawList {
         self.commands.push(DrawCommand::PopTransform);
     }
 
-    /// Get current transform offset
-    pub fn current_offset(&self) -> Vec2 {
+    /// Push blend mode
+    pub fn push_blend_mode(&mut self, mode: crate::draw::blend::BlendMode) {
+        self.blend_stack.push(mode);
+        self.commands.push(DrawCommand::PushBlendMode(mode));
+    }
+
+    /// Pop blend mode
+    pub fn pop_blend_mode(&mut self) {
+        self.blend_stack.pop();
+        self.commands.push(DrawCommand::PopBlendMode);
+    }
+
+    /// Get current transform
+    pub fn current_transform(&self) -> crate::renderer::types::Transform2D {
         self.transform_stack
             .last()
-            .map(|(o, _)| *o)
-            .unwrap_or(Vec2::ZERO)
+            .copied()
+            .unwrap_or(crate::renderer::types::Transform2D::identity())
+    }
+
+    /// Get current transform offset (legacy helper)
+    pub fn current_offset(&self) -> Vec2 {
+        let t = self.current_transform();
+        Vec2::new(t.m[4], t.m[5])
     }
 
     /// Get command count

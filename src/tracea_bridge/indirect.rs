@@ -86,6 +86,43 @@ impl TraceaIndirectKernel {
         })
     }
     
+    #[cfg(feature = "wgpu")]
+    pub fn dispatch(
+        &self,
+        context: &TraceaContext,
+        counter_buffer: &wgpu::Buffer,
+    ) -> Result<(), String> {
+        let state = self.wgpu_state.as_ref().ok_or("WGPU state not initialized")?;
+        let device = context.wgpu_device();
+        let queue = context.wgpu_queue();
+        
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Indirect Bind Group"),
+            layout: &state.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: counter_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: state.draw_commands.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: state.dispatch_commands.as_entire_binding() },
+            ],
+        });
+        
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Indirect Encoder") });
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("Indirect Pass"), timestamp_writes: None });
+            cpass.set_pipeline(&state.pipeline);
+            cpass.set_bind_group(0, &bind_group, &[]);
+            cpass.dispatch_workgroups(1, 1, 1);
+        }
+        
+        queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+    
+    #[cfg(feature = "wgpu")]
+    pub fn draw_commands(&self) -> &wgpu::Buffer {
+        &self.wgpu_state.as_ref().unwrap().draw_commands
+    }
+    
     #[cfg(not(feature = "wgpu"))]
     pub fn new_wgpu(_context: &TraceaContext) -> Result<Self, String> {
         Err("WGPU not enabled".into())

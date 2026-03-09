@@ -1,4 +1,4 @@
-﻿use super::types::*;
+use super::types::*;
 
 /// The linear description of a frame's rendering intent.
 /// This is the "Meaning" layer. Tracea will consume this.
@@ -20,6 +20,8 @@ pub enum RenderCommand {
     SetTexture { slot: u32, handle: TextureHandle },
     SetTransform(Transform2D),
     SetScissor(Rect),
+    PushBlendMode(crate::draw::blend::BlendMode),
+    PopBlendMode,
 
     /// Start of World-space rendering layer.
     BeginWorld(super::camera::Camera),

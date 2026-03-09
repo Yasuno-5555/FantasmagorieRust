@@ -1,4 +1,4 @@
-﻿//! View renderer - converts View AST to DrawList commands
+//! View renderer - converts View AST to DrawList commands
 //! Ported from renderer.cpp
 
 use super::header::{ViewHeader, ViewType};
@@ -1107,7 +1107,7 @@ fn render_scroll(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut Font
     dl.push_clip(Vec2::new(rect.x, rect.y), Vec2::new(rect.w, rect.h));
 
     // Offset translates content UP (negative y)
-    dl.push_transform(Vec2::new(-offset.x, -offset.y), 1.0);
+    dl.push_transform(crate::renderer::types::Transform2D::translation(-offset.x, -offset.y));
 
     // Render children
     for child in view.children() {
@@ -1576,7 +1576,7 @@ fn render_canvas(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut Font
 
     // 3. Transform for content
     dl.push_clip(Vec2::new(rect.x, rect.y), Vec2::new(rect.w, rect.h));
-    dl.push_transform(offset, zoom);
+    dl.push_transform(crate::renderer::types::Transform2D::scale(zoom, zoom).translate(offset.x, offset.y));
 
     // Render children
     for child in view.children() {

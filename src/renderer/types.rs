@@ -1,4 +1,4 @@
-﻿use super::super::core::{ColorF, Vec2};
+use super::super::core::{ColorF, Vec2};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
@@ -86,7 +86,11 @@ pub struct BufferHandle(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DescriptorSetHandle(pub u32);
 
-// 2D Transform (3x2 Matrix)
+// 2D Transform (3x2 Matrix in column-major order for GPU compatibility)
+// Representing:
+// [ m[0] m[2] m[4] ]
+// [ m[1] m[3] m[5] ]
+// [  0    0    1   ]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform2D {
     pub m: [f32; 6], 
@@ -95,6 +99,62 @@ pub struct Transform2D {
 impl Transform2D {
     pub fn identity() -> Self {
         Self { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+    }
+
+    pub fn translation(x: f32, y: f32) -> Self {
+        Self { m: [1.0, 0.0, 0.0, 1.0, x, y] }
+    }
+
+    pub fn rotation(angle_rad: f32) -> Self {
+        let (s, c) = angle_rad.sin_cos();
+        Self { m: [c, s, -s, c, 0.0, 0.0] }
+    }
+
+    pub fn scale(sx: f32, sy: f32) -> Self {
+        Self { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] }
+    }
+
+    pub fn multiply(&self, other: &Self) -> Self {
+        let a = self.m;
+        let b = other.m;
+        Self {
+            m: [
+                a[0] * b[0] + a[2] * b[1],
+                a[1] * b[0] + a[3] * b[1],
+                a[0] * b[2] + a[2] * b[3],
+                a[1] * b[2] + a[3] * b[3],
+                a[0] * b[4] + a[2] * b[5] + a[4],
+                a[1] * b[4] + a[3] * b[5] + a[5],
+            ]
+        }
+    }
+
+    pub fn translate(&self, x: f32, y: f32) -> Self {
+        self.multiply(&Self::translation(x, y))
+    }
+
+    pub fn rotate(&self, angle_rad: f32) -> Self {
+        self.multiply(&Self::rotation(angle_rad))
+    }
+
+    pub fn scale_by(&self, sx: f32, sy: f32) -> Self {
+        self.multiply(&Self::scale(sx, sy))
+    }
+
+    pub fn transform_point(&self, p: Vec2) -> Vec2 {
+        Vec2::new(
+            self.m[0] * p.x + self.m[2] * p.y + self.m[4],
+            self.m[1] * p.x + self.m[3] * p.y + self.m[5]
+        )
+    }
+
+    /// Convert to 3x3 for GPU uniforms (std140 alignment)
+    pub fn to_mat3x3(&self) -> [f32; 12] {
+        [
+            self.m[0], self.m[1], 0.0, 0.0,
+            self.m[2], self.m[3], 0.0, 0.0,
+            self.m[4], self.m[5], 1.0, 0.0,
+        ]
     }
 }
 
