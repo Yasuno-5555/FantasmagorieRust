@@ -17,6 +17,9 @@ struct CinematicParams {
     light_color: vec4<f32>,
     jitter: vec2<f32>,
     render_size: vec2<f32>,
+    shadow_softness: f32,
+    _pad1: f32,
+    _pad2: vec2<f32>,
 };
 
 @group(0) @binding(0) var t_hdr: texture_2d<f32>;
@@ -82,7 +85,7 @@ fn raymarch_shadow(pixel_pos: vec2<f32>, light_pos: vec2<f32>) -> f32 {
         }
         
         // Soft shadow formula: min(d / t * k)
-        res = min(res, 8.0 * d / t);
+        res = min(res, cinema.shadow_softness * d / t);
         
         t += max(d, 1.0);
         if (t >= max_dist) { break; }
@@ -192,14 +195,18 @@ fn fs_lighting(in: VertexOutput) -> @location(0) vec4<f32> {
     let extra = textureSample(t_extra, s_hdr, uv);
     
     let normal_xy = aux.xy - 0.5;
+    let roughness = aux.z;
+    let reflectivity = aux.w;
     let emissive_boost = extra.z;
     
-    // --- Lighting Calculations ---
+    // --- Phase 2 & 3: Lighting ---
     let pixel_pos = in.uv * vec2<f32>(textureDimensions(t_hdr));
     let shadow = raymarch_shadow(pixel_pos, cinema.light_pos);
     
     let dist_to_light = distance(pixel_pos, cinema.light_pos);
     let attenuation = 1.0 / (1.0 + 0.0001 * dist_to_light * dist_to_light);
+    
+    // PBR-ish Diffuse
     let direct_light = cinema.light_color.rgb * attenuation * shadow;
     
     let volumetrics = volumetric_lighting(pixel_pos, cinema.light_pos);
@@ -208,11 +215,15 @@ fn fs_lighting(in: VertexOutput) -> @location(0) vec4<f32> {
     if (length(trace_dir) < 0.1) { trace_dir = vec2<f32>(0.0, -1.0); }
     trace_dir = normalize(trace_dir);
     
-    let gi = cone_trace_gi(pixel_pos, trace_dir, uv);
+    let gi = cone_trace_gi(pixel_pos, trace_dir, in.uv);
     
     // Combine
-    let diffuse = hdr_color * (0.2 + 0.8 * direct_light + gi); 
-    let combined = diffuse + reflection + emissive_boost + volumetrics;
+    // Use reflectivity to modulate reflection and gi
+    let specular = reflection * (1.0 - roughness); 
+    let ambient = 0.2 * (1.0 - reflectivity);
+    
+    let diffuse = hdr_color * (ambient + 0.8 * direct_light + gi * (1.0 - reflectivity)); 
+    let combined = diffuse + specular + bloom_color * cinema.bloom_intensity + emissive_boost + volumetrics;
     
     // Output Linear HDR
     return vec4<f32>(combined, 1.0);

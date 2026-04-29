@@ -1,4 +1,4 @@
-﻿use crate::core::ID;
+use crate::core::ID;
 use serde::{de::DeserializeOwned, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,8 +21,8 @@ impl PersistenceManager {
 
     /// Save state T for a given ID
     pub fn save<T: Store>(&self, id: ID, state: &T) {
-        if let Ok(bytes) = bincode::serialize(state) {
-            self.data.borrow_mut().insert(id.0, bytes);
+        if let Ok(json) = serde_json::to_vec(state) {
+            self.data.borrow_mut().insert(id.0, json);
         }
     }
 
@@ -30,7 +30,7 @@ impl PersistenceManager {
     pub fn load<T: Store>(&self, id: ID) -> Option<T> {
         let binding = self.data.borrow();
         if let Some(bytes) = binding.get(&id.0) {
-            bincode::deserialize(bytes).ok()
+            serde_json::from_slice(bytes).ok()
         } else {
             None
         }
@@ -38,12 +38,12 @@ impl PersistenceManager {
 
     /// Serialize entire store to bytes (e.g. for saving to file)
     pub fn export_blob(&self) -> Option<Vec<u8>> {
-        bincode::serialize(&*self.data.borrow()).ok()
+        serde_json::to_vec(&*self.data.borrow()).ok()
     }
 
     /// Deserialize entire store from bytes
     pub fn import_blob(&self, blob: &[u8]) {
-        if let Ok(data) = bincode::deserialize(blob) {
+        if let Ok(data) = serde_json::from_slice(blob) {
             *self.data.borrow_mut() = data;
         }
     }

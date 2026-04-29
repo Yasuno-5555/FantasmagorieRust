@@ -7,7 +7,7 @@ use std::sync::Arc;
 fn bench_gemm_execute(c: &mut Criterion) {
     #[cfg(target_os = "macos")]
     {
-        let runtime = Arc::new(RuntimeManager::new());
+        let runtime = Arc::new(RuntimeManager::new().unwrap());
         let m = 2048usize; let n = 2048usize; let k = 2048usize;
         
         let a_buf = runtime.alloc(m * k * 2, DeviceBackend::Metal).unwrap();
@@ -27,6 +27,7 @@ fn bench_gemm_execute(c: &mut Criterion) {
                 ..Default::default()
             },
             conv_magic_strategy: None,
+            polyhedral_strategy: None,
         };
         
         let emitter = tracea::emitter::metal::MetalEmitter::detect();

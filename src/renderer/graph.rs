@@ -21,6 +21,19 @@ pub const HDR_HIGH_RES_HANDLE: ResourceHandle = 31;
 pub const LDR_HANDLE: ResourceHandle = 32; // Input to FXAA
 pub const DOF_HANDLE: ResourceHandle = 33;
 pub const FLARE_HANDLE: ResourceHandle = 34;
+pub const EMISSIVE_HANDLE: ResourceHandle = 35;
+pub const TAA_HISTORY_HANDLE: ResourceHandle = 36;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugDisplayMode {
+    None,
+    Albedo,
+    Normal,
+    Velocity,
+    Depth,
+    Emissive,
+    SDF,
+}
 
 #[derive(Clone, Debug)]
 pub enum GraphResourceDesc {
@@ -50,6 +63,7 @@ pub struct RenderContext<'a, E: GpuExecutor> {
     pub height: u32,
     pub jitter: (f32, f32),
     pub camera_cut: bool,
+    pub debug_mode: DebugDisplayMode,
 }
 
 pub trait RenderNode<E: GpuExecutor> {
@@ -74,7 +88,7 @@ impl<E: GpuExecutor> RenderGraph<E> {
         self.nodes.push(Box::new(node));
     }
 
-    pub fn execute(&mut self, executor: &mut E, external_resources: HashMap<ResourceHandle, GraphResource<E>>, time: f32, width: u32, height: u32, jitter: (f32, f32), camera_cut: bool) -> Result<(), String> {
+    pub fn execute(&mut self, executor: &mut E, external_resources: HashMap<ResourceHandle, GraphResource<E>>, time: f32, width: u32, height: u32, jitter: (f32, f32), camera_cut: bool, debug_mode: DebugDisplayMode) -> Result<(), String> {
         let mut ctx = RenderContext {
             executor,
             resources: external_resources,
@@ -83,6 +97,7 @@ impl<E: GpuExecutor> RenderGraph<E> {
             height,
             jitter,
             camera_cut,
+            debug_mode,
         };
 
         // Allocate declared resources

@@ -39,7 +39,7 @@ unsafe impl Sync for MetalLayerWrapper {}
 
 pub struct MetalBackend {
     pub device: Device,
-    command_queue: CommandQueue,
+    pub command_queue: CommandQueue,
     resources: MetalResourceProvider,
     pipelines: MetalPipelineProvider,
     
@@ -171,11 +171,14 @@ impl MetalBackend {
         
         // Initialize Tracea Context with shared device
         // Using Arc explicitly to match new signature
-        let tracea_context = crate::tracea_bridge::TraceaContext::new(Some(Arc::new(device.clone())))
-            .unwrap_or_else(|e| {
-                println!("[WARN] Failed to init Tracea: {}. Creating default context.", e);
-                crate::tracea_bridge::TraceaContext::new(None).expect("Tracea init failed")
-            });
+        let tracea_context = match crate::tracea_bridge::TraceaContext::new(Some(Arc::new(device.clone()))) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                println!("[WARN] Failed to init Tracea with device: {}. Trying default context.", e);
+                crate::tracea_bridge::TraceaContext::new(None)
+                    .map_err(|e2| format!("Total Tracea failure: {} / {}", e, e2))?
+            }
+        };
         
         let main_pipeline = pipelines.create_render_pipeline(
             "Fantasmagorie Main", 
@@ -274,9 +277,12 @@ impl MetalBackend {
             exposure: 1.0, ca_strength: 0.005, vignette_intensity: 0.5, bloom_intensity: 0.4,
             tonemap_mode: 1, bloom_mode: 1, grain_strength: 0.05, time: 0.0,
             lut_intensity: 0.0, blur_radius: 0.0, motion_blur_strength: 0.0, debug_mode: 0,
-            gi_intensity: 0.3, light_pos: [500.0, 300.0], volumetric_intensity: 0.5, light_color: [1.0, 0.9, 0.7, 1.0],
+            gi_intensity: 0.3, light_pos: [500.0, 300.0], volumetric_intensity: 0.5, light_color: [1.0, 1.0, 1.0, 1.0],
             jitter: [0.0, 0.0],
             render_size: [1.0, 1.0],
+            shadow_softness: 8.0,
+            _pad1: 0.0,
+            _pad2: [0.0, 0.0],
         };
         let cinematic_buffer = device.new_buffer(
             std::mem::size_of::<crate::backend::shaders::types::CinematicParams>() as u64,
@@ -613,9 +619,12 @@ impl GraphicsBackend for MetalBackend {
             light_pos: config.light_pos,
             gi_intensity: config.gi_intensity,
             volumetric_intensity: config.volumetric_intensity,
-            light_color: config.light_color,
+            light_color: config.lighting.light_color,
             jitter: [0.0, 0.0],
             render_size: [self.cached_width as f32, self.cached_height as f32],
+            shadow_softness: 8.0,
+            _pad1: 0.0,
+            _pad2: [0.0, 0.0],
         };
 
         *self.current_cinematic.lock().unwrap() = params;

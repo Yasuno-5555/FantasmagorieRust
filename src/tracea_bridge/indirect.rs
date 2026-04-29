@@ -39,7 +39,7 @@ impl TraceaIndirectKernel {
     pub fn new_wgpu(context: &TraceaContext) -> Result<Self, String> {
         use wgpu::util::DeviceExt;
         
-        let device = context.wgpu_device();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
         
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tracea Indirect"),
@@ -72,13 +72,13 @@ impl TraceaIndirectKernel {
         let draw_commands = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Draw Indirect Commands"),
             contents: bytemuck::cast_slice(&[DrawIndirectCommand { vertex_count: 0, instance_count: 0, first_vertex: 0, first_instance: 0 }; 4]),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         });
         
         let dispatch_commands = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Dispatch Indirect Commands"),
             contents: bytemuck::cast_slice(&[DispatchIndirectCommand { x: 0, y: 0, z: 0 }; 4]),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         });
         
         Ok(Self {
@@ -93,8 +93,8 @@ impl TraceaIndirectKernel {
         counter_buffer: &wgpu::Buffer,
     ) -> Result<(), String> {
         let state = self.wgpu_state.as_ref().ok_or("WGPU state not initialized")?;
-        let device = context.wgpu_device();
-        let queue = context.wgpu_queue();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
+        let queue = context.wgpu_queue().ok_or("WGPU queue not initialized")?;
         
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Indirect Bind Group"),

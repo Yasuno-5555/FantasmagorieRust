@@ -184,8 +184,8 @@ impl RuntimeManager {
         Ok(instance)
     }
 
-    pub fn new() -> Arc<Self> {
-        Self::init(None).expect("Failed to initialize RuntimeManager")
+    pub fn new() -> Result<Arc<Self>, String> {
+        Self::init(None)
     }
 
     pub fn synchronize(&self) {

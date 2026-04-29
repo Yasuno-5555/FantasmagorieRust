@@ -5,10 +5,10 @@ use tracea::core::manifold::ComputeAtom;
 use tracea::runtime::manager::DeviceBackend;
 use std::sync::Arc;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Tracea Self-Evolution Demo ---");
     
-    let manager = RuntimeManager::new();
+    let manager = RuntimeManager::new()?;
     let backend = if cfg!(target_os = "macos") { DeviceBackend::Metal } else { DeviceBackend::Cuda };
 
     // 1. Define a "DNA" (ComputeAtom)
@@ -49,4 +49,5 @@ fn main() {
     }
 
     println!("\n[Demo] Success. Tracea is now evolving.");
+    Ok(())
 }

@@ -13,4 +13,5 @@ pub mod bloom;
 pub mod fxaa;
 pub mod dof;
 pub mod flare;
+pub mod taa;
 

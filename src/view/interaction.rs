@@ -1,4 +1,4 @@
-﻿//! Interaction detection - hot/active/focus states
+//! Interaction detection - hot/active/focus states
 //! Ported from interaction.hpp
 
 use crate::core::{Rectangle, Vec2, ID};
@@ -75,6 +75,9 @@ struct InteractionContext {
 
     // Drag & Drop
     pub dropped_files: Vec<std::path::PathBuf>,
+
+    /// Incremental rendering: did anything change this frame?
+    pub needs_repaint: bool,
 }
 
 impl Default for InteractionContext {
@@ -122,6 +125,7 @@ impl Default for InteractionContext {
             ime_cursor_area: Vec2::ZERO,
             focused_text_input: None,
             dropped_files: Vec::new(),
+            needs_repaint: true, // Initial frame is always dirty
         }
     }
 }
@@ -167,7 +171,18 @@ pub fn begin_interaction_pass() {
         // Don't clear virtual_list_ranges, they need to persist across frames
         // Clear dropped files from previous frame
         ctx.dropped_files.clear();
+        ctx.needs_repaint = false;
     });
+}
+
+/// Check if the interaction system requires a repaint
+pub fn needs_repaint() -> bool {
+    CTX.with(|ctx| ctx.borrow().needs_repaint)
+}
+
+/// Force a repaint
+pub fn request_repaint() {
+    CTX.with(|ctx| ctx.borrow_mut().needs_repaint = true);
 }
 
 /// Simple property animation
@@ -212,19 +227,30 @@ pub fn animate_ex(
             state.time = 0.0;
         }
 
+        let mut needs_repaint = false;
         if state.easing == crate::view::animation::Easing::Spring {
             let mut spring = crate::view::animation::Spring::default();
             spring.velocity = state.velocity;
             state.value = spring.update(state.value, state.target, dt);
             state.velocity = spring.velocity;
+            if state.velocity.abs() > 0.001 || (state.value - state.target).abs() > 0.001 {
+                needs_repaint = true;
+            }
         } else {
             state.time += dt;
             let t = (state.time / duration.max(0.001)).clamp(0.0, 1.0);
+            if t < 1.0 {
+                needs_repaint = true;
+            }
             let alpha = crate::view::animation::ease(t, state.easing);
             state.value = state.start_value + (state.target - state.start_value) * alpha;
         }
 
-        state.value
+        let result = state.value;
+        if needs_repaint {
+            ctx.needs_repaint = true;
+        }
+        result
     })
 }
 
@@ -333,6 +359,9 @@ pub fn handle_event(event: &winit::event::WindowEvent) {
         }
         _ => {}
     }
+
+    // Any window event that we handle usually means we need to repaint
+    CTX.with(|ctx| ctx.borrow_mut().needs_repaint = true);
 }
 
 pub fn is_mouse_down() -> bool {

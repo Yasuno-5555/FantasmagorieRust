@@ -5,10 +5,12 @@ use crate::renderer::graph::{
     HDR_HANDLE, BACKDROP_HANDLE, VELOCITY_HANDLE, AUX_HANDLE, 
     DEPTH_HANDLE, REFLECTION_HANDLE, EXTRA_HANDLE, SDF_HANDLE,
     SDF_TEMP_A_HANDLE, SDF_TEMP_B_HANDLE, DOF_HANDLE, FLARE_HANDLE,
+    TAA_HISTORY_HANDLE,
 };
 use crate::renderer::nodes::geometry::GeometryNode;
 use crate::renderer::nodes::postprocess::{ResolveNode};
 use crate::renderer::nodes::ssr::SSRNode;
+use crate::renderer::nodes::taa::TAANode;
 use crate::renderer::nodes::dof::DoFNode;
 use crate::renderer::nodes::flare::LensFlareNode;
 use crate::renderer::nodes::particles::{ParticleNode, ParticleSystem};
@@ -18,7 +20,9 @@ pub struct Orchestrator<E: GpuExecutor> {
     pub graph: RenderGraph<E>,
     particle_system: Arc<Mutex<ParticleSystem>>,
     pub frame_count: u64,
+    pub scale: f32,
     camera_cut: bool,
+    debug_mode: crate::renderer::graph::DebugDisplayMode,
 }
 
 impl<E: GpuExecutor + 'static> Orchestrator<E> {
@@ -27,7 +31,9 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
             graph: RenderGraph::new(),
             particle_system: Arc::new(Mutex::new(ParticleSystem::new())),
             frame_count: 0,
+            scale: 1.0,
             camera_cut: false,
+            debug_mode: crate::renderer::graph::DebugDisplayMode::None,
         }
     }
 
@@ -36,7 +42,12 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         self.camera_cut = true;
     }
 
-    pub fn plan(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32, scale: f32) {
+    pub fn set_debug_mode(&mut self, mode: crate::renderer::graph::DebugDisplayMode) {
+        self.debug_mode = mode;
+    }
+
+    pub fn plan(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32, scale: f32, profile: crate::config::Profile) {
+        self.scale = scale;
         self.graph = RenderGraph::new();
 
         // 1. Process Draw List into Geometry Nodes
@@ -52,38 +63,42 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
                 .with_depth(DEPTH_HANDLE));
         }
 
-        // 2. Add SSR Node (Aux, Depth, HDR)
-        self.graph.add_node(SSRNode::new(
-            AUX_HANDLE,
-            DEPTH_HANDLE,
-            HDR_HANDLE,
-        ));
+        // 2. Add Cinematic Nodes (Cinema only)
+        if profile == crate::config::Profile::Cinema {
+            // 2. Add SSR Node (Aux, Depth, HDR)
+            self.graph.add_node(SSRNode::new(
+                AUX_HANDLE,
+                DEPTH_HANDLE,
+                HDR_HANDLE,
+            ));
 
-        // 3. JFA SDF Generation
-        // Declare transient resources for JFA
-        self.graph.resources.insert(SDF_TEMP_A_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("SDF Temp A"), width, height, depth: 1,
-            format: crate::backend::hal::TextureFormat::Rgba16Float, // Rgba16Float is usually enough for packed coords
-            usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
-        }));
-        self.graph.resources.insert(SDF_TEMP_B_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("SDF Temp B"), width, height, depth: 1,
-            format: crate::backend::hal::TextureFormat::Rgba16Float,
-            usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
-        }));
-        self.graph.resources.insert(SDF_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("SDF Output"), width, height, depth: 1,
-            format: crate::backend::hal::TextureFormat::Rgba16Float,
-            usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
-        }));
-        
-        self.graph.resources.insert(REFLECTION_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("Reflection Buffer"), width, height, depth: 1,
-            format: crate::backend::hal::TextureFormat::Rgba16Float,
-            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_SRC,
-        }));
+            // 3. JFA SDF Generation
+            // Declare transient resources for JFA
+            self.graph.resources.insert(SDF_TEMP_A_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("SDF Temp A"), width, height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float, // Rgba16Float is usually enough for packed coords
+                usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
+            }));
+            self.graph.resources.insert(SDF_TEMP_B_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("SDF Temp B"), width, height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
+            }));
+            self.graph.resources.insert(SDF_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("SDF Output"), width, height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::STORAGE_BINDING,
+            }));
+            
+            self.graph.resources.insert(REFLECTION_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("Reflection Buffer"), width, height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_SRC,
+            }));
 
-        self.graph.add_node(crate::renderer::nodes::jfa::JfaSdfNode::new(EXTRA_HANDLE));
+            self.graph.add_node(crate::renderer::nodes::jfa::JfaSdfNode::new(EXTRA_HANDLE));
+        }
+
         // 4. Particle System
         self.graph.add_node(ParticleNode::new(self.particle_system.clone()));
 
@@ -114,45 +129,70 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
             usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
         }));
 
-        // 5. Lighting Pass
-        self.graph.resources.insert(crate::renderer::graph::HDR_LOW_RES_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("HDR Low Res"), width: internal_width, height: internal_height, depth: 1,
-            format: crate::backend::hal::TextureFormat::Rgba16Float,
-            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
-        }));
-        
-        self.graph.resources.insert(crate::renderer::graph::HDR_HIGH_RES_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("HDR High Res"), width: width, height: height, depth: 1, // Output of upscale is native
-            format: crate::backend::hal::TextureFormat::Rgba16Float,
-            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
-        }));
+        // 5. Lighting Pass (Cinema only)
+        if profile == crate::config::Profile::Cinema {
+            self.graph.resources.insert(crate::renderer::graph::HDR_LOW_RES_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("HDR Low Res"), width: internal_width, height: internal_height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            }));
+            
+            self.graph.resources.insert(crate::renderer::graph::HDR_HIGH_RES_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("HDR High Res"), width: width, height: height, depth: 1, // Output of upscale is native
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            }));
 
-        self.graph.add_node(crate::renderer::nodes::lighting::LightingNode);
-        self.graph.add_node(crate::renderer::nodes::upscale::UpscaleNode);
+            self.graph.add_node(crate::renderer::nodes::lighting::LightingNode);
+            
+            // --- SSR Pass ---
+            self.graph.resources.insert(REFLECTION_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("Reflection Buffer"), width: internal_width, height: internal_height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            }));
+            self.graph.add_node(SSRNode::new(AUX_HANDLE, DEPTH_HANDLE, HDR_HANDLE));
+            
+            // --- TAA Pass ---
+            self.graph.resources.insert(TAA_HISTORY_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("TAA History Buffer"), width: internal_width, height: internal_height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_DST | crate::backend::hal::TextureUsage::COPY_SRC,
+            }));
+            // We use HDR_LOW_RES_HANDLE as both input and output (via copy back)
+            // Wait, TAANode::new takes history_handle. It assumes current is HDR_HANDLE.
+            // But LightingNode outputs to HDR_LOW_RES_HANDLE.
+            // I should update TAANode to be more flexible or use HDR_LOW_RES_HANDLE.
+            self.graph.add_node(TAANode::new(TAA_HISTORY_HANDLE));
 
-        // --- DoF Pass ---
-        self.graph.resources.insert(DOF_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("DoF Buffer"), width, height, depth: 1,
-            format: crate::backend::hal::TextureFormat::Rgba16Float,
-            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
-        }));
-        self.graph.add_node(DoFNode);
+            self.graph.add_node(crate::renderer::nodes::upscale::UpscaleNode);
 
-        self.graph.add_node(crate::renderer::nodes::bloom::BloomNode);
+            // --- DoF Pass ---
+            self.graph.resources.insert(DOF_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("DoF Buffer"), width, height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            }));
+            self.graph.add_node(DoFNode);
 
-        // --- Lens Flare Pass ---
-        self.graph.resources.insert(FLARE_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
-            label: Some("Flare Buffer"), width, height, depth: 1,
-            format: crate::backend::hal::TextureFormat::Rgba16Float,
-            usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
-        }));
-        self.graph.add_node(LensFlareNode);
+            self.graph.add_node(crate::renderer::nodes::bloom::BloomNode);
+
+            // --- Lens Flare Pass ---
+            self.graph.resources.insert(FLARE_HANDLE, crate::renderer::graph::GraphResourceDesc::Texture(crate::backend::hal::TextureDescriptor {
+                label: Some("Flare Buffer"), width, height, depth: 1,
+                format: crate::backend::hal::TextureFormat::Rgba16Float,
+                usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            }));
+            self.graph.add_node(LensFlareNode);
+        }
 
         self.graph.add_node(crate::renderer::nodes::post::PostProcessNode);
     }
 
     pub fn execute(&mut self, backend: &mut E, time: f32, width: u32, height: u32, jitter: (f32, f32)) -> Result<(), String> {
         let mut external = std::collections::HashMap::new();
+        let internal_width = (width as f32 * self.scale) as u32;
+        let internal_height = (height as f32 * self.scale) as u32;
         
         // Pass backend-owned textures as external resources to the graph if they exist
         if let Some(hdr_tex) = backend.get_hdr_texture() {
@@ -202,11 +242,29 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
 
         if let Some(depth_tex) = backend.get_depth_texture() {
             let depth_desc = crate::backend::hal::TextureDescriptor {
-                 label: Some("Depth Buffer"), width, height, depth: 1,
+                 label: Some("Depth Buffer"), width: internal_width, height: internal_height, depth: 1,
                  format: crate::backend::hal::TextureFormat::Depth32Float,
                  usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
             };
             external.insert(DEPTH_HANDLE, crate::renderer::graph::GraphResource::Texture(depth_desc, depth_tex));
+        }
+
+        if let Some(extra_tex) = backend.get_extra_texture() {
+            let extra_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("Extra Buffer (Distortion/Glow)"), width: internal_width, height: internal_height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::RENDER_ATTACHMENT | crate::backend::hal::TextureUsage::TEXTURE_BINDING,
+            };
+            external.insert(EXTRA_HANDLE, crate::renderer::graph::GraphResource::Texture(extra_desc, extra_tex));
+        }
+
+        if let Some(taa_tex) = backend.get_taa_history_texture() {
+            let taa_desc = crate::backend::hal::TextureDescriptor {
+                 label: Some("TAA History Buffer"), width: internal_width, height: internal_height, depth: 1,
+                 format: crate::backend::hal::TextureFormat::Rgba16Float,
+                 usage: crate::backend::hal::TextureUsage::TEXTURE_BINDING | crate::backend::hal::TextureUsage::COPY_DST | crate::backend::hal::TextureUsage::COPY_SRC,
+            };
+            external.insert(TAA_HISTORY_HANDLE, crate::renderer::graph::GraphResource::Texture(taa_desc, taa_tex));
         }
 
         if let Some(lut_tex) = backend.get_lut_texture() {
@@ -231,7 +289,7 @@ impl<E: GpuExecutor + 'static> Orchestrator<E> {
         // So I don't need to manually insert it here IF RenderGraph handles internal resources.
         // Let's check RenderGraph implementation.
 
-        let result = self.graph.execute(backend, external, time, width, height, jitter, self.camera_cut);
+        let result = self.graph.execute(backend, external, time, width, height, jitter, self.camera_cut, self.debug_mode);
         self.camera_cut = false; // Reset after frame
         result
     }

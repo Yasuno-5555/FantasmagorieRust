@@ -1,4 +1,4 @@
-﻿use self::atlas::{FontAtlas, GlyphInfo};
+use self::atlas::{FontAtlas, GlyphInfo};
 use crate::core::Vec2;
 use std::cell::RefCell;
 use std::fs;
@@ -28,12 +28,19 @@ impl FontManager {
         }
     }
 
-    pub fn load_font_from_bytes(&mut self, data: &[u8]) -> usize {
+    pub fn load_font_from_bytes(&mut self, data: &[u8]) -> Option<usize> {
         let settings = fontdue::FontSettings::default();
-        let font = fontdue::Font::from_bytes(data, settings).expect("Failed to load font");
-        let idx = self.fonts.len();
-        self.fonts.push(font);
-        idx
+        match fontdue::Font::from_bytes(data, settings) {
+            Ok(font) => {
+                let idx = self.fonts.len();
+                self.fonts.push(font);
+                Some(idx)
+            }
+            Err(_) => {
+                eprintln!("Warning: Failed to load font from bytes");
+                None
+            }
+        }
     }
 
     pub fn load_system_font(&mut self) -> usize {
@@ -48,8 +55,9 @@ impl FontManager {
 
         for path in paths {
             if let Ok(bytes) = fs::read(path) {
-                // println!("Loaded font: {}", path);
-                return self.load_font_from_bytes(&bytes);
+                if let Some(idx) = self.load_font_from_bytes(&bytes) {
+                    return idx;
+                }
             }
         }
 
@@ -66,8 +74,9 @@ impl FontManager {
 
         for path in paths {
             if let Ok(bytes) = fs::read(path) {
-                // println!("Loaded icon font: {}", path);
-                return self.load_font_from_bytes(&bytes);
+                if let Some(idx) = self.load_font_from_bytes(&bytes) {
+                    return idx;
+                }
             }
         }
 

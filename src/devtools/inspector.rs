@@ -1,4 +1,4 @@
-﻿//! UI Inspector for debugging and development
+//! UI Inspector for debugging and development
 //!
 //! Provides runtime inspection of:
 //! - Widget tree hierarchy
@@ -170,6 +170,8 @@ pub struct Inspector {
     show_only_visible: bool,
     /// Highlight hovered widget
     highlight_on_hover: bool,
+    /// Audio telemetry history
+    pub audio_history: std::collections::VecDeque<crate::audio::AudioTelemetry>,
 }
 
 impl Inspector {
@@ -187,7 +189,15 @@ impl Inspector {
             search_filter: String::new(),
             show_only_visible: false,
             highlight_on_hover: true,
+            audio_history: std::collections::VecDeque::with_capacity(120),
         }
+    }
+
+    pub fn update_audio_telemetry(&mut self, telemetry: crate::audio::AudioTelemetry) {
+        if self.audio_history.len() >= 120 {
+            self.audio_history.pop_front();
+        }
+        self.audio_history.push_back(telemetry);
     }
 
     /// Toggle inspector visibility

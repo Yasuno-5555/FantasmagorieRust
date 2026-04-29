@@ -13,8 +13,17 @@ struct CinematicParams {
     lut_intensity: f32,
     blur_radius: f32,
     motion_blur_strength: f32,
-    _pad: f32,
-};
+    debug_mode: u32,
+    light_pos: vec2<f32>,
+    gi_intensity: f32,
+    volumetric_intensity: f32,
+    light_color: vec4<f32>,
+    jitter: vec2<f32>,
+    render_size: vec2<f32>,
+    shadow_softness: f32,
+    _pad1: f32,
+    _pad2: vec2<f32>,
+}
 
 @group(0) @binding(0) var u_hdr_texture: texture_2d<f32>;
 @group(0) @binding(1) var u_vel_texture: texture_2d<f32>;

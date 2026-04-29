@@ -79,7 +79,7 @@ fn render_view_recursive(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &
             Vec2::ZERO,
             0.0,
             0.5,
-            None, 0.0, 0.0, 0.0,
+            None, 0.0, 0.0, 0.0, None,
         );
     }
 
@@ -270,7 +270,7 @@ fn render_button(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         Vec2::ZERO,
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // Render Label and Icon (Centered)
@@ -798,7 +798,7 @@ fn render_slider(view: &ViewHeader, dl: &mut DrawList) {
         Vec2::ZERO,
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 }
 
@@ -826,7 +826,7 @@ fn render_text_input(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager)
             Vec2::ZERO,
             0.0,
             0.5,
-            None, 0.0, 0.0, 0.0,
+            None, 0.0, 0.0, 0.0, None,
         );
     }
 
@@ -1467,7 +1467,7 @@ fn render_fader(view: &ViewHeader, dl: &mut DrawList) {
         Vec2::ZERO, // velocity
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // Handle Center Line (White)
@@ -1654,7 +1654,7 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, fm: &mut FontM
         Vec2::ZERO,
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // 2. Header
@@ -1676,7 +1676,7 @@ fn render_node(view: &ViewHeader, dl: &mut DrawList, _depth: i32, fm: &mut FontM
         Vec2::ZERO,
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // 3. Title
@@ -1786,7 +1786,7 @@ fn render_context_menu(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mu
         Vec2::ZERO,
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // 4. Render children (menu items)
@@ -1898,7 +1898,7 @@ fn render_collapsible(view: &ViewHeader, dl: &mut DrawList, depth: i32, fm: &mut
         Vec2::ZERO,
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // 2. Header bar - use simple rounded rect
@@ -2011,7 +2011,7 @@ fn render_toast(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         Vec2::ZERO, // velocity
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // Color indicator bar on left
@@ -2071,7 +2071,7 @@ fn render_tooltip(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
             Vec2::ZERO,
             0.0,
             0.5,
-            None, 0.0, 0.0, 0.0,
+            None, 0.0, 0.0, 0.0, None,
         );
     }
 
@@ -2095,7 +2095,7 @@ fn render_tooltip(view: &ViewHeader, dl: &mut DrawList, fm: &mut FontManager) {
         Vec2::ZERO,
         0.0,
         0.5,
-        None, 0.0, 0.0, 0.0,
+        None, 0.0, 0.0, 0.0, None,
     );
 
     // Text

@@ -1,4 +1,4 @@
-﻿use crate::core::{Vec2, Mat3, ColorF, Rectangle};
+use crate::core::{Vec2, Mat3, ColorF, Rectangle};
 use std::sync::atomic::{AtomicU64, Ordering};
 pub use super::interaction::{Collider, InteractionState};
 pub use super::state_machine::StateMachine;
@@ -54,7 +54,9 @@ impl Transform {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicsComponent {
     pub velocity: Vec2,
+    pub angular_velocity: f32,
     pub mass: f32, // 0.0 for static
+    pub inertia: f32,
     pub friction: f32,
     pub restitution: f32,
 }
@@ -63,7 +65,9 @@ impl Default for PhysicsComponent {
     fn default() -> Self {
         Self {
             velocity: Vec2::ZERO,
+            angular_velocity: 0.0,
             mass: 1.0,
+            inertia: 1.0,
             friction: 0.1,
             restitution: 0.5,
         }
@@ -125,7 +129,7 @@ impl World {
             audio_listeners: Vec::new(),
             parallax_layers: Vec::new(),
             particle_system: ParticleSystem::new(10000),
-            audio_engine: Some(AudioEngine::new()),
+            audio_engine: AudioEngine::new(44100.0).ok(),
         }
     }
 
@@ -454,17 +458,18 @@ impl World {
 
     /// Updates audio spatialization
     pub fn system_audio(&mut self) {
-        if let Some(engine) = &self.audio_engine {
-            // 1. Update Listener
-            let mut listener_pos = Vec2::ZERO;
-            for i in 0..self.ids.len() {
-                if let Some(l) = &self.audio_listeners[i] {
-                    if l.active {
-                        listener_pos = self.transforms[i].world_position();
-                        break;
-                    }
+        let mut listener_pos = Vec2::ZERO;
+        for i in 0..self.ids.len() {
+            if let Some(l) = &self.audio_listeners[i] {
+                if l.active {
+                    listener_pos = self.transforms[i].world_position();
+                    break;
                 }
             }
+        }
+
+        if let Some(ref mut engine) = self.audio_engine {
+            // 1. Update Listener
             engine.set_listener_pos(listener_pos);
 
             // 2. Update Emitters
@@ -528,7 +533,7 @@ impl World {
         world.signal_bus = SignalBus::new();
         world.sprites = vec![None; world.ids.len()];
         world.particle_system = ParticleSystem::new(10000);
-        world.audio_engine = Some(AudioEngine::new());
+        world.audio_engine = AudioEngine::new(44100.0).ok();
         
         // Ensure arrays satisfy length
         if world.tilemaps.len() < world.ids.len() { world.tilemaps.resize(world.ids.len(), None); }

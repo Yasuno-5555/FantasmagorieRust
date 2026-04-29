@@ -17,6 +17,9 @@ struct CinematicParams {
     light_color: vec4<f32>,
     jitter: vec2<f32>,
     render_size: vec2<f32>,
+    shadow_softness: f32,
+    _pad1: f32,
+    _pad2: vec2<f32>,
 };
 
 @group(0) @binding(0) var t_hdr: texture_2d<f32>;
@@ -88,7 +91,7 @@ fn raymarch_shadow(pixel_pos: vec2<f32>, light_pos: vec2<f32>) -> f32 {
         }
         
         // Soft shadow formula: min(d / t * k)
-        res = min(res, 8.0 * d / t);
+        res = min(res, cinema.shadow_softness * d / t);
         
         t += max(d, 1.0);
         if (t >= max_dist) { break; }

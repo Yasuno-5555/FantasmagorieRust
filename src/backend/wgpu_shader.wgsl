@@ -174,3 +174,33 @@ fn fs_tilemap_gbuffer(in: VertexOutput) -> GBufferOutput {
     out.extra = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     return out;
 }
+
+// --- Culling Support ---
+struct CullingUniforms {
+    instance_count: u32,
+};
+
+@group(0) @binding(10) var<storage, read_write> visible_indices_rw: array<u32>;
+@group(0) @binding(11) var<storage, read_write> draw_calls: array<u32>;
+
+@compute @workgroup_size(64)
+fn culling_main(
+    @builtin(global_invocation_id) global_id: vec3<u32>
+) {
+    let index = global_id.x;
+    let dummy = globals.time;
+    
+    if (index >= u32(arrayLength(&instances))) { return; }
+    
+    // Pass-through: everything is visible
+    visible_indices_rw[index] = index;
+    
+    // Update count (only once)
+    // DrawIndirect structure: [vertexCount, instanceCount, firstVertex, firstInstance]
+    if (index == 0u) {
+        draw_calls[0] = 6u;
+        draw_calls[1] = u32(arrayLength(&instances));
+        draw_calls[2] = 0u;
+        draw_calls[3] = 0u;
+    }
+}

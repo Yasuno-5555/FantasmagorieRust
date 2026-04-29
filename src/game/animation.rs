@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Semantic states for entities (The Logic).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -241,9 +241,11 @@ impl SkeletalAnimationComponent {
                                 }
                                 if let Some(r) = pose.1 {
                                     if let Some(pr) = prev_pose.1 {
-                                        // Simple linear interpolation for angle
-                                        // TODO: Shortest path interpolation
-                                        bone.local_transform.local_rotation = pr + (r - pr) * self.blend_factor;
+                                        // Shortest path interpolation for angle (radians)
+                                        let mut diff = r - pr;
+                                        while diff > std::f32::consts::PI { diff -= std::f32::consts::PI * 2.0; }
+                                        while diff < -std::f32::consts::PI { diff += std::f32::consts::PI * 2.0; }
+                                        bone.local_transform.local_rotation = pr + diff * self.blend_factor;
                                     }
                                 }
                                 if let Some(s) = pose.2 {

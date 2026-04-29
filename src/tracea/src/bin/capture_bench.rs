@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-fn main() {
-    let manager = RuntimeManager::new();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let manager = RuntimeManager::new()?;
     println!("Backend initialized.");
 
     // 1. Define Graph
@@ -79,4 +79,5 @@ fn main() {
     let duration = start.elapsed();
     println!("100 runs took: {:?}", duration);
     println!("Avg Latency: {:?}", duration / 100);
+    Ok(())
 }

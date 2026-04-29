@@ -146,7 +146,7 @@ impl TraceaFFTKernel {
 #[cfg(feature = "wgpu")]
 impl TraceaFFTKernel {
     fn new_wgpu(context: &TraceaContext, fft_size: usize) -> Result<Self, String> {
-        let device = context.wgpu_device();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
         
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tracea FFT"),
@@ -202,8 +202,8 @@ impl TraceaFFTKernel {
     }
     
     fn compute_spectrum_wgpu(&self, context: &TraceaContext, state: &WgpuFFTState, samples: &[f32]) -> Result<Vec<f32>, String> {
-        let device = context.wgpu_device();
-        let queue = context.wgpu_queue();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
+        let queue = context.wgpu_queue().ok_or("WGPU queue not initialized")?;
         let size = self.fft_size as u32; // Shadowing field as u32
         
         // Prepare data

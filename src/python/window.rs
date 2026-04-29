@@ -1,4 +1,4 @@
-﻿//! Window runner - winit event loop integration
+//! Window runner - winit event loop integration
 //!
 //! Implements run_window() which:
 //! 1. Creates a window with glutin/winit
@@ -13,7 +13,8 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Event, MouseButton, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
-use winit::window::WindowBuilder;
+use winit::keyboard::KeyCode;
+use crate::renderer::graph::DebugDisplayMode;
 use std::sync::Arc;
 use pyo3::exceptions::PyRuntimeError;
 
@@ -185,6 +186,18 @@ fn run_window_impl(width: u32, height: u32, title: &str, callback: PyObject) -> 
                     if let winit::keyboard::PhysicalKey::Code(code) = event.physical_key {
                         if event.state == ElementState::Pressed {
                             crate::view::interaction::handle_key_down(code);
+
+                            // Handle Debug Keys
+                            match code {
+                                KeyCode::F1 => backend.set_debug_mode(DebugDisplayMode::None),
+                                KeyCode::F2 => backend.set_debug_mode(DebugDisplayMode::Albedo),
+                                KeyCode::F3 => backend.set_debug_mode(DebugDisplayMode::Normal),
+                                KeyCode::F4 => backend.set_debug_mode(DebugDisplayMode::Velocity),
+                                KeyCode::F5 => backend.set_debug_mode(DebugDisplayMode::Depth),
+                                KeyCode::F6 => backend.set_debug_mode(DebugDisplayMode::Emissive),
+                                KeyCode::F7 => backend.set_debug_mode(DebugDisplayMode::SDF),
+                                _ => {}
+                            }
 
                             // Handle text input from the key event directly if available
                             if let Some(text) = event.text {

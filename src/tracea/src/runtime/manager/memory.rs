@@ -376,9 +376,16 @@ impl RuntimeManager {
             },
             #[cfg(target_os = "macos")]
             (DeviceBuffer::Metal(s), DeviceBuffer::Metal(d)) => {
-                // For Metal, we might need an encoder, but for now we use simple BLIT if available
-                // Or just return error if not implemented for basic D2D outside ICB
-                Err("Metal D2D copy outside ICB not implemented".into())
+                let devices = self.devices.lock().map_err(|_| "Lock")?;
+                let handle = devices.get(&DeviceBackend::Metal).ok_or("No Metal Device")?;
+                let backend = handle.metal_dev.as_ref().ok_or("No Metal Backend")?;
+                
+                let cb = backend.queue.new_command_buffer();
+                let blit = cb.new_blit_command_encoder();
+                blit.copy_from_buffer(s, src_offset as u64, d, dst_offset as u64, size as u64);
+                blit.end_encoding();
+                cb.commit();
+                Ok(())
             }
             _ => {
                 Err("memcpy_d2d: Unsupported backend combination or buffer missing".into())

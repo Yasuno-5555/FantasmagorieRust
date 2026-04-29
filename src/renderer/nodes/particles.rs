@@ -142,7 +142,7 @@ impl<E: GpuExecutor + 'static> RenderNode<E> for ParticleNode {
             emit_rate: 1000.0,
             gravity: [0.0, 98.0], 
             delta_time: dt,
-            seed: (ctx.executor.get_default_sampler() as *const _ as usize) as f32,
+            seed: 0.0,
             drag_coefficient: 2.0, 
             _pad0: 0,
             jitter: [ctx.jitter.0, ctx.jitter.1],
@@ -183,7 +183,7 @@ impl<E: GpuExecutor + 'static> RenderNode<E> for ParticleNode {
                         BindGroupEntry { binding: 0, resource: BindingResource::Buffer(p_buffer) },
                         BindGroupEntry { binding: 1, resource: BindingResource::Buffer(cinematic_buffer) },
                         BindGroupEntry { binding: 2, resource: BindingResource::Texture(sdf) },
-                        BindGroupEntry { binding: 3, resource: BindingResource::Sampler(sampler) },
+                        BindGroupEntry { binding: 3, resource: BindingResource::Sampler(&sampler) },
                         BindGroupEntry { binding: 4, resource: BindingResource::Buffer(c_buffer) },
                         BindGroupEntry { binding: 5, resource: BindingResource::Texture(vel) },
                     ];
@@ -196,7 +196,7 @@ impl<E: GpuExecutor + 'static> RenderNode<E> for ParticleNode {
         }
 
         // 5. Render Bindings & Draw
-        if let Some(depth) = depth_view {
+        if let Some(depth) = &depth_view {
             // Need sdf_view too?
              if let Some(sdf) = &sdf_view {
                 let cinematic_buffer = ctx.executor.get_cinematic_buffer();
@@ -206,9 +206,9 @@ impl<E: GpuExecutor + 'static> RenderNode<E> for ParticleNode {
                 let r_entries = [
                     BindGroupEntry { binding: 0, resource: BindingResource::Buffer(p_buffer) },
                     BindGroupEntry { binding: 2, resource: BindingResource::Texture(sdf) },
-                    BindGroupEntry { binding: 3, resource: BindingResource::Sampler(sampler) },
+                    BindGroupEntry { binding: 3, resource: BindingResource::Sampler(&sampler) },
                     BindGroupEntry { binding: 4, resource: BindingResource::Buffer(c_buffer) }, 
-                    BindGroupEntry { binding: 6, resource: BindingResource::Texture(&depth) },
+                    BindGroupEntry { binding: 6, resource: BindingResource::Texture(depth) },
                 ];
                 let r_bind_group = ctx.executor.create_bind_group(&r_layout, &r_entries)?;
                 

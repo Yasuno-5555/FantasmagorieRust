@@ -169,6 +169,7 @@ impl GraphExecutor {
                     }
 
                     // Launch via Manager
+                    println!("[Executor] 🚀 Launching Kernel: {:?} (Grid: {:?}, Block: {:?})", kernel_id, grid_size, block_size);
                     manager.launch_kernel_by_id(
                         crate::runtime::manager::KernelId(*kernel_id as u64),
                         *grid_size,
@@ -179,6 +180,7 @@ impl GraphExecutor {
                 },
                 ExecutionStep::Memcpy { src_offset, dst_offset, size } => {
                     // Intra-arena copy
+                    println!("[Executor] 📦 Memcpy D2D: {} -> {} ({} bytes)", src_offset, dst_offset, size);
                     manager.memcpy_d2d(arena_id, *src_offset, arena_id, *dst_offset, *size)?;
                 }
             }
@@ -187,6 +189,7 @@ impl GraphExecutor {
         // 3. Retrieve Outputs
         let mut results = HashMap::new();
         for (op_id, (offset, size)) in &plan.output_map {
+             println!("[Executor] 📥 Retrieving Output Op: {} from Arena offset: {} ({} bytes)", op_id, offset, size);
              let output_buf = manager.alloc(*size, self.backend)?;
              manager.memcpy_d2d(arena_id, *offset, output_buf, 0, *size)?;
              results.insert(*op_id, output_buf);

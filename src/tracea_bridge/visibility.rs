@@ -28,7 +28,7 @@ pub struct CullingUniforms {
 impl TraceaVisibilityKernel {
     #[cfg(feature = "wgpu")]
     pub fn new_wgpu(context: &TraceaContext) -> Result<Self, String> {
-        let device = context.wgpu_device();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
         
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tracea Visibility"),
@@ -76,8 +76,8 @@ impl TraceaVisibilityKernel {
     ) -> Result<(), String> {
         use wgpu::util::DeviceExt;
         let state = self.wgpu_state.as_ref().ok_or("WGPU state not initialized")?;
-        let device = context.wgpu_device();
-        let queue = context.wgpu_queue();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
+        let queue = context.wgpu_queue().ok_or("WGPU queue not initialized")?;
         
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Culling Uniforms"),

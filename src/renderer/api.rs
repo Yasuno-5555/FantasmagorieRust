@@ -56,7 +56,8 @@ impl Renderer {
             velocity_cache: std::collections::HashMap::new(),
         };
 
-        // Pass initial cinematic config to backend
+        // Pass initial config to backend
+        renderer.backend.set_config(renderer.config.clone());
         renderer.backend.set_cinematic_config(renderer.config.cinematic);
         renderer.backend.set_resolution_scale(renderer.config.internal_resolution_scale);
         
@@ -90,7 +91,12 @@ impl Renderer {
 
     /// Submits the frame.
     /// In Lite mode, this transmutes RenderCommands into DrawCommands for the backend.
-    pub fn end_frame(&mut self, frame: FrameContext, width: u32, height: u32) {
+    pub fn end_frame(&mut self, frame: FrameContext, width: u32, height: u32, dirty: bool) {
+        if !dirty {
+            // Early exit: skip the entire rendering pipeline
+            return;
+        }
+
         let description = frame.finish();
         
         let mut dl = crate::draw::DrawList::new();
@@ -99,17 +105,28 @@ impl Renderer {
         self.render_list(&dl, width, height);
     }
 
+    /// Optimized UI render path that uses the incremental rendering system.
+    pub fn render_ui(&mut self, root: &crate::view::ViewHeader, width: f32, height: f32, dirty: bool) {
+        if !dirty {
+            return;
+        }
+
+        let mut dl = crate::draw::DrawList::new();
+        
+        // Ensure fonts are initialized and texture is updated
+        crate::text::FONT_MANAGER.with(|fm| {
+            let mut fm = fm.borrow_mut();
+            crate::view::render_ui(root, width, height, &mut dl, &mut fm);
+        });
+
+        // Call render_list AFTER releasing the FONT_MANAGER borrow
+        self.render_list(&dl, width as u32, height as u32);
+    }
+
     /// Direct render path for a DrawList.
     /// Renderer acts as a carrier to the backend.
     pub fn render_list(&mut self, dl: &crate::draw::DrawList, width: u32, height: u32) {
-        // Auto-update font texture if dirty
-        crate::text::FONT_MANAGER.with(|fm| {
-            let mut fm = fm.borrow_mut();
-            if fm.texture_dirty {
-                self.backend.update_font_texture(fm.atlas.width, fm.atlas.height, &fm.atlas.texture_data);
-                fm.texture_dirty = false;
-            }
-        });
+        self.update_fonts_if_dirty();
 
         self.backend.render(dl, width, height);
         self.backend.present();
@@ -125,6 +142,17 @@ impl Renderer {
     pub fn update_cinematic(&mut self, config: crate::config::CinematicConfig) {
         self.config.cinematic = config;
         self.backend.set_cinematic_config(config);
+    }
+
+    /// Update font texture if the manager reports it's dirty.
+    pub fn update_fonts_if_dirty(&mut self) {
+        crate::text::FONT_MANAGER.with(|fm| {
+            let mut fm = fm.borrow_mut();
+            if fm.texture_dirty {
+                self.backend.update_font_texture(fm.atlas.width, fm.atlas.height, &fm.atlas.texture_data);
+                fm.texture_dirty = false;
+            }
+        });
     }
 
     /// Carrier method for font texture updates.
@@ -228,6 +256,7 @@ impl Renderer {
                         *distortion_strength,
                         *emissive_intensity,
                         *parallax_factor,
+                        None,
                     );
                     
                     // Update the last added command with velocity if we have an ID

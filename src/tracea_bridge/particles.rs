@@ -207,7 +207,7 @@ impl TraceaParticleKernel {
 #[cfg(feature = "wgpu")]
 impl TraceaParticleKernel {
     fn new_wgpu(context: &TraceaContext, count: usize) -> Result<Self, String> {
-        let device = context.wgpu_device();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
         
         // Shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -312,7 +312,7 @@ impl TraceaParticleKernel {
     
     pub fn update_wgpu(&self, context: &TraceaContext, dt: f32, attractor: [f32; 2], sdf_view: Option<&wgpu::TextureView>, sampler: Option<&wgpu::Sampler>) -> Result<(), String> {
         if let Some(state) = &self.wgpu_state {
-            let queue = context.wgpu_queue();
+            let queue = context.wgpu_queue().ok_or("WGPU queue not initialized")?;
             
             // Update Params
              let params = SimParams {
@@ -333,7 +333,7 @@ impl TraceaParticleKernel {
             // If SDF is None, we need a dummy or handle it.
             // For now assume caller provides valid SDF/Sampler or we fail/skip.
             if let (Some(view), Some(samp)) = (sdf_view, sampler) {
-                let device = context.wgpu_device();
+                let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Particle Work BG"),
                     layout: &state.bind_group_layout,

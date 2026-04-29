@@ -2,9 +2,9 @@ use tracea::runtime::manager::{RuntimeManager, DeviceBackend};
 use tracea::policy::types::{GraphTopology, OperatorTopology};
 use std::collections::HashMap;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Tracea Graph Cache Verification");
-    let runtime = RuntimeManager::new();
+    let runtime = RuntimeManager::new()?;
     let backend = DeviceBackend::Metal; // Or default available
 
     // Scenario 1: Basic Cache Hit
@@ -30,6 +30,7 @@ fn main() {
     println!("\n--- Scenario 3: Revert to Original ---");
     println!("Run 4 (Expect HIT):");
     runtime.execute_graph(&graph1, &inputs1, backend).unwrap();
+    Ok(())
 }
 
 fn create_dummy_graph(start_id: u64) -> GraphTopology {

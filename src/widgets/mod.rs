@@ -1,4 +1,4 @@
-﻿//! Widget builders - Fluent API for view construction
+//! Widget builders - Fluent API for view construction
 //! Ported from api.hpp
 //!
 //! Uses immutable references with Cell for interior mutability
@@ -27,6 +27,7 @@ pub mod scene3d;
 pub mod toggle;
 pub mod virtual_list;
 pub mod splitter;
+pub mod inspector;
 
 use crate::core::persistence::PersistenceManager;
 use crate::core::{ColorF, FrameArena, Theme, ID};
@@ -187,8 +188,18 @@ impl<'a> TextBuilder<'a> {
         self
     }
 
-    pub fn margin(self, m: f32) -> Self {
-        self.view.margin.set(m);
+    pub fn width(self, w: f32) -> Self {
+        self.view.width.set(w);
+        self
+    }
+
+    pub fn height(self, h: f32) -> Self {
+        self.view.height.set(h);
+        self
+    }
+
+    pub fn flex_grow(self, grow: f32) -> Self {
+        self.view.flex_grow.set(grow);
         self
     }
 
@@ -295,6 +306,8 @@ pub struct UIContext<'a> {
     pub style: crate::core::theme::Style,
     next_id: u64,
     pub persistence: Option<&'a PersistenceManager>,
+    /// Incremental rendering: did anything change this frame?
+    pub dirty: std::cell::Cell<bool>,
 }
 
 impl<'a> UIContext<'a> {
@@ -307,6 +320,7 @@ impl<'a> UIContext<'a> {
             style: crate::core::theme::Style::default(),
             next_id: 1,
             persistence: None,
+            dirty: std::cell::Cell::new(false),
         }
     }
 
@@ -333,12 +347,18 @@ impl<'a> UIContext<'a> {
 
     /// Internal helper to push a view to the parent stack or set it as root
     fn push_child(&mut self, view: &'a ViewHeader<'a>) {
+        self.dirty.set(true); // Any new widget makes the frame dirty
         if self.root.is_none() {
             self.root = Some(view);
         }
         if let Some(parent) = self.parent_stack.last() {
             parent.add_child(view);
         }
+    }
+
+    /// Force a repaint next frame
+    pub fn request_repaint(&self) {
+        self.dirty.set(true);
     }
 
     /// Create a box container
@@ -541,18 +561,18 @@ impl<'a> UIContext<'a> {
     }
 
     /// Create toggle switch
-    pub fn toggle(
-        &mut self,
-        value: &'a mut bool,
-    ) -> crate::widgets::toggle::ToggleBuilder<'_, 'a> {
+    pub fn toggle<'v, 'b>(
+        &'b mut self,
+        value: &'v mut bool,
+    ) -> crate::widgets::toggle::ToggleBuilder<'b, 'a, 'v> {
         crate::widgets::toggle::ToggleBuilder::new(self, value)
     }
 
     /// Create checkbox
-    pub fn checkbox(
-        &mut self,
-        value: &'a mut bool,
-    ) -> crate::widgets::checkbox::CheckboxBuilder<'_, 'a> {
+    pub fn checkbox<'v, 'b>(
+        &'b mut self,
+        value: &'v mut bool,
+    ) -> crate::widgets::checkbox::CheckboxBuilder<'b, 'a, 'v> {
         crate::widgets::checkbox::CheckboxBuilder::new(self, value)
     }
 
@@ -632,12 +652,12 @@ impl<'a> UIContext<'a> {
         splitter::SplitterBuilder { view }
     }
 
-    pub fn value_dragger(
+    pub fn value_dragger<'v>(
         &mut self,
-        value: &'a mut f32,
+        value: &'v mut f32,
         min: f32,
         max: f32,
-    ) -> crate::widgets::dragger::ValueDraggerBuilder<'a> {
+    ) -> crate::widgets::dragger::ValueDraggerBuilder<'a, 'v> {
         let id = ID::from_u64(self.next_id);
         self.next_id += 1;
         let view = self.arena.alloc(ViewHeader {

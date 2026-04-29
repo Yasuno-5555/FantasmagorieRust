@@ -30,7 +30,7 @@ impl TraceaAudioKernel {
     pub fn new_wgpu(context: &TraceaContext) -> Result<Self, String> {
         use wgpu::util::DeviceExt;
         
-        let device = context.wgpu_device();
+        let device = context.wgpu_device().ok_or("WGPU device not initialized")?;
         
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tracea Audio"),

@@ -1,4 +1,4 @@
-﻿//! # Engine Configuration (The Soul)
+//! # Engine Configuration (The Soul)
 //!
 //! This module defines the Dual Persona architecture's core switch.
 //! The `Profile` determines the engine's entire behavior at startup.
@@ -485,5 +485,41 @@ mod tests {
         
         let ratio = config.aspect_ratio();
         assert!((ratio - 16.0 / 9.0).abs() < 0.001);
+    }
+}
+
+use notify::{Watcher, RecursiveMode, Result as NotifyResult};
+use std::path::Path;
+use std::sync::mpsc::Receiver;
+
+/// Watcher for configuration files to enable hot-reloading
+pub struct ConfigWatcher {
+    _watcher: notify::RecommendedWatcher,
+    pub receiver: Receiver<NotifyResult<notify::Event>>,
+}
+
+impl ConfigWatcher {
+    pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify::RecommendedWatcher::new(tx, notify::Config::default()).unwrap();
+        watcher.watch(path.as_ref(), RecursiveMode::NonRecursive).unwrap();
+        
+        Self {
+            _watcher: watcher,
+            receiver: rx,
+        }
+    }
+
+    /// Check for updates and return true if any file changed
+    pub fn check_for_updates(&self) -> bool {
+        let mut updated = false;
+        while let Ok(event) = self.receiver.try_recv() {
+            if let Ok(event) = event {
+                if event.kind.is_modify() {
+                    updated = true;
+                }
+            }
+        }
+        updated
     }
 }

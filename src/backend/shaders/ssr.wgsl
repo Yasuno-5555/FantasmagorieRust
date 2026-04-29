@@ -1,14 +1,31 @@
 // Screen Space Reflections (SSR) Shader
 // Linear Raymarching in Screen Space
 
-struct GlobalUniforms {
-    projection: mat4x4<f32>,
+struct CinematicParams {
+    exposure: f32,
+    ca_strength: f32,
+    vignette_intensity: f32,
+    bloom_intensity: f32,
+    tonemap_mode: u32,
+    bloom_mode: u32,
+    grain_strength: f32,
     time: f32,
-    viewport_size: vec2<f32>,
-    _pad: f32,
-};
+    lut_intensity: f32,
+    blur_radius: f32,
+    motion_blur_strength: f32,
+    debug_mode: u32,
+    light_pos: vec2<f32>,
+    gi_intensity: f32,
+    volumetric_intensity: f32,
+    light_color: vec4<f32>,
+    jitter: vec2<f32>,
+    render_size: vec2<f32>,
+    shadow_softness: f32,
+    _pad1: f32,
+    _pad2: vec2<f32>,
+}
 
-@group(0) @binding(0) var<uniform> glob: GlobalUniforms;
+@group(0) @binding(0) var<uniform> glob: CinematicParams;
 @group(0) @binding(1) var t_hdr: texture_2d<f32>;
 @group(0) @binding(2) var t_depth: texture_depth_2d;
 @group(0) @binding(3) var t_aux: texture_2d<f32>; // nx, ny, roughness, reflectivity
@@ -56,8 +73,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let reflect_dir = reflect(view_dir, normalize(normal));
         
         // --- Raymarching ---
+        // Jitter ray start to reduce banding
+        let noise = fract(sin(dot(uv * glob.time, vec2<f32>(12.9898, 78.233))) * 43758.5453);
         var ray_pos = vec3<f32>(uv, textureSample(t_depth, s_linear, uv));
         let ray_step = reflect_dir * STEP_SIZE;
+        ray_pos += ray_step * noise;
         
         var hit = false;
         

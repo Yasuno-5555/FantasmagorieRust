@@ -1,18 +1,18 @@
-﻿//! ValueDragger widget - Professional numeric input with drag and type support
+//! ValueDragger widget - Professional numeric input with drag and type support
 use crate::core::{ColorF, Vec2, ID};
 use crate::view::header::{ViewHeader, ViewType};
 use std::cell::Cell;
 
 /// ValueDragger builder
-pub struct ValueDraggerBuilder<'a> {
+pub struct ValueDraggerBuilder<'a, 'v> {
     pub view: &'a ViewHeader<'a>,
-    pub value: &'a mut f32,
+    pub value: &'v mut f32,
     pub min: f32,
     pub max: f32,
     pub step: f32,
 }
 
-impl<'a> ValueDraggerBuilder<'a> {
+impl<'a, 'v> ValueDraggerBuilder<'a, 'v> {
     pub fn id(self, id: impl Into<ID>) -> Self {
         self.view.id.set(id.into());
         self
@@ -21,6 +21,21 @@ impl<'a> ValueDraggerBuilder<'a> {
     pub fn size(self, w: f32, h: f32) -> Self {
         self.view.width.set(w);
         self.view.height.set(h);
+        self
+    }
+
+    pub fn width(self, w: f32) -> Self {
+        self.view.width.set(w);
+        self
+    }
+
+    pub fn height(self, h: f32) -> Self {
+        self.view.height.set(h);
+        self
+    }
+
+    pub fn flex_grow(self, grow: f32) -> Self {
+        self.view.flex_grow.set(grow);
         self
     }
 

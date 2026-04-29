@@ -1,4 +1,4 @@
-﻿//! Core types and infrastructure
+//! Core types and infrastructure
 
 pub mod a11y;
 mod arena;
@@ -15,6 +15,8 @@ pub mod theme;
 mod types;
 pub mod undo;
 pub mod wire;
+pub mod state;
+pub mod util;
 
 pub use a11y::{
     is_high_contrast_mode, AccessibleInfo, AccessibleRole, AccessibleStore, FocusManager,
@@ -30,4 +32,5 @@ pub use mobile::{
 pub use theme::{Style, Theme};
 pub use types::{ColorF, Mat3, Rectangle, Vec2, Vec3, WindowID};
 pub use undo::{BatchCommand, CallbackCommand, Command, CommandStack};
+pub use util::block_on;
 pub use wire::{Connection, ConnectionResult, Port, PortId, PortType, WireInteraction, WireState};

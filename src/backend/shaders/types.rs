@@ -39,7 +39,10 @@ pub struct CinematicParams {
     pub volumetric_intensity: f32,
     pub light_color: [f32; 4],
     pub jitter: [f32; 2],            // 8 bytes at offset 80
-    pub render_size: [f32; 2],       // 8 bytes at offset 88 -> total 96 bytes
+    pub render_size: [f32; 2],       // 8 bytes at offset 88
+    pub shadow_softness: f32,        // 4 bytes at offset 96
+    pub _pad1: f32,                  // 4 bytes at offset 100
+    pub _pad2: [f32; 2],             // 8 bytes at offset 104 -> total 112 bytes
 }
 
 impl Default for CinematicParams {
@@ -63,6 +66,9 @@ impl Default for CinematicParams {
             light_color: [1.0, 0.9, 0.7, 1.0],
             jitter: [0.0, 0.0],
             render_size: [1280.0, 720.0],
+            shadow_softness: 8.0,
+            _pad1: 0.0,
+            _pad2: [0.0, 0.0],
         }
     }
 }

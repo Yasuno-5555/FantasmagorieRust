@@ -1,16 +1,16 @@
-﻿use crate::core::ID;
+use crate::core::ID;
 use crate::view::header::{ViewHeader, ViewType};
 use crate::widgets::UIContext;
 
-pub struct CheckboxBuilder<'b, 'a> {
+pub struct CheckboxBuilder<'b, 'a, 'v> {
     ui: &'b mut UIContext<'a>,
     view: &'a ViewHeader<'a>,
-    value: &'a mut bool,
+    value: &'v mut bool,
     label: Option<&'a str>,
 }
 
-impl<'b, 'a> CheckboxBuilder<'b, 'a> {
-    pub fn new(ui: &'b mut UIContext<'a>, value: &'a mut bool) -> Self {
+impl<'b, 'a, 'v> CheckboxBuilder<'b, 'a, 'v> {
+    pub fn new(ui: &'b mut UIContext<'a>, value: &'v mut bool) -> Self {
         let id = ID::from_u64(ui.next_id());
         let view = ui.arena.alloc(ViewHeader {
             view_type: ViewType::Checkbox,

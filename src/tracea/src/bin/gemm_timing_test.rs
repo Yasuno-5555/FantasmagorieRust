@@ -6,7 +6,7 @@ use std::time::Instant;
 fn main() {
     println!("🧪 Accurate GEMM Timing Test");
     
-    let runtime = RuntimeManager::new();
+    let runtime = RuntimeManager::new().unwrap();
     let backend = DeviceBackend::Metal;
     
     let m = 2048usize;

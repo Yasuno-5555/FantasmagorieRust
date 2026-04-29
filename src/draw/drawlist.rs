@@ -33,6 +33,7 @@ pub enum DrawCommand {
         distortion_strength: f32,
         emissive_intensity: f32,
         parallax_factor: f32,
+        material: Option<crate::renderer::material::Material>,
     },
 
     /// Text glyph (SDF)
@@ -276,6 +277,7 @@ impl DrawList {
             distortion_strength: 0.0,
             emissive_intensity: 0.0,
             parallax_factor: 0.0,
+            material: None,
         });
     }
 
@@ -301,6 +303,7 @@ impl DrawList {
         distortion_strength: f32,
         emissive_intensity: f32,
         parallax_factor: f32,
+        material: Option<crate::renderer::material::Material>,
     ) {
         self.commands.push(DrawCommand::RoundedRect {
             pos,
@@ -323,6 +326,7 @@ impl DrawList {
             distortion_strength,
             emissive_intensity,
             parallax_factor,
+            material,
         });
     }
 
@@ -349,6 +353,7 @@ impl DrawList {
         distortion_strength: f32,
         emissive_intensity: f32,
         parallax_factor: f32,
+        material: Option<crate::renderer::material::Material>,
     ) {
         self.commands.push(DrawCommand::RoundedRect {
             pos,
@@ -371,6 +376,7 @@ impl DrawList {
             distortion_strength,
             emissive_intensity,
             parallax_factor,
+            material,
         });
     }
 
@@ -404,6 +410,7 @@ impl DrawList {
             0.0,
             0.0,
             0.0,
+            None,
         );
     }
 

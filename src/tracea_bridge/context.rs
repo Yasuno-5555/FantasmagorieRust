@@ -69,8 +69,8 @@ impl TraceaContext {
     }
     
     #[cfg(feature = "metal")]
-    pub fn device(&self) -> &metal::Device {
-        self.device.as_ref().expect("Metal device not initialized")
+    pub fn device(&self) -> Option<&metal::Device> {
+        self.device.as_ref()
     }
 
     #[cfg(feature = "metal")]
@@ -79,18 +79,26 @@ impl TraceaContext {
     }
 
     #[cfg(feature = "wgpu")]
-    pub fn wgpu_device(&self) -> &wgpu::Device {
-        self.wgpu_device.as_ref().expect("WGPU device not initialized")
+    pub fn wgpu_device(&self) -> Option<&wgpu::Device> {
+        self.wgpu_device.as_ref().map(|v| &**v)
     }
 
     #[cfg(feature = "wgpu")]
-    pub fn wgpu_queue(&self) -> &wgpu::Queue {
-        self.wgpu_queue.as_ref().expect("WGPU queue not initialized")
+    pub fn wgpu_queue(&self) -> Option<&wgpu::Queue> {
+        self.wgpu_queue.as_ref().map(|v| &**v)
     }
 }
 
 impl Default for TraceaContext {
     fn default() -> Self {
-        Self::new(None).expect("Failed to create TraceaContext")
+        Self {
+            #[cfg(feature = "metal")]
+            device: None,
+            #[cfg(feature = "wgpu")]
+            wgpu_device: None,
+            #[cfg(feature = "wgpu")]
+            wgpu_queue: None,
+            initialized: false,
+        }
     }
 }

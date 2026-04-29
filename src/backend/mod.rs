@@ -61,6 +61,11 @@ pub trait GraphicsBackend {
         // Default no-op
     }
 
+    /// Set the entire engine configuration
+    fn set_config(&mut self, _config: crate::config::EngineConfig) {
+        // Default no-op
+    }
+
     /// Set cinematic parameters
     fn set_cinematic_config(&mut self, _config: CinematicConfig) {
         // Default no-op

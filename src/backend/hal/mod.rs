@@ -165,6 +165,7 @@ pub trait GpuExecutor: Send + Sync {
         aux_view: &Self::TextureView,
         velocity_view: &Self::TextureView,
         depth_view: &Self::TextureView,
+        extra_view: &Self::TextureView,
     ) -> Result<(), String>;
 
     /// Perform an indirect instanced draw call with MRT
@@ -179,6 +180,7 @@ pub trait GpuExecutor: Send + Sync {
         aux_view: &Self::TextureView,
         velocity_view: &Self::TextureView,
         depth_view: &Self::TextureView,
+        extra_view: &Self::TextureView,
     ) -> Result<(), String>;
 
     /// Draw particles (Additive/Alpha, LoadOp::Load)
@@ -269,7 +271,7 @@ pub trait GpuExecutor: Send + Sync {
     fn supports_tracea_particles(&self) -> bool { false }
 
     /// Get HZB (Hierarchical Z-Buffer) view for occlusion culling
-    fn get_hzb_view(&self) -> &Self::TextureView;
+    fn get_hzb_view(&self) -> Self::TextureView;
     
     /// Check if native tilemap rendering is supported
     fn supports_tilemap(&self) -> bool { false }
@@ -325,10 +327,10 @@ pub trait GpuExecutor: Send + Sync {
     ) -> Result<Self::BindGroup, String>;
 
     /// Get the standard font atlas texture view
-    fn get_font_view(&self) -> &Self::TextureView;
+    fn get_font_view(&self) -> Self::TextureView;
 
     /// Get the current backdrop texture view
-    fn get_backdrop_view(&self) -> &Self::TextureView;
+    fn get_backdrop_view(&self) -> Self::TextureView;
 
     /// Get the primary HDR texture (if managed by backend)
     fn get_hdr_texture(&self) -> Option<Self::Texture>;
@@ -340,23 +342,25 @@ pub trait GpuExecutor: Send + Sync {
     fn get_aux_texture(&self) -> Option<Self::Texture>;
     fn get_velocity_texture(&self) -> Option<Self::Texture>;
     fn get_depth_texture(&self) -> Option<Self::Texture>;
+    fn get_extra_texture(&self) -> Option<Self::Texture> { None }
+    fn get_taa_history_texture(&self) -> Option<Self::Texture> { None }
 
     /// Get the default bind group layout    /// Get default bind group layout
-    fn get_default_bind_group_layout(&self) -> &Self::BindGroupLayout;
+    fn get_default_bind_group_layout(&self) -> Self::BindGroupLayout;
     /// Get instanced bind group layout
-    fn get_instanced_bind_group_layout(&self) -> &Self::BindGroupLayout;
+    fn get_instanced_bind_group_layout(&self) -> Self::BindGroupLayout;
     /// Get culling compute bind group layout
-    fn get_culling_bind_group_layout(&self) -> &Self::BindGroupLayout;
+    fn get_culling_bind_group_layout(&self) -> Self::BindGroupLayout;
 
     /// Get default sampler pipeline
-    fn get_default_render_pipeline(&self) -> &Self::RenderPipeline;
+    fn get_default_render_pipeline(&self) -> Self::RenderPipeline;
 
     /// Get the instanced render pipeline (for batched shapes)
-    fn get_instanced_render_pipeline(&self) -> &Self::RenderPipeline;
-    fn get_instanced_gbuffer_render_pipeline(&self) -> &Self::RenderPipeline;
-    fn get_culling_pipeline(&self) -> &Self::ComputePipeline;
+    fn get_instanced_render_pipeline(&self) -> Self::RenderPipeline;
+    fn get_instanced_gbuffer_render_pipeline(&self) -> Self::RenderPipeline;
+    fn get_culling_pipeline(&self) -> Self::ComputePipeline;
     /// Get a dummy storage buffer (e.g. for empty instance lists)
-    fn get_dummy_storage_buffer(&self) -> &Self::Buffer;
+    fn get_dummy_storage_buffer(&self) -> Self::Buffer;
 
     fn set_reflection_texture(&mut self, _texture: &Self::TextureView) -> Result<(), String> {
         Ok(())
@@ -381,6 +385,7 @@ pub trait GpuExecutor: Send + Sync {
     fn draw_post_process_pass(&mut self, input_view: &Self::TextureView, output_view: Option<&Self::TextureView>) -> Result<(), String>;
     fn draw_fxaa_pass(&mut self, input_view: &Self::TextureView) -> Result<(), String>;
     fn upscale(&mut self, input: &Self::TextureView, output: &Self::TextureView, params: UpscaleParams) -> Result<(), String>;
+    fn draw_taa_pass(&mut self, _current_view: &Self::TextureView, _history_view: &Self::TextureView, _velocity_view: &Self::TextureView, _output_view: &Self::TextureView) -> Result<(), String> { Ok(()) }
 
     fn draw_bloom_pass(&mut self, _input_view: &Self::TextureView) -> Result<(), String> {
         Ok(())
@@ -395,7 +400,7 @@ pub trait GpuExecutor: Send + Sync {
     }
 
     /// Get the default sampler
-    fn get_default_sampler(&self) -> &Self::Sampler;
+    fn get_default_sampler(&self) -> Self::Sampler;
 
     /// Get or create a custom render pipeline from shader source (GLSL/WGSL)
     fn get_custom_render_pipeline(

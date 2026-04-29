@@ -7,7 +7,7 @@ use std::sync::Arc;
 fn bench_attention_execute(c: &mut Criterion) {
     #[cfg(target_os = "macos")]
     {
-        let runtime = Arc::new(RuntimeManager::new());
+        let runtime = Arc::new(RuntimeManager::new().unwrap());
         let b = 1; let h = 8; let s = 2048; let d = 64;
         
         // 1. Pre-allocate inputs
@@ -22,9 +22,9 @@ fn bench_attention_execute(c: &mut Criterion) {
 
         let graph = GraphTopology {
             operators: vec![
-                OperatorTopology::Elementwise { op_id: 100, name: "q_in".into(), kind: "Identity".into() },
-                OperatorTopology::Elementwise { op_id: 101, name: "k_in".into(), kind: "Identity".into() },
-                OperatorTopology::Elementwise { op_id: 102, name: "v_in".into(), kind: "Identity".into() },
+                OperatorTopology::Elementwise { op_id: 100, name: "q_in".into(), kind: "Identity".into(), n: 0 },
+                OperatorTopology::Elementwise { op_id: 101, name: "k_in".into(), kind: "Identity".into(), n: 0 },
+                OperatorTopology::Elementwise { op_id: 102, name: "v_in".into(), kind: "Identity".into(), n: 0 },
                 OperatorTopology::Attention {
                     op_id: 1, name: "attn".into(),
                     b: b as u32, s: s as u32, h: h as u32, d: d as u32,
@@ -66,6 +66,7 @@ fn bench_attention_execute(c: &mut Criterion) {
                  ..Default::default()
             },
             conv_magic_strategy: None,
+            polyhedral_strategy: None,
         };
         use tracea::emitter::traits::Emitter;
         let emitter = tracea::emitter::metal::MetalEmitter::detect();

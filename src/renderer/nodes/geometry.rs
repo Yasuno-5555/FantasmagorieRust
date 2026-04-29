@@ -63,6 +63,8 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
         let sampler = executor.get_default_sampler().clone();
         let font_view = Some(executor.get_font_view().clone());
         let backdrop_view = executor.get_backdrop_view().clone();
+        let dummy = executor.get_dummy_storage_buffer();
+        use crate::backend::hal::{BindGroupEntry, BindingResource};
 
         let mut proj_matrix = create_projection(width as f32, height as f32, executor.y_flip(), (-1.0, 1.0));
         
@@ -106,21 +108,20 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                     let v_buf = executor.create_buffer(batched_verts.len() as u64, BufferUsage::Vertex, "TextV")?;
                     executor.write_buffer(&v_buf, 0, &batched_verts);
                     
-                    use crate::backend::hal::{BindGroupEntry, BindingResource};
                     let bg = executor.create_bind_group(&layout, &[
                         BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
                         BindGroupEntry { binding: 1, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
                         BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
                         BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
                         BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
-                        BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                        BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&dummy) },
                     ])?;
                     
                     executor.draw(&pipeline, Some(&bg), &v_buf, ((j - i) * 6) as u32, &[])?;
                     executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
                     i = j;
                 }
-                DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, shader_inject, .. } => {
+                DrawCommand::RoundedRect { pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, shader_inject, material, .. } => {
                     if shader_inject.is_some() {
                         // Custom shader path (single object)
                         let uniforms = {
@@ -131,6 +132,11 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                             u.border_width = *border_width; u.elevation = *elevation; u.glow_strength = *glow_strength;
                             u.mode = 100; u.is_squircle = if *is_squircle { 1 } else { 0 };
                             u.time = time; u.viewport_size = [width as f32, height as f32];
+                            
+                            if let Some(mat) = material {
+                                u.rect = [pos.x, pos.y, size.x, size.y];
+                                u.border_width = *border_width;
+                            }
                             u
                         };
                         let verts = quad_vertices(*pos, *size, *color);
@@ -141,14 +147,13 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         let v_buf = executor.create_buffer(verts.len() as u64, BufferUsage::Vertex, "FallbackV")?;
                         executor.write_buffer(&v_buf, 0, &verts);
                         
-                        use crate::backend::hal::{BindGroupEntry, BindingResource};
-                        let bg = executor.create_bind_group(&layout, &[
+                            let bg = executor.create_bind_group(&layout, &[
                             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
                             BindGroupEntry { binding: 1, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
                             BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
                             BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
                             BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
-                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&dummy) },
                         ])?;
                         executor.draw(&p, Some(&bg), &v_buf, 6, &[])?;
                         executor.destroy_bind_group(bg); executor.destroy_buffer(u_buf); executor.destroy_buffer(v_buf);
@@ -160,27 +165,45 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         while j < self.commands.len() {
                             if let DrawCommand::RoundedRect { 
                                 pos, size, radii, color, elevation, is_squircle, border_width, border_color, glow_strength, glow_color, 
-                                velocity, reflectivity, roughness, normal_map, distortion_strength, emissive_intensity, parallax_factor, shader_inject, .. 
+                                velocity, reflectivity, roughness, normal_map, distortion_strength, emissive_intensity, parallax_factor, shader_inject, material, .. 
                             } = &self.commands[j] {
                                 if shader_inject.is_some() { break; }
+                                
+                                let mut final_color = *color;
+                                let mut final_reflectivity = *reflectivity;
+                                let mut final_roughness = *roughness;
+                                let mut final_normal_map = normal_map.unwrap_or(0);
+                                let mut final_distortion = *distortion_strength;
+                                let mut final_emissive = *emissive_intensity;
+                                let mut final_parallax = *parallax_factor;
+
+                                if let Some(mat) = material {
+                                    final_color = mat.albedo_color;
+                                    final_reflectivity = mat.reflectivity;
+                                    final_roughness = mat.roughness;
+                                    final_normal_map = mat.normal_map.unwrap_or(0);
+                                    final_distortion = mat.distortion_strength;
+                                    final_emissive = mat.emissive_intensity;
+                                    final_parallax = mat.parallax_factor;
+                                }
+
                                 instances.push(ShapeInstance {
                                     rect: [pos.x, pos.y, size.x, size.y],
                                     radii: *radii,
-                                    color: [color.r, color.g, color.b, color.a],
+                                    color: [final_color.r, final_color.g, final_color.b, final_color.a],
                                     border_color: [border_color.r, border_color.g, border_color.b, border_color.a],
                                     glow_color: [glow_color.r, glow_color.g, glow_color.b, glow_color.a],
                                     params1: [*border_width, *elevation, *glow_strength, 0.0],
                                     params2: [2, if *is_squircle { 1 } else { 0 }, 0, 0],
-                                    material: [velocity.x, velocity.y, *reflectivity, *roughness],
-                                    pbr_params: [normal_map.unwrap_or(0) as f32, *distortion_strength, *emissive_intensity, *parallax_factor],
+                                    material: [velocity.x, velocity.y, final_reflectivity, final_roughness],
+                                    pbr_params: [final_normal_map as f32, final_distortion, final_emissive, final_parallax],
                                     transform: [1.0, 0.0, 0.0,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0,  0.0, 0.0, 0.0],
                                 });
                                 j += 1;
                             } else { break; }
                         }
 
-                        use crate::backend::hal::{BindGroupEntry, BindingResource};
-                        
+                            
                         let global = GlobalUniforms {
                             projection: *bytemuck::cast_ref(&proj),
                             time, _pad0: 0.0, viewport_size: [width as f32, height as f32],
@@ -203,16 +226,17 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
 
                         let v_buf = executor.create_buffer(ui_quad.len() as u64, BufferUsage::Vertex, "QuadV")?;
                         executor.write_buffer(&v_buf, 0, &ui_quad);
-                        use crate::backend::hal::{BindGroupEntry, BindingResource};
-                        let culling_bg = executor.create_bind_group(executor.get_culling_bind_group_layout(), &[
+                        let c_layout = executor.get_culling_bind_group_layout();
+                        let culling_bg = executor.create_bind_group(&c_layout, &[
                             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&g_buf) },
                             BindGroupEntry { binding: 1, resource: BindingResource::Buffer(&inst_buf) },
-                            BindGroupEntry { binding: 2, resource: BindingResource::Buffer(&out_inst_buf) },
-                            BindGroupEntry { binding: 3, resource: BindingResource::Buffer(&indirect_buf) },
+                            BindGroupEntry { binding: 10, resource: BindingResource::Buffer(&out_inst_buf) },
+                            BindGroupEntry { binding: 11, resource: BindingResource::Buffer(&indirect_buf) },
                         ])?;
 
                         let workgroups_x = (instances.len() as u32 + 63) / 64;
-                        executor.dispatch(executor.get_culling_pipeline(), Some(&culling_bg), [workgroups_x, 1, 1], &[])?;
+                        let culling_pipeline = executor.get_culling_pipeline();
+                        executor.dispatch(&culling_pipeline, Some(&culling_bg), [workgroups_x, 1, 1], &[])?;
                         executor.destroy_bind_group(culling_bg);
                         
                         let bg = executor.create_bind_group(&instanced_layout, &[
@@ -221,16 +245,17 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                             BindGroupEntry { binding: 2, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
                             BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
                             BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&sampler) },
+                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&dummy) },
                         ])?;
 
                         if self.use_gpu_driven && executor.supports_indirect_draw() {
                             // --- GPU-Driven Path (Culling + Indirect) ---
                             let visible_indices = executor.create_buffer((instances.len() * 4) as u64, BufferUsage::Storage, "VisIdx")?;
-                            let visible_counter = executor.create_buffer(4, BufferUsage::Storage | BufferUsage::CopySrc, "VisCnt")?;
+                            let visible_counter = executor.create_buffer(16, BufferUsage::Storage | BufferUsage::CopySrc, "VisCnt")?;
                             executor.write_buffer(&visible_counter, 0, bytemuck::bytes_of(&0u32));
                             
                             let hzb = executor.get_hzb_view();
-                            executor.dispatch_visibility(proj_matrix, instances.len() as u32, &inst_buf, hzb, &visible_indices, &visible_counter)?;
+                            executor.dispatch_visibility(proj_matrix, instances.len() as u32, &inst_buf, &hzb, &visible_indices, &visible_counter)?;
                             
                             let indirect_buffer = executor.create_buffer(16, BufferUsage::Indirect | BufferUsage::Storage, "IndirB")?;
                             executor.dispatch_indirect_command(&visible_counter, &indirect_buffer)?;
@@ -264,12 +289,51 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
 
                             if let (Some(aux), Some(vel), Some(depth)) = (&aux_view_opt, &velocity_view_opt, &depth_view_opt) {
                                 let gb_pipeline = executor.get_instanced_gbuffer_render_pipeline().clone();
+                                executor.draw_instanced_gbuffer_indirect(&gb_pipeline, Some(&bg), &v_buf, &inst_buf, &indirect_buffer, 0, aux, vel, depth)?;
+                            } else {
+                                executor.draw_instanced_indirect(&instanced_pipeline, Some(&bg), &v_buf, &inst_buf, &indirect_buffer, 0)?;
+                            }
+
+                            executor.destroy_bind_group(bg); executor.destroy_buffer(visible_indices); executor.destroy_buffer(visible_counter); executor.destroy_buffer(indirect_buffer);
+                        } else {
+                            // --- Traditional Path (Direct draw with GPU Culling) ---
+                            let aux_view_opt = if let Some(aux_h) = self.aux_handle {
+                                 if let Some(crate::renderer::graph::GraphResource::Texture(_, tex)) = ctx.resources.get(&aux_h) {
+                                      Some(executor.create_texture_view(tex)?)
+                                 } else { None }
+                            } else { None };
+
+                            let velocity_view_opt = if let Some(vel_h) = self.velocity_handle {
+                                 if let Some(crate::renderer::graph::GraphResource::Texture(_, vtex)) = ctx.resources.get(&vel_h) {
+                                      Some(executor.create_texture_view(vtex)?)
+                                 } else { None }
+                            } else { None };
+
+                            let depth_view_opt = if let Some(depth_h) = self.depth_handle {
+                                 if let Some(crate::renderer::graph::GraphResource::Texture(_, dtex)) = ctx.resources.get(&depth_h) {
+                                      Some(executor.create_texture_view(dtex)?)
+                                 } else { None }
+                            } else { None };
+
+                            let bg = executor.create_bind_group(&instanced_layout, &[
+                                BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&g_buf) },
+                                BindGroupEntry { binding: 1, resource: BindingResource::Buffer(&out_inst_buf) },
+                                BindGroupEntry { binding: 2, resource: BindingResource::Texture(font_view.as_ref().unwrap()) },
+                                BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
+                                BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&sampler) },
+                                BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&dummy) },
+                            ])?;
+
+                            if let (Some(aux), Some(vel), Some(depth)) = (&aux_view_opt, &velocity_view_opt, &depth_view_opt) {
+                                let gb_pipeline = executor.get_instanced_gbuffer_render_pipeline().clone();
                                 executor.draw_instanced_gbuffer_indirect(&gb_pipeline, Some(&bg), &v_buf, &out_inst_buf, &indirect_buf, 0, aux, vel, depth)?;
                             } else {
                                 executor.draw_instanced_indirect(&instanced_pipeline, Some(&bg), &v_buf, &out_inst_buf, &indirect_buf, 0)?;
                             }
+                            executor.destroy_bind_group(bg);
+                        }
 
-                            executor.destroy_bind_group(bg); executor.destroy_buffer(g_buf); executor.destroy_buffer(inst_buf); executor.destroy_buffer(out_inst_buf); executor.destroy_buffer(indirect_buf); executor.destroy_buffer(v_buf);
+                        executor.destroy_buffer(g_buf); executor.destroy_buffer(inst_buf); executor.destroy_buffer(out_inst_buf); executor.destroy_buffer(indirect_buf); executor.destroy_buffer(v_buf);
                         i = j;
                     }
                 }
@@ -290,14 +354,13 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                     let v_buf = executor.create_buffer(verts.len() as u64, BufferUsage::Vertex, "ImageV")?;
                     executor.write_buffer(&v_buf, 0, &verts);
                     
-                    use crate::backend::hal::{BindGroupEntry, BindingResource};
                     let bg = executor.create_bind_group(&layout, &[
                         BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
                         BindGroupEntry { binding: 1, resource: BindingResource::Texture(tex_view) },
                         BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
                         BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
                         BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
-                        BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                        BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&dummy) },
                     ])?;
                     
                     executor.draw(&pipeline, Some(&bg), &v_buf, 6, &[])?;
@@ -396,14 +459,13 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         let v_buf = executor.create_buffer(batched_verts.len() as u64, BufferUsage::Vertex, "TileV")?;
                         executor.write_buffer(&v_buf, 0, &batched_verts);
                         
-                        use crate::backend::hal::{BindGroupEntry, BindingResource};
-                        let bg = executor.create_bind_group(&layout, &[
+                            let bg = executor.create_bind_group(&layout, &[
                             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
                             BindGroupEntry { binding: 1, resource: BindingResource::Texture(tex_view) },
                             BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
                             BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
                             BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
-                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&dummy) },
                         ])?;
                         
                         executor.draw(&pipeline, Some(&bg), &v_buf, (batched_verts.len() / (std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 4]>())) as u32, &[])?;
@@ -433,14 +495,13 @@ impl<E: GpuExecutor> RenderNode<E> for GeometryNode {
                         let v_buf = executor.create_buffer(batched_verts.len() as u64, BufferUsage::Vertex, "PartV")?;
                         executor.write_buffer(&v_buf, 0, &batched_verts);
                         
-                        use crate::backend::hal::{BindGroupEntry, BindingResource};
-                        let bg = executor.create_bind_group(&layout, &[
+                            let bg = executor.create_bind_group(&layout, &[
                             BindGroupEntry { binding: 0, resource: BindingResource::Buffer(&u_buf) },
                             BindGroupEntry { binding: 1, resource: BindingResource::Texture(tex_view) },
                             BindGroupEntry { binding: 2, resource: BindingResource::Sampler(&sampler) },
                             BindGroupEntry { binding: 3, resource: BindingResource::Texture(&backdrop_view) },
                             BindGroupEntry { binding: 4, resource: BindingResource::Buffer(&u_buf) },
-                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(executor.get_dummy_storage_buffer()) },
+                            BindGroupEntry { binding: 5, resource: BindingResource::Buffer(&dummy) },
                         ])?;
                         
                         executor.draw(&pipeline, Some(&bg), &v_buf, (batched_verts.len() / (std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 2]>() + std::mem::size_of::<[f32; 4]>())) as u32, &[])?;

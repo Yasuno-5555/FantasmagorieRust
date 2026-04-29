@@ -1,4 +1,4 @@
-﻿pub mod api;
+pub mod api;
 pub mod draw_builder;
 pub mod frame;
 pub mod orchestrator;
@@ -7,6 +7,7 @@ pub mod types;
 pub mod graph;
 pub mod nodes;
 pub mod lut;
+pub mod material;
 
 pub use api::{Renderer, FrameContext};
 pub use types::*;
